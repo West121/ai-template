@@ -308,7 +308,16 @@ interface AssigneeRule {
 
 ## 序列化结构
 - **仿钉钉**（`dingtalk/serialize.ts`）：审批节点内联 `assigneeRules(kind 契约)/handleOptions/auditMenu/commentRequired/timeout/formPerms/events`；flowConfig 顶层含 `variables/signals/messages`。双向（`serializeDingtalk`/`deserializeDingtalk`）。**反序列化兼容旧 `type` 判别字段**：`ORG→ACCOUNT`、`LEADER→FIND_LEADER(level)`、`FORM_FIELD/INITIATOR` 原样（`LEGACY_TYPE_TO_KIND`）。已用 seed 数据 `leave_approval` 验证：旧 `LEADER` 正确回显为「复杂找主管」。
-- **BPMN**（`bpmn/oa/moddle.ts`+`serde.ts`）：`NodeConfig` 增 `handleOptions`(全套，复用 `defaultHandleOptions`)/`auditMenu/commentRequired/timeout/formPerms/events`；`FlowConfig` 增 `variables/signals/messages`。整体 JSON 存 `oa:NodeConfig`/`oa:FlowConfig` body，随 `saveXML` 持久化、加载反序列化（round-trip 自动生效）。注意：BPMN 设计器仍用自有属性面板（`editor.tsx`），本次仅保证新字段类型/默认值可持久化 round-trip；BPMN 面板 UI 未加新分区（其 `assigneeRules` 为扁平 `OrgRef[]`，与仿钉钉 kind 结构不同，需后续统一）。
+- **BPMN**（`bpmn/oa/moddle.ts`+`serde.ts`）：~~曾经~~整体 JSON 存 `oa:NodeConfig`/`oa:FlowConfig` body 的方案已废弃（仅保留 `oa:NodeConfig` 类型定义用于读取/迁移旧数据），**现改为逐元素规范格式，见下一节**。
+
+## BPMN 设计器与仿钉钉/转换器同一扩展格式（BPMN 原生定义现可执行）
+
+> 修复的隐藏 bug：BPMN 设计器曾把节点配置整体写作单块 `oa:NodeConfig` JSON body；后端运行时 `AssigneeResolver`/`JsonToBpmnConverter` 从不读取这个元素——任何 `designerType:BPMN` 的原生定义，办理人恒为空集合，静默兜底 admin，且无任何报错，长期未被发现。现已改为与仿钉钉转换器输出**同一套逐元素规范格式**，三方（BPMN 设计器写出 / 转换器写出 / 运行时读取）字段名与结构完全一致，`designerType:BPMN` 的定义现可被正确解析执行（本节末 smoke 用例验证）。
+
+- **规范 `oa:<name>` 元素**（挂在 `UserTask`/`Process` 的 `<bpmn:extensionElements>` 下，`moddle.ts` 的 `bodyType()` 描述符统一生成，`xml.tagAlias: lowerCase` 令类型名 `AssigneeRules` 序列化为标签 `oa:assigneeRules`）：`oa:assigneeRules` / `oa:multiMode` / `oa:emptyStrategy` / `oa:voteConfig` / `oa:allowedOps` / `oa:handleOptions` / `oa:auditMenu` / `oa:timeout` / `oa:formPerms` / `oa:commentRequired` / `oa:events` / `oa:ccUsers`（抄送节点）/ `oa:showApprovalRecord`（仅前端本地展示，后端不消费）；流程级 `oa:flowConfig` 挂在 `Process` 下。每个元素只挂一个 JSON 或纯文本 body，不再合并进单块 `oa:NodeConfig`。
+- **办理人 = 共享 `AssigneeRule[]`**：BPMN 设计器的 `assigneeRules` 字段类型与仿钉钉设计器共用 `AssigneeRule`（`kind`：`ACCOUNT|ROLE|POST|DEPT|LEADER|INITIATOR` × `source`：`FIXED|FORM_FIELD|VARIABLE|FORMULA|APPLICANT|PREV_HANDLER|NODE_HANDLER`），不再是 BPMN 自有的扁平 `OrgRef[]`；`AssigneeRulesEditor` 属性面板组件在两个设计器间复用。旧 `oa:NodeConfig` 数据加载时按值映射迁移到新逐元素结构（`migrateLegacyNode`），兼容存量 BPMN 定义。
+- **`multiMode`/`emptyStrategy` 规范词汇**：`multiMode ∈ {ANY(或签)|ALL(会签)|SEQUENCE(依次)|VOTE(票签)}`，`emptyStrategy ∈ {AUTO_PASS|TO_ADMIN|BLOCK}`，与仿钉钉设计器、`JsonToBpmnConverter`、`AssigneeResolver` 三方同一枚举字符串，无需再做名字映射。
+- **可执行性验证**：`server/smoke-test.mjs`「Task 2」用例——先建 `DINGTALK` 定义发布得到转换器产出的合法 `bpmnXml`（含 `oa:assigneeRules` + BPMNDI），原地切换 `designerType:BPMN` 落库同一份 `bpmnXml` 后重新发布（BPMN 分支原样部署、不再二次转换），发起实例后断言当前节点办理人集合命中固定指定用户（而非 admin 兜底），且该用户名下真实出现待办、admin 名下未出现——证明 BPMN 原生定义现可被运行时正确解析执行。
 
 ## 与后端联调点
 1. **办理人 `kind` 契约**：后端 `AssigneeResolver` 需支持 `kind` + `source`/`sourceValue`（与申请人相关时不看 refs）+ `level`(FIND_LEADER)/`field`(FORM_FIELD)/`apiUrl`(SERVICE_API)。旧 `type` 数据前端已兼容读，但**新写出一律为 `kind`**——后端读取应认 `kind`（可保留 `type` 兜底）。
