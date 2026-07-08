@@ -555,7 +555,10 @@ public class JsonToBpmnConverter {
                 gi.setWidth(wh[0]);
                 gi.setHeight(wh[1]);
                 double cx = 60 + l * (COL_WIDTH + H_GAP) + (COL_WIDTH - wh[0]) / 2;
-                double cy = 60 + row * (ROW_HEIGHT + V_GAP);
+                // 按「行中心线」垂直居中：不同高度的事件(30)/网关(40)/任务(60)中心对齐，
+                // 连线为直线不带拐弯（此前按顶部对齐导致中心错位、连线抖动）。
+                double rowCenterY = 60 + ROW_HEIGHT / 2 + row * (ROW_HEIGHT + V_GAP);
+                double cy = rowCenterY - wh[1] / 2;
                 gi.setX(cx);
                 gi.setY(cy);
                 shapes.put(n.getId(), gi);
@@ -572,8 +575,15 @@ public class JsonToBpmnConverter {
                 GraphicInfo p2 = new GraphicInfo(t.getX(), t.getY() + t.getHeight() / 2);
                 List<GraphicInfo> way = new ArrayList<>();
                 way.add(p1);
-                // 折线中转，避免斜穿
-                if (Math.abs(p1.getY() - p2.getY()) > 1) {
+                int span = Math.abs(layer.getOrDefault(sf.getTargetRef(), 0) - layer.getOrDefault(sf.getSourceRef(), 0));
+                if (span > 1 && Math.abs(p1.getY() - p2.getY()) <= 1) {
+                    // 跨多列的旁路/默认分支边（如排它网关的跳过分支）：从下方绕行，
+                    // 避免与同一行中间节点横穿重叠，读作一条清晰的「跳过」支路。
+                    double dipY = Math.max(p1.getY(), p2.getY()) + ROW_HEIGHT;
+                    way.add(new GraphicInfo(p1.getX(), dipY));
+                    way.add(new GraphicInfo(p2.getX(), dipY));
+                } else if (Math.abs(p1.getY() - p2.getY()) > 1) {
+                    // 折线中转，避免斜穿
                     double midX = (p1.getX() + p2.getX()) / 2;
                     way.add(new GraphicInfo(midX, p1.getY()));
                     way.add(new GraphicInfo(midX, p2.getY()));
