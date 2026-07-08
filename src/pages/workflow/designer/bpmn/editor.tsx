@@ -63,8 +63,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { oaBusinessModule } from "./oa/providers"
 import {
   ALLOWED_OPS,
-  EMPTY_STRATEGIES,
-  MULTI_MODES,
   oaModdleDescriptor,
   type FlowConfig,
   type NodeConfig,
@@ -76,6 +74,8 @@ import {
   writeNodeConfig,
 } from "./oa/serde"
 import { validateBpmn, type ValidationIssue } from "./oa/validate"
+import { AssigneeRulesEditor } from "../shared/property-panel"
+import { EMPTY_STRATEGY_META, MULTI_MODE_META, type EmptyStrategy, type MultiMode } from "../types"
 
 /** 空白流程（仅一个开始事件） */
 export const BLANK_BPMN_XML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -169,12 +169,16 @@ interface CommandStackService {
 interface BpmnFactoryService {
   create(type: string, props: Record<string, unknown>): unknown
 }
+interface ElementRegistryService {
+  getAll(): BpmnElement[]
+}
 
 type ModelerInstance = InstanceType<typeof Modeler> & {
   get(name: "modeling"): ModelingService
   get(name: "canvas"): CanvasService
   get(name: "commandStack"): CommandStackService
   get(name: "bpmnFactory"): BpmnFactoryService
+  get(name: "elementRegistry"): ElementRegistryService
   on(event: string, callback: (event: never) => void): void
 }
 
@@ -267,15 +271,16 @@ const isTaskLike = (type: string) => type === "bpmn:UserTask" || type === "bpmn:
  * “演示存储在前端状态、保存即丢”的实现。
  */
 function NodeConfigSection({
+  modeler,
   modeling,
   bpmnFactory,
   element,
 }: {
+  modeler: ModelerInstance
   modeling: ModelingService
   bpmnFactory: BpmnFactoryService
   element: BpmnElement
 }) {
-  const [assigneeOpen, setAssigneeOpen] = useState(false)
   const [ccOpen, setCcOpen] = useState(false)
 
   const config: NodeConfig = readNodeConfig(element.businessObject as unknown as { $type: string })
@@ -296,6 +301,25 @@ function NodeConfigSection({
       allowedOps: on ? [...config.allowedOps, op] : config.allowedOps.filter((o) => o !== op),
     })
 
+  // 本流程其它 UserTask（供「指定节点办理人」来源选择），排除当前节点自身
+  const otherUserTasks = modeler
+    .get("elementRegistry")
+    .getAll()
+    .filter((el) => el.businessObject?.$type === "bpmn:UserTask" && el.id !== element.id)
+    .map((el) => ({ id: el.id, name: el.businessObject.name || el.id }))
+
+  // 流程变量（供「来自变量」来源选择）：从 Process 根元素的 oa:flowConfig 读取
+  let flowVariableOptions: string[] = []
+  try {
+    const root = modeler.get("canvas").getRootElement()
+    if (root.businessObject?.$type === "bpmn:Process") {
+      const flowConfig = readFlowConfig(root.businessObject as unknown as { $type: string })
+      flowVariableOptions = (flowConfig.variables ?? []).map((v) => v.name)
+    }
+  } catch {
+    // 根节点尚未就绪（如协作图），流程变量选项留空
+  }
+
   return (
     <section className="space-y-3">
       <div className="flex items-center gap-2">
@@ -305,53 +329,57 @@ function NodeConfigSection({
         </Badge>
       </div>
 
-      {/* 处理人 / 抄送人 */}
-      <div className="space-y-1.5">
-        <Label className="text-xs">{isCc ? "抄送人" : "处理人"}</Label>
-        <OrgPickerField
-          value={isCc ? config.ccUsers : config.assigneeRules}
-          multiple
-          placeholder="选择成员 / 部门 / 角色"
-          onOpen={() => (isCc ? setCcOpen(true) : setAssigneeOpen(true))}
-          onRemove={(ref) =>
-            isCc
-              ? write({ ccUsers: config.ccUsers.filter((r) => !(r.type === ref.type && r.id === ref.id)) })
-              : write({
-                  assigneeRules: config.assigneeRules.filter(
-                    (r) => !(r.type === ref.type && r.id === ref.id),
-                  ),
-                })
-          }
-        />
-        <OrgPicker
-          open={assigneeOpen}
-          onOpenChange={setAssigneeOpen}
-          title="选择处理人"
-          value={config.assigneeRules}
-          onConfirm={(refs) => write({ assigneeRules: refs })}
-        />
-        <OrgPicker
-          open={ccOpen}
-          onOpenChange={setCcOpen}
-          title="选择抄送人"
-          value={config.ccUsers}
-          onConfirm={(refs) => write({ ccUsers: refs })}
-        />
-      </div>
+      {isCc ? (
+        /* 抄送人：仍是 OrgRef[]，保留 OrgPicker */
+        <div className="space-y-1.5">
+          <Label className="text-xs">抄送人</Label>
+          <OrgPickerField
+            value={config.ccUsers}
+            multiple
+            placeholder="选择成员 / 部门 / 角色"
+            onOpen={() => setCcOpen(true)}
+            onRemove={(ref) =>
+              write({ ccUsers: config.ccUsers.filter((r) => !(r.type === ref.type && r.id === ref.id)) })
+            }
+          />
+          <OrgPicker
+            open={ccOpen}
+            onOpenChange={setCcOpen}
+            title="选择抄送人"
+            value={config.ccUsers}
+            onConfirm={(refs) => write({ ccUsers: refs })}
+          />
+        </div>
+      ) : (
+        /* 处理人：共享二维模型（类型 kind × 来源 source），复用仿钉钉设计器同款编辑器 */
+        <div className="space-y-1.5">
+          <Label className="text-xs">处理人规则</Label>
+          <AssigneeRulesEditor
+            rules={config.assigneeRules}
+            onChange={(assigneeRules) => write({ assigneeRules })}
+            // BPMN 表单字段来源待接：BPMN 设计器暂无动态表单字段数据源，传空数组——
+            // 处理人编辑器其余能力（部门/角色/岗位/发起人主管/变量/公式等）不受影响，
+            // 仅 FORM_FIELD 来源下拉暂无候选项。
+            fields={[]}
+            nodeOptions={otherUserTasks}
+            variableOptions={flowVariableOptions}
+          />
+        </div>
+      )}
 
       {isApproval && (
         <>
           {/* 多人模式 */}
           <div className="space-y-1.5">
             <Label className="text-xs">多人办理模式</Label>
-            <Select value={config.multiMode} onValueChange={(v) => write({ multiMode: v as NodeConfig["multiMode"] })}>
+            <Select value={config.multiMode} onValueChange={(v) => write({ multiMode: v as MultiMode })}>
               <SelectTrigger size="sm" className="h-8 w-full text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {MULTI_MODES.map((m) => (
-                  <SelectItem key={m.value} value={m.value}>
-                    {m.label}
+                {Object.entries(MULTI_MODE_META).map(([value, meta]) => (
+                  <SelectItem key={value} value={value}>
+                    {meta.label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -363,15 +391,15 @@ function NodeConfigSection({
             <Label className="text-xs">处理人为空时</Label>
             <Select
               value={config.emptyStrategy}
-              onValueChange={(v) => write({ emptyStrategy: v as NodeConfig["emptyStrategy"] })}
+              onValueChange={(v) => write({ emptyStrategy: v as EmptyStrategy })}
             >
               <SelectTrigger size="sm" className="h-8 w-full text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {EMPTY_STRATEGIES.map((m) => (
-                  <SelectItem key={m.value} value={m.value}>
-                    {m.label}
+                {Object.entries(EMPTY_STRATEGY_META).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -616,6 +644,7 @@ function PropertiesPanel({
             <Separator />
             <NodeConfigSection
               key={`${element.id}-${version}`}
+              modeler={modeler}
               modeling={modeling}
               bpmnFactory={bpmnFactory}
               element={element}
