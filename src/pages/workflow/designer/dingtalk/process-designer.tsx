@@ -69,22 +69,32 @@ function ruleSummaryText(rules: AssigneeRule[] | undefined, fields: FormFieldOpt
   if (!rules || rules.length === 0) return ""
   return rules
     .map((rule) => {
+      const label = ASSIGNEE_KIND_META[rule.kind]?.label ?? "办理人"
       switch (rule.kind) {
         case "LEADER":
           return `第 ${rule.level ?? 1} 级主管`
-        case "POST":
-          return `岗位：${rule.postName || "(未填)"}`
-        case "FORM_FIELD":
-          return `表单：${fields.find((f) => f.key === rule.field)?.label ?? rule.field ?? ""}`
         case "INITIATOR":
           return "发起人本人"
+        case "POST":
+          return `岗位：${rule.postName || "(未填)"}`
+        default:
+          break
+      }
+      switch (rule.source) {
+        case "FORM_FIELD":
+          return `${label}·表单：${fields.find((f) => f.key === rule.field)?.label ?? rule.field ?? ""}`
+        case "VARIABLE":
+          return `${label}·变量：${rule.varName || "(未选)"}`
         case "FORMULA":
-          return `公式：${rule.formula || "(未填)"}`
-        default: {
-          const label = ASSIGNEE_KIND_META[rule.kind]?.label ?? "办理人"
-          if (rule.source === "RELATED_TO_APPLICANT") return `${label}·与申请人相关`
+          return `${label}·公式：${rule.formula || "(未填)"}`
+        case "APPLICANT":
+          return `${label}·与申请人相关`
+        case "PREV_HANDLER":
+          return `${label}·与上个办理人相关${rule.takeLeader ? "(主管)" : ""}`
+        case "NODE_HANDLER":
+          return `${label}·与指定节点办理人相关${rule.takeLeader ? "(主管)" : ""}`
+        default:
           return rule.refs?.length ? rule.refs.map((r) => r.name).join("、") : `${label}(未选)`
-        }
       }
     })
     .join("；")
@@ -617,6 +627,8 @@ export function DingtalkProcessDesigner({
             formFields={formFields}
             nodeName={step.name}
             onNodeNameChange={(name) => setStepName(step.id, name)}
+            nodeOptions={steps.filter((s) => s.id !== step.id).map((s) => ({ id: s.id, name: s.name }))}
+            flowConfig={flowConfig}
           />
         )
       }

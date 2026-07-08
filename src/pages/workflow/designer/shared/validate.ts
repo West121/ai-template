@@ -39,13 +39,25 @@ export function validateFlow(steps: StepNode[], nodeProps: NodePropsMap): Valida
           const hasValid =
             rules.length > 0 &&
             rules.some((r) => {
-              if (r.kind === "FORM_FIELD") return !!r.field
+              // 快捷类型（发起人主管/发起人本人）：无需额外配置
+              if (r.kind === "LEADER" || r.kind === "INITIATOR") return true
               if (r.kind === "POST") return !!r.postName
-              if (r.kind === "FORMULA") return !!r.formula
-              // 需要选人的类型（OrgPicker refs）：来源为「与申请人相关」时无需 refs，否则需 refs 非空
-              const needRefs = r.kind === "ACCOUNT" || r.kind === "ROLE" || r.kind === "DEPT"
-              if (needRefs && r.source !== "RELATED_TO_APPLICANT") return (r.refs?.length ?? 0) > 0
-              return true
+              switch (r.source) {
+                case "FORM_FIELD":
+                  return !!r.field
+                case "VARIABLE":
+                  return !!r.varName
+                case "FORMULA":
+                  return !!r.formula
+                case "NODE_HANDLER":
+                  return !!r.fromNodeId
+                case "APPLICANT":
+                case "PREV_HANDLER":
+                  return true
+                default:
+                  // FIXED（账户/角色/部门）：需 OrgPicker 选人非空
+                  return (r.refs?.length ?? 0) > 0
+              }
             })
           if (!hasValid) {
             issues.push({

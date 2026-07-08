@@ -31,7 +31,7 @@ import {
   Zap,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { OrgPicker, OrgPickerField, type OrgRef, type OrgRefType } from "@/components/org-picker"
+import { OrgPicker, OrgPickerField, type OrgRef } from "@/components/org-picker"
 import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Input } from "@/components/ui/input"
@@ -57,7 +57,6 @@ import {
   type AssigneeKind,
   type AssigneeRule,
   type AssigneeSource,
-  type AssigneeSourceValue,
   type AuditMenu,
   type BranchCondition,
   type ConditionItem,
@@ -77,9 +76,10 @@ import {
 } from "../types"
 import {
   ALLOWED_OP_META,
+  ASSIGNEE_FIXED_REF_TYPES,
   ASSIGNEE_KIND_META,
+  ASSIGNEE_SOURCE_MATRIX,
   ASSIGNEE_SOURCE_META,
-  ASSIGNEE_SOURCE_VALUE_META,
   DEFAULT_ALLOWED_OPS,
   EVENT_ACTION_META,
   EVENT_TRIGGER_META,
@@ -87,12 +87,13 @@ import {
   HANDLE_OPTION_SWITCHES,
   defaultHandleOptions,
   defaultVoteConfig,
+  type FlowConfig,
   type FlowVarType,
   type FlowVariable,
   type FormFieldOption,
   type ProcessConfig,
 } from "./config"
-import { FormulaEditor } from "./formula-editor"
+import { FormulaField } from "./formula-editor"
 
 /* ==================== 通用小组件 ==================== */
 
@@ -148,228 +149,280 @@ function FieldLabel({ children }: { children: ReactNode }) {
   return <Label className="text-xs text-muted-foreground">{children}</Label>
 }
 
-/* ==================== 审批人规则编辑器（P2 kind + 来源 + 专属字段，参考图22） ==================== */
+/* ==================== 审批人规则编辑器（两维模型：类型宫格 + 上下文来源 + 配置区） ==================== */
 
-/** 需要 OrgPicker 选人的类型 */
-function kindHasRefs(kind: AssigneeKind): boolean {
-  return ASSIGNEE_KIND_META[kind].hasRefs
-}
-
-/** 每种 kind 的选人范围：指定人员→成员、部门→部门、角色→角色（各管各的，不再混选） */
-function kindRefTypes(kind: AssigneeKind): OrgRefType[] {
-  switch (kind) {
-    case "ACCOUNT":
-      return ["USER"]
-    case "DEPT":
-      return ["DEPT"]
-    case "ROLE":
-      return ["ROLE"]
-    default:
-      return ["USER", "DEPT", "ROLE"]
-  }
-}
-
-/** 是否显示来源下拉（与申请人相关 / 指定）：仅选人类（refs）支持 */
-function kindHasSource(kind: AssigneeKind): boolean {
-  return kindHasRefs(kind)
-}
+const isQuickKind = (k: AssigneeKind) => k === "LEADER" || k === "INITIATOR"
 
 export function AssigneeRulesEditor({
   rules,
   onChange,
   fields,
+  nodeOptions,
+  variableOptions,
 }: {
   rules: AssigneeRule[]
   onChange: (rules: AssigneeRule[]) => void
   fields: FormFieldOption[]
+  /** 本流程其它节点（供"指定节点办理人"选择），由 property-panel 上层传入 [{id,name}] */
+  nodeOptions: { id: string; name: string }[]
+  /** 已声明流程变量名（供"来自变量"选择） */
+  variableOptions: string[]
 }) {
   const [orgPickerIndex, setOrgPickerIndex] = useState<number | null>(null)
   const userFields = fields.filter((f) => f.isUser)
 
-  const addRule = () => onChange([...rules, { kind: "ACCOUNT", source: "SPECIFIED", refs: [] }])
-  const updateRule = (index: number, rule: AssigneeRule) =>
-    onChange(rules.map((r, i) => (i === index ? rule : r)))
-  const removeRule = (index: number) => onChange(rules.filter((_, i) => i !== index))
+  const addRule = () => onChange([...rules, { kind: "ACCOUNT", source: "FIXED", refs: [] }])
+  const updateRule = (i: number, r: AssigneeRule) => onChange(rules.map((x, k) => (k === i ? r : x)))
+  const removeRule = (i: number) => onChange(rules.filter((_, k) => k !== i))
 
-  const changeKind = (index: number, kind: AssigneeKind) => {
-    const next: AssigneeRule = { kind }
-    if (kindHasSource(kind)) next.source = "SPECIFIED"
-    if (kindHasRefs(kind)) next.refs = []
-    if (kind === "LEADER") next.level = 1
-    if (kind === "POST") next.postName = ""
-    if (kind === "FORM_FIELD") next.field = userFields[0]?.key ?? ""
-    if (kind === "FORMULA") next.formula = ""
-    updateRule(index, next)
+  const changeKind = (i: number, kind: AssigneeKind) => {
+    if (kind === "LEADER") return updateRule(i, { kind, level: 1 })
+    if (kind === "INITIATOR") return updateRule(i, { kind })
+    const source = ASSIGNEE_SOURCE_MATRIX[kind][0] // 默认第一个合法来源
+    updateRule(i, { kind, source, ...(source === "FIXED" ? { refs: [] } : {}) })
+  }
+
+  const changeSource = (i: number, rule: AssigneeRule, source: AssigneeSource) => {
+    const next: AssigneeRule = { kind: rule.kind, source }
+    if (source === "FIXED") next.refs = []
+    if (source === "FORM_FIELD") next.field = userFields[0]?.key ?? ""
+    if (source === "VARIABLE") next.varName = variableOptions[0] ?? ""
+    if (source === "FORMULA") next.formula = ""
+    if (source === "APPLICANT") next.applicantValue = "DEPT"
+    if (source === "NODE_HANDLER") next.fromNodeId = nodeOptions[0]?.id ?? ""
+    updateRule(i, next)
   }
 
   return (
     <div className="space-y-2.5">
+      <p className="text-xs text-muted-foreground">多条规则取并集去重：最终办理人 = 各规则解析结果之和。</p>
       {rules.length === 0 && (
         <p className="rounded-md border border-dashed py-4 text-center text-xs text-muted-foreground">
           尚未配置办理人规则，请从下方添加
         </p>
       )}
 
-      {rules.map((rule, index) => {
-        const relatedSource = rule.source === "RELATED_TO_APPLICANT"
-        return (
-          <div key={index} className="space-y-2 rounded-md border p-2.5">
-            {/* 类型 */}
+      {rules.map((rule, index) => (
+        <div key={index} className="space-y-2 rounded-md border p-2.5">
+          {/* 删除 */}
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-muted-foreground">规则 {index + 1}</span>
+            <button
+              type="button"
+              className="rounded p-0.5 text-muted-foreground hover:text-rose-500"
+              onClick={() => removeRule(index)}
+            >
+              <Trash2 className="size-3.5" />
+            </button>
+          </div>
+
+          {/* 类型宫格（2 列单选） */}
+          <div className="grid grid-cols-2 gap-1.5">
+            {(Object.keys(ASSIGNEE_KIND_META) as AssigneeKind[]).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => changeKind(index, k)}
+                className={cn(
+                  "rounded-md border px-2 py-1.5 text-xs transition-colors",
+                  rule.kind === k
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "hover:bg-muted",
+                )}
+              >
+                {ASSIGNEE_KIND_META[k].label}
+              </button>
+            ))}
+          </div>
+
+          {/* 来源下拉（快捷类型不显示） */}
+          {!isQuickKind(rule.kind) && ASSIGNEE_SOURCE_MATRIX[rule.kind].length > 1 && (
             <div className="flex items-center gap-1.5">
-              <span className="text-xs text-muted-foreground">类型</span>
-              <Select value={rule.kind} onValueChange={(v) => changeKind(index, v as AssigneeKind)}>
+              <span className="text-xs text-muted-foreground">来源</span>
+              <Select
+                value={rule.source ?? ASSIGNEE_SOURCE_MATRIX[rule.kind][0]}
+                onValueChange={(v) => changeSource(index, rule, v as AssigneeSource)}
+              >
                 <SelectTrigger size="sm" className="h-8 flex-1 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {(Object.keys(ASSIGNEE_KIND_META) as AssigneeKind[]).map((k) => (
-                    <SelectItem key={k} value={k}>
-                      {ASSIGNEE_KIND_META[k].label}
+                  {ASSIGNEE_SOURCE_MATRIX[rule.kind].map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {ASSIGNEE_SOURCE_META[s].label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <button
-                type="button"
-                className="rounded p-0.5 text-muted-foreground hover:text-rose-500"
-                onClick={() => removeRule(index)}
-              >
-                <Trash2 className="size-3.5" />
-              </button>
             </div>
+          )}
 
-            {/* 来源 */}
-            {kindHasSource(rule.kind) && (
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-muted-foreground">来源</span>
-                <Select
-                  value={rule.source ?? "SPECIFIED"}
-                  onValueChange={(v) => updateRule(index, { ...rule, source: v as AssigneeSource })}
-                >
-                  <SelectTrigger size="sm" className="h-8 flex-1 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(Object.keys(ASSIGNEE_SOURCE_META) as AssigneeSource[]).map((s) => (
-                      <SelectItem key={s} value={s}>
-                        {ASSIGNEE_SOURCE_META[s]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            {/* 来源=与申请人相关 → 具体来源值 */}
-            {kindHasSource(rule.kind) && relatedSource && (
-              <Select
-                value={rule.sourceValue ?? "APPLICANT"}
-                onValueChange={(v) => updateRule(index, { ...rule, sourceValue: v as AssigneeSourceValue })}
-              >
-                <SelectTrigger size="sm" className="h-8 w-full text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {(Object.keys(ASSIGNEE_SOURCE_VALUE_META) as AssigneeSourceValue[]).map((v) => (
-                    <SelectItem key={v} value={v}>
-                      {ASSIGNEE_SOURCE_VALUE_META[v]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-
-            {/* 选人类（指定来源）→ OrgPicker */}
-            {kindHasRefs(rule.kind) && !relatedSource && (
-              <>
-                <OrgPickerField
-                  value={rule.refs ?? []}
-                  multiple
-                  placeholder={`选择${ASSIGNEE_KIND_META[rule.kind].label}`}
-                  onOpen={() => setOrgPickerIndex(index)}
-                  onRemove={(ref) =>
-                    updateRule(index, {
-                      ...rule,
-                      refs: (rule.refs ?? []).filter((r) => !(r.type === ref.type && r.id === ref.id)),
-                    })
-                  }
-                />
-                <OrgPicker
-                  open={orgPickerIndex === index}
-                  onOpenChange={(open) => !open && setOrgPickerIndex(null)}
-                  title={`选择${ASSIGNEE_KIND_META[rule.kind].label}`}
-                  types={kindRefTypes(rule.kind)}
-                  value={rule.refs ?? []}
-                  onConfirm={(refs) => updateRule(index, { ...rule, refs })}
-                />
-              </>
-            )}
-
-            {/* 发起人主管 → 级数 */}
-            {rule.kind === "LEADER" && (
-              <div className="flex items-center gap-2">
-                <Label className="text-xs text-muted-foreground">第</Label>
-                <Input
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={rule.level ?? 1}
-                  onChange={(e) => updateRule(index, { ...rule, level: Math.max(1, Number(e.target.value) || 1) })}
-                  className="h-8 w-20 text-sm"
-                />
-                <Label className="text-xs text-muted-foreground">级主管（逐级向上）</Label>
-              </div>
-            )}
-
-            {/* 岗位 → 岗位名称 */}
-            {rule.kind === "POST" && (
-              <Input
-                value={rule.postName ?? ""}
-                onChange={(e) => updateRule(index, { ...rule, postName: e.target.value })}
-                placeholder="岗位名称（逗号分隔多个）"
-                className="h-8 text-sm"
-              />
-            )}
-
-            {/* 表单人员字段 */}
-            {rule.kind === "FORM_FIELD" && (
-              <Select
-                value={rule.field || undefined}
-                onValueChange={(v) => updateRule(index, { ...rule, field: v })}
-              >
-                <SelectTrigger size="sm" className="h-8 w-full text-sm">
-                  <SelectValue placeholder={userFields.length ? "选择选人字段" : "表单无选人字段"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {userFields.map((f) => (
-                    <SelectItem key={f.key} value={f.key}>
-                      {f.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-
-            {/* 自定义公式 */}
-            {rule.kind === "FORMULA" && (
-              <FormulaEditor
-                value={rule.formula ?? ""}
-                onChange={(formula) => updateRule(index, { ...rule, formula })}
-                fields={fields}
-              />
-            )}
-
-            {rule.kind === "INITIATOR" && (
-              <p className="text-xs text-muted-foreground">办理人为流程发起人本人。</p>
-            )}
-          </div>
-        )
-      })}
+          {/* 来源专属配置区 */}
+          {renderSourceConfig(index, rule, {
+            userFields,
+            nodeOptions,
+            variableOptions,
+            fields,
+            orgPickerIndex,
+            setOrgPickerIndex,
+            updateRule,
+          })}
+        </div>
+      ))}
 
       <Button type="button" variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={addRule}>
         <Plus className="size-3" />
         添加办理人规则
       </Button>
+    </div>
+  )
+}
+
+function renderSourceConfig(
+  index: number,
+  rule: AssigneeRule,
+  ctx: {
+    userFields: FormFieldOption[]
+    nodeOptions: { id: string; name: string }[]
+    variableOptions: string[]
+    fields: FormFieldOption[]
+    orgPickerIndex: number | null
+    setOrgPickerIndex: (i: number | null) => void
+    updateRule: (i: number, r: AssigneeRule) => void
+  },
+) {
+  const { userFields, nodeOptions, variableOptions, fields, orgPickerIndex, setOrgPickerIndex, updateRule } = ctx
+
+  // 快捷：发起人主管
+  if (rule.kind === "LEADER") {
+    return (
+      <div className="flex items-center gap-2">
+        <Label className="text-xs text-muted-foreground">第</Label>
+        <Input
+          type="number"
+          min={1}
+          max={10}
+          value={rule.level ?? 1}
+          onChange={(e) => updateRule(index, { ...rule, level: Math.max(1, Number(e.target.value) || 1) })}
+          className="h-8 w-20 text-sm"
+        />
+        <Label className="text-xs text-muted-foreground">级主管（逐级向上）</Label>
+      </div>
+    )
+  }
+  if (rule.kind === "INITIATOR") {
+    return <p className="text-xs text-muted-foreground">办理人为流程发起人本人。</p>
+  }
+
+  const source = rule.source ?? "FIXED"
+
+  // 岗位固定 → 文本
+  if (source === "FIXED" && rule.kind === "POST") {
+    return (
+      <Input
+        value={rule.postName ?? ""}
+        onChange={(e) => updateRule(index, { ...rule, postName: e.target.value })}
+        placeholder="岗位名称（逗号分隔多个）"
+        className="h-8 text-sm"
+      />
+    )
+  }
+  // 账户/角色/部门固定 → OrgPicker（按类型限定范围）
+  if (source === "FIXED") {
+    const types = ASSIGNEE_FIXED_REF_TYPES[rule.kind]
+    return (
+      <>
+        <OrgPickerField
+          value={rule.refs ?? []}
+          multiple
+          placeholder={`选择${ASSIGNEE_KIND_META[rule.kind].label}`}
+          onOpen={() => setOrgPickerIndex(index)}
+          onRemove={(ref) =>
+            updateRule(index, {
+              ...rule,
+              refs: (rule.refs ?? []).filter((r) => !(r.type === ref.type && r.id === ref.id)),
+            })
+          }
+        />
+        <OrgPicker
+          open={orgPickerIndex === index}
+          onOpenChange={(open) => !open && setOrgPickerIndex(null)}
+          title={`选择${ASSIGNEE_KIND_META[rule.kind].label}`}
+          types={types}
+          value={rule.refs ?? []}
+          onConfirm={(refs) => updateRule(index, { ...rule, refs })}
+        />
+      </>
+    )
+  }
+  if (source === "FORM_FIELD") {
+    return (
+      <Select value={rule.field || undefined} onValueChange={(v) => updateRule(index, { ...rule, field: v })}>
+        <SelectTrigger size="sm" className="h-8 w-full text-sm">
+          <SelectValue placeholder={userFields.length ? "选择选人字段" : "表单无选人字段"} />
+        </SelectTrigger>
+        <SelectContent>
+          {userFields.map((f) => (
+            <SelectItem key={f.key} value={f.key}>
+              {f.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    )
+  }
+  if (source === "VARIABLE") {
+    return (
+      <Select value={rule.varName || undefined} onValueChange={(v) => updateRule(index, { ...rule, varName: v })}>
+        <SelectTrigger size="sm" className="h-8 w-full text-sm">
+          <SelectValue placeholder={variableOptions.length ? "选择流程变量" : "未声明流程变量"} />
+        </SelectTrigger>
+        <SelectContent>
+          {variableOptions.map((v) => (
+            <SelectItem key={v} value={v}>
+              {v}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    )
+  }
+  if (source === "FORMULA") {
+    return (
+      <FormulaField
+        value={rule.formula ?? ""}
+        onChange={(formula) => updateRule(index, { ...rule, formula })}
+        fields={fields}
+      />
+    )
+  }
+  if (source === "APPLICANT") {
+    return <p className="text-xs text-muted-foreground">办理人为申请人所在部门（全体成员）。</p>
+  }
+  // PREV_HANDLER / NODE_HANDLER
+  return (
+    <div className="space-y-2">
+      {source === "NODE_HANDLER" && (
+        <Select value={rule.fromNodeId || undefined} onValueChange={(v) => updateRule(index, { ...rule, fromNodeId: v })}>
+          <SelectTrigger size="sm" className="h-8 w-full text-sm">
+            <SelectValue placeholder="选择目标节点" />
+          </SelectTrigger>
+          <SelectContent>
+            {nodeOptions.map((n) => (
+              <SelectItem key={n.id} value={n.id}>
+                {n.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Switch
+          checked={rule.takeLeader ?? false}
+          onCheckedChange={(v) => updateRule(index, { ...rule, takeLeader: v })}
+        />
+        取其直属主管
+      </label>
     </div>
   )
 }
@@ -544,6 +597,10 @@ export type PropertyPanelProps =
       onNodeNameChange?: (name: string) => void
       /** 条件分支元信息（nodeType=condition 时） */
       branchMeta?: { isDefault: boolean; priority: number }
+      /** 本流程其它节点（供审批人规则"指定节点办理人"选择），排除当前节点自身 */
+      nodeOptions?: { id: string; name: string }[]
+      /** 流程级配置（供审批人规则"来自变量"选择流程变量） */
+      flowConfig?: FlowConfig
     }
 
 /* ==================== 面板主体 ==================== */
@@ -730,7 +787,8 @@ function ProcessPanelBody({
 function NodePanelBody(
   props: Extract<PropertyPanelProps, { target: NodeTarget }> & { tab: "basic" | "advanced" },
 ) {
-  const { tab, target, config, onChange, formFields, nodeName, onNodeNameChange, branchMeta } = props
+  const { tab, target, config, onChange, formFields, nodeName, onNodeNameChange, branchMeta, nodeOptions, flowConfig } =
+    props
   const nodeType = target.nodeType
   const set = (patch: Partial<WfNodeProps>) => onChange({ ...config, ...patch })
 
@@ -777,11 +835,12 @@ function NodePanelBody(
       {nodeType === "approval" && (
         <>
           <Section title="审批人规则" icon={ShieldCheck}>
-            <p className="text-xs text-muted-foreground">多条规则取并集去重：最终办理人 = 各规则解析结果之和。</p>
             <AssigneeRulesEditor
               rules={config.assigneeRules ?? []}
               onChange={(assigneeRules) => set({ assigneeRules })}
               fields={formFields}
+              nodeOptions={nodeOptions ?? []}
+              variableOptions={(flowConfig?.variables ?? []).map((v) => v.name)}
             />
           </Section>
 

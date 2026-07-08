@@ -7,12 +7,11 @@
  *
  * 详见 docs/flow-designer-v2.md「P1 数据契约」节。
  */
-import type { OrgRef } from "@/components/org-picker"
+import type { OrgRef, OrgRefType } from "@/components/org-picker"
 import type {
   AllowedOp,
   AssigneeKind,
   AssigneeSource,
-  AssigneeSourceValue,
   EventAction,
   EventTrigger,
   HandleOptions,
@@ -137,33 +136,42 @@ export const ALLOWED_OP_META: Record<AllowedOp, { label: string; description: st
   print: { label: "打印", description: "打印表单 / 审批单" },
 }
 
-/* ---------------- P2 办理人类型 / 来源 元数据（对齐参考图22） ---------------- */
+/* ---------------- 办理人类型(kind) × 来源(source) 两维元数据（对齐 assignee-model-2d-design.md） ---------------- */
 
-/**
- * 办理人类型（按我们组织模型精简）：label + 是否需要 OrgPicker 选人（refs）。
- * OrgPicker 支持 USER/DEPT/ROLE，故 ACCOUNT/ROLE/DEPT 用 refs；POST 用文本、LEADER 用级数、
- * FORM_FIELD 用字段、FORMULA 用公式、INITIATOR 无参。
- */
-export const ASSIGNEE_KIND_META: Record<AssigneeKind, { label: string; hasRefs: boolean }> = {
-  ACCOUNT: { label: "指定人员", hasRefs: true },
-  ROLE: { label: "角色", hasRefs: true },
-  POST: { label: "岗位", hasRefs: false },
-  DEPT: { label: "部门", hasRefs: true },
-  LEADER: { label: "发起人主管", hasRefs: false },
-  FORM_FIELD: { label: "表单人员字段", hasRefs: false },
-  INITIATOR: { label: "发起人本人", hasRefs: false },
-  FORMULA: { label: "自定义公式", hasRefs: false },
+export const ASSIGNEE_KIND_META: Record<AssigneeKind, { label: string }> = {
+  ACCOUNT: { label: "账户" },
+  ROLE: { label: "角色" },
+  POST: { label: "岗位" },
+  DEPT: { label: "部门" },
+  LEADER: { label: "发起人主管" },
+  INITIATOR: { label: "发起人本人" },
 }
 
-export const ASSIGNEE_SOURCE_META: Record<AssigneeSource, string> = {
-  RELATED_TO_APPLICANT: "与申请人相关",
-  SPECIFIED: "指定",
+export const ASSIGNEE_SOURCE_META: Record<AssigneeSource, { label: string; hint?: string }> = {
+  FIXED: { label: "固定指定" },
+  FORM_FIELD: { label: "来自表单字段" },
+  VARIABLE: { label: "来自流程变量" },
+  FORMULA: { label: "来自公式" },
+  APPLICANT: { label: "与申请人相关", hint: "申请人所在部门" },
+  PREV_HANDLER: { label: "与上个办理人相关" },
+  NODE_HANDLER: { label: "与指定节点办理人相关" },
 }
 
-export const ASSIGNEE_SOURCE_VALUE_META: Record<AssigneeSourceValue, string> = {
-  APPLICANT: "流程申请人",
-  APPLICANT_DEPT_LEADER: "申请人部门主管",
-  APPLICANT_DEPT: "申请人所在部门",
+/** 每种类型允许的来源（上下文下拉）；LEADER/INITIATOR 无来源选择 */
+export const ASSIGNEE_SOURCE_MATRIX: Record<AssigneeKind, AssigneeSource[]> = {
+  ACCOUNT: ["FIXED", "FORM_FIELD", "VARIABLE", "FORMULA", "PREV_HANDLER", "NODE_HANDLER"],
+  ROLE: ["FIXED"],
+  POST: ["FIXED"],
+  DEPT: ["FIXED", "APPLICANT"],
+  LEADER: [],
+  INITIATOR: [],
+}
+
+/** 类型对应的固定选人范围（复用 OrgPicker types 限制；POST 走文本不在此列） */
+export const ASSIGNEE_FIXED_REF_TYPES: Partial<Record<AssigneeKind, OrgRefType[]>> = {
+  ACCOUNT: ["USER"],
+  ROLE: ["ROLE"],
+  DEPT: ["DEPT"],
 }
 
 /* ---------------- P2 办理选项 / 审核菜单 元数据 ---------------- */

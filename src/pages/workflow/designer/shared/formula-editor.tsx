@@ -11,6 +11,7 @@
 import { useMemo, useState } from "react"
 import { AlertCircle, CheckCircle2, FunctionSquare } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { Modal } from "@/components/modal"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -209,6 +210,65 @@ export function FormulaEditor({
           清空
         </Button>
       </div>
+    </div>
+  )
+}
+
+/** 面板内公式字段：紧凑预览 + 「编辑公式」按钮 → 弹窗全功能编辑 */
+export function FormulaField({
+  value,
+  onChange,
+  fields,
+}: {
+  value: string
+  onChange: (formula: string) => void
+  fields: FormFieldOption[]
+}) {
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState(value)
+  return (
+    <div className="space-y-1.5">
+      <div className="rounded-md border bg-muted/30 px-2 py-1.5 text-xs font-mono break-all min-h-8">
+        {value || <span className="text-muted-foreground">未配置公式</span>}
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-7 text-xs"
+        onClick={() => {
+          setDraft(value)
+          setOpen(true)
+        }}
+      >
+        编辑公式
+      </Button>
+      <Modal
+        open={open}
+        onOpenChange={setOpen}
+        title="编辑办理人公式"
+        width={760}
+        height={560}
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setOpen(false)}>
+              取消
+            </Button>
+            <Button
+              onClick={() => {
+                onChange(draft)
+                setOpen(false)
+              }}
+            >
+              确定
+            </Button>
+          </>
+        }
+      >
+        <div className="p-3">
+          <FormulaEditor value={draft} onChange={setDraft} fields={fields} />
+        </div>
+      </Modal>
     </div>
   )
 }

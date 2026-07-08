@@ -16,7 +16,6 @@ import type {
   AssigneeKind,
   AssigneeRule,
   AssigneeSource,
-  AssigneeSourceValue,
   AuditMenu,
   ConditionItem,
   ConditionOperator,
@@ -56,28 +55,39 @@ interface BackendOrgRef {
 }
 
 /**
- * 后端办理人规则（校准后 kind 契约）。
- * 兼容读取旧 `type` 判别字段（ORG/LEADER/FORM_FIELD/INITIATOR）与旧 kind（ROLE_POST/UNIT/GROUP/SERVICE_API/FIND_LEADER）。
+ * 后端办理人规则（两维模型：kind × source，校准后契约）。
+ * 兼容读取旧 `type` 判别字段（ORG/LEADER/FORM_FIELD/INITIATOR）、旧 kind（ROLE_POST/UNIT/GROUP/SERVICE_API/FIND_LEADER，
+ * 以及旧「来源型类型」FORM_FIELD/FORMULA）与旧 source=RELATED_TO_APPLICANT + sourceValue。
  */
 interface BackendAssigneeRule {
   kind?: AssigneeKind | LegacyAssigneeKind
   /** 旧契约判别字段（仅反序列化兼容） */
   type?: "ORG" | "LEADER" | "FORM_FIELD" | "INITIATOR"
   refs?: BackendOrgRef[]
-  source?: AssigneeSource
-  sourceValue?: AssigneeSourceValue
+  /** 来源；新契约值为 AssigneeSource，旧契约可能是 RELATED_TO_APPLICANT/SPECIFIED（仅反序列化兼容，故按 string 读取） */
+  source?: string
+  /** 旧「与申请人相关」具体值（仅反序列化兼容） */
+  sourceValue?: string
   level?: number
   /** POST 用：岗位名称 */
   postName?: string
   field?: string
+  /** VARIABLE 用：流程变量名 */
+  varName?: string
   /** FORMULA 用：自定义公式 */
   formula?: string
+  /** APPLICANT 用：目前仅 "DEPT" */
+  applicantValue?: "DEPT"
+  /** NODE_HANDLER 用：目标节点 id */
+  fromNodeId?: string
+  /** PREV_HANDLER/NODE_HANDLER 用：取其直属主管 */
+  takeLeader?: boolean
   /** 旧字段（反序列化忽略） */
   apiUrl?: string
 }
 
-/** 已废弃的旧办理人类型（仅反序列化兼容映射） */
-type LegacyAssigneeKind = "ROLE_POST" | "UNIT" | "GROUP" | "SERVICE_API" | "FIND_LEADER"
+/** 已废弃的旧办理人类型（仅反序列化兼容映射；含旧「来源型类型」FORM_FIELD/FORMULA，折叠到 ACCOUNT+来源） */
+type LegacyAssigneeKind = "ROLE_POST" | "UNIT" | "GROUP" | "SERVICE_API" | "FIND_LEADER" | "FORM_FIELD" | "FORMULA"
 
 interface BackendCondition {
   field: string
@@ -272,13 +282,16 @@ const backendToOrgRef = (r: BackendOrgRef): OrgRef => {
 
 function ruleToBackend(rule: AssigneeRule): BackendAssigneeRule {
   const out: BackendAssigneeRule = { kind: rule.kind }
-  if (rule.refs && rule.refs.length) out.refs = rule.refs.map(orgRefToBackend)
   if (rule.source) out.source = rule.source
-  if (rule.sourceValue) out.sourceValue = rule.sourceValue
-  if (typeof rule.level === "number") out.level = rule.level
+  if (rule.refs && rule.refs.length) out.refs = rule.refs.map(orgRefToBackend)
   if (rule.postName) out.postName = rule.postName
   if (rule.field) out.field = rule.field
+  if (rule.varName) out.varName = rule.varName
   if (rule.formula) out.formula = rule.formula
+  if (rule.applicantValue) out.applicantValue = rule.applicantValue
+  if (rule.fromNodeId) out.fromNodeId = rule.fromNodeId
+  if (rule.takeLeader) out.takeLeader = rule.takeLeader
+  if (typeof rule.level === "number") out.level = rule.level
   return out
 }
 
@@ -286,7 +299,7 @@ function ruleToBackend(rule: AssigneeRule): BackendAssigneeRule {
 const LEGACY_TYPE_TO_KIND: Record<NonNullable<BackendAssigneeRule["type"]>, AssigneeKind> = {
   ORG: "ACCOUNT",
   LEADER: "LEADER",
-  FORM_FIELD: "FORM_FIELD",
+  FORM_FIELD: "ACCOUNT",
   INITIATOR: "INITIATOR",
 }
 
@@ -297,6 +310,8 @@ const LEGACY_KIND_TO_KIND: Record<LegacyAssigneeKind, AssigneeKind> = {
   GROUP: "ACCOUNT",
   SERVICE_API: "ACCOUNT",
   FIND_LEADER: "LEADER",
+  FORM_FIELD: "ACCOUNT",
+  FORMULA: "ACCOUNT",
 }
 
 function normalizeKind(rule: BackendAssigneeRule): AssigneeKind {
@@ -307,18 +322,48 @@ function normalizeKind(rule: BackendAssigneeRule): AssigneeKind {
   return rule.type ? LEGACY_TYPE_TO_KIND[rule.type] : "ACCOUNT"
 }
 
+/** 旧扁平 → 新 {kind, source, ...}（反序列化兼容；旧 designerJson 不重存也能加载） */
 function ruleFromBackend(rule: BackendAssigneeRule): AssigneeRule {
+  // 1) 旧 source=RELATED_TO_APPLICANT + sourceValue → 新形状
+  if (rule.source === "RELATED_TO_APPLICANT") {
+    switch (rule.sourceValue) {
+      case "APPLICANT_DEPT":
+        return { kind: "DEPT", source: "APPLICANT", applicantValue: "DEPT" }
+      case "APPLICANT_DEPT_LEADER":
+        return { kind: "LEADER", level: 1 }
+      default:
+        return { kind: "INITIATOR" }
+    }
+  }
+  // 2) 归一化 kind（含旧 type 判别 + 废弃 kind）
   const kind = normalizeKind(rule)
+  // 3) 旧「来源型类型」（FORM_FIELD/FORMULA）折叠到 账户+来源
+  if (rule.kind === "FORM_FIELD" || rule.type === "FORM_FIELD") {
+    return { kind: "ACCOUNT", source: "FORM_FIELD", field: rule.field }
+  }
+  if (rule.kind === "FORMULA") {
+    return { kind: "ACCOUNT", source: "FORMULA", formula: rule.formula }
+  }
+  // 4) 新形状 or 旧组织实体（ORG/ACCOUNT/ROLE/POST/DEPT/LEADER/INITIATOR）
   const out: AssigneeRule = { kind }
+  out.source = (rule.source as AssigneeSource | undefined) ?? defaultSourceForKind(kind)
   if (rule.refs) out.refs = rule.refs.map(backendToOrgRef)
-  if (rule.source) out.source = rule.source
-  if (rule.sourceValue) out.sourceValue = rule.sourceValue
-  if (typeof rule.level === "number") out.level = rule.level
-  else if (kind === "LEADER") out.level = 1
   if (rule.postName) out.postName = rule.postName
   if (rule.field) out.field = rule.field
+  if (rule.varName) out.varName = rule.varName
   if (rule.formula) out.formula = rule.formula
+  if (rule.applicantValue) out.applicantValue = rule.applicantValue
+  if (rule.fromNodeId) out.fromNodeId = rule.fromNodeId
+  if (rule.takeLeader) out.takeLeader = rule.takeLeader
+  if (typeof rule.level === "number") out.level = rule.level
+  else if (kind === "LEADER") out.level = 1
   return out
+}
+
+/** 组织实体类型的默认来源：可选人的走 FIXED，快捷类型无来源 */
+function defaultSourceForKind(kind: AssigneeKind): AssigneeSource | undefined {
+  if (kind === "LEADER" || kind === "INITIATOR") return undefined
+  return "FIXED"
 }
 
 /* ================= 序列化：内部模型 → 后端 {nodes} ================= */

@@ -63,46 +63,51 @@ export interface ProcessDefItem {
 /* ---------------- 仿钉钉设计器：节点属性（nodeProps） ---------------- */
 
 /**
- * 审批人规则（P2 细化，对齐 docs/flow-designer-v2.md「P2 办理体系·办理人类型」+ 参考图22）。
+ * 审批人规则（两维模型：类型(kind) × 来源(source)，对齐 docs/superpowers/specs/2026-07-08-assignee-model-2d-design.md）。
  *
- * 由 P1 的 4 类判别联合（type: ORG/LEADER/FORM_FIELD/INITIATOR）升级为 kind + 来源 + 各类专属字段
- * 的扁平结构（后端按同一契约读取）。反序列化对旧 type 字段做兼容映射。
+ * kind 回答 WHO（组织实体 + 两个快捷类型），source 回答 HOW（解析策略）。
+ * 反序列化对旧扁平 designerJson（type 判别字段 / 废弃 kind / RELATED_TO_APPLICANT 来源）做兼容映射，见 dingtalk/serialize.ts。
  */
 export type AssigneeKind =
-  | "ACCOUNT" // 指定人员（成员/部门/角色混合，refs）
-  | "ROLE" // 角色（refs）
-  | "POST" // 岗位（postName）
-  | "DEPT" // 部门（refs）
-  | "LEADER" // 发起人主管（第 N 级，level）
-  | "FORM_FIELD" // 表单人员字段（选人控件，field）
-  | "INITIATOR" // 发起人本人
-  | "FORMULA" // 自定义公式（低代码计算公式，formula）
+  | "ACCOUNT" // 账户（人员）
+  | "ROLE" // 角色
+  | "POST" // 岗位
+  | "DEPT" // 部门
+  | "LEADER" // 发起人主管（快捷：第 N 级）
+  | "INITIATOR" // 发起人本人（快捷）
 
-/** 办理人来源：与申请人相关 / 指定 */
-export type AssigneeSource = "RELATED_TO_APPLICANT" | "SPECIFIED"
-
-/** 「与申请人相关」的具体来源值 */
-export type AssigneeSourceValue =
-  | "APPLICANT" // 流程申请人
-  | "APPLICANT_DEPT_LEADER" // 申请人部门主管
-  | "APPLICANT_DEPT" // 申请人所在部门
+/** 来源（HOW，解析策略） */
+export type AssigneeSource =
+  | "FIXED" // 固定：picker/文本直接指定
+  | "FORM_FIELD" // 来自表单字段
+  | "VARIABLE" // 来自流程变量
+  | "FORMULA" // 来自公式
+  | "APPLICANT" // 与申请人相关（部门：申请人所在部门）
+  | "PREV_HANDLER" // 与上个办理人相关
+  | "NODE_HANDLER" // 与指定节点办理人相关
 
 export interface AssigneeRule {
   kind: AssigneeKind
-  /** ACCOUNT/ROLE/DEPT 用（OrgPicker 选人：USER/DEPT/ROLE） */
-  refs?: OrgRef[]
-  /** 来源：与申请人相关 / 指定 */
+  /** 来源；LEADER/INITIATOR 快捷类型可省略（隐含） */
   source?: AssigneeSource
-  /** source=RELATED_TO_APPLICANT 时的具体值 */
-  sourceValue?: AssigneeSourceValue
-  /** LEADER 用：第 N 级主管 */
-  level?: number
-  /** POST 用：岗位名称（逗号分隔多个） */
+  /** FIXED（账户/角色/部门）：OrgPicker 选择 */
+  refs?: OrgRef[]
+  /** FIXED（岗位）：岗位名/编码，逗号分隔 */
   postName?: string
-  /** FORM_FIELD 用：选人字段 key */
+  /** FORM_FIELD：选人字段 key */
   field?: string
-  /** FORMULA 用：自定义公式表达式 */
+  /** VARIABLE：流程变量名 */
+  varName?: string
+  /** FORMULA：公式表达式 */
   formula?: string
+  /** APPLICANT：目前仅 "DEPT"（申请人所在部门） */
+  applicantValue?: "DEPT"
+  /** NODE_HANDLER：目标节点 id */
+  fromNodeId?: string
+  /** PREV_HANDLER/NODE_HANDLER：取其直属主管 */
+  takeLeader?: boolean
+  /** LEADER：第 N 级主管 */
+  level?: number
 }
 
 /** @deprecated 兼容别名，等价 AssigneeKind */
