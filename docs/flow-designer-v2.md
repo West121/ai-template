@@ -137,7 +137,88 @@ BPMN 原生"更改类型"菜单列的是 BPMN 类型（Task/Service task…）�
 # P2 / P3 数据契约（属性面板深化，前端顺序 P2→P3 + 后端配套）
 
 ## P2 办理体系（扩展 WfNodeProps / nodeConfig）
-### 办理人类型（AssigneeRule.type 扩展，对齐参考图22）
+### 办理人模型（AssigneeRule：类型 × 来源 二维正交，现状契约 —— 取代下方旧扁平说明）
+
+> **本节为当前权威契约**（2026-07-08 起，assignee-model-2d 重构后）。之前版本把"类型"和"来源/解析策略"混在一个扁平 `kind`（如 `ROLE_POST/UNIT/FIND_LEADER/GROUP/SERVICE_API/FORM_FIELD`）里，概念不正交；已重构为两个正交维度。本文档后面（P2/P3 实现记录、校准清单等）出现的旧 `kind` 列表（`ROLE_POST/UNIT/FIND_LEADER/GROUP/SERVICE_API` 等）均为历史记录，已被本节取代，不再是当前实现。
+
+**类型（AssigneeKind，WHO，6 项，只保留我们自己的组织实体）**
+
+| 类型 | 语义 | 备注 |
+|---|---|---|
+| `ACCOUNT` 账户 | 具体人员 | 动态来源都挂在这里 |
+| `ROLE` 角色 | 角色 | 只做固定选 |
+| `POST` 岗位 | 岗位 | 只做固定选 |
+| `DEPT` 部门 | 部门 | 固定选 / 与申请人相关 |
+| `LEADER` 发起人主管 | 快捷：申请人第 N 级主管 | 预置来源，无需选来源 |
+| `INITIATOR` 发起人本人 | 快捷：申请人本人 | 预置来源，无需选来源 |
+
+**来源（AssigneeSource，HOW，运行时解析策略，7 项）**
+
+| 来源 | 含义 | 后端实现 |
+|---|---|---|
+| `FIXED` 固定 | picker 直接选（按类型限定范围） | `expandOrgRef` |
+| `FORM_FIELD` 来自表单 | 表单选人/选组织字段 | 读 execution 变量 |
+| `VARIABLE` 来自变量 | 流程变量（前置服务/脚本算出） | 读变量，与表单同路径 |
+| `FORMULA` 来自公式 | 低代码公式 | `FormulaEvaluator` |
+| `APPLICANT` 与申请人相关 | 申请人所在部门 | `resolveApplicantSource` |
+| `PREV_HANDLER` 与上个办理人相关 | 上个节点 assignee（可选取其主管） | `HistoryService` 查询本实例最近已完成 userTask |
+| `NODE_HANDLER` 与指定节点办理人相关 | 选定节点 assignee（可选取其主管） | `HistoryService` 按 `taskDefinitionKey=fromNodeId` 查询本实例该节点已完成任务 |
+
+**来源矩阵（哪个类型挂哪些来源）**
+
+| 类型 | 可选来源 |
+|---|---|
+| 账户 ACCOUNT | 固定 FIXED · 来自表单 FORM_FIELD · 来自变量 VARIABLE · 来自公式 FORMULA · 与上个办理人 PREV_HANDLER · 与指定节点办理人 NODE_HANDLER |
+| 角色 ROLE | 固定 FIXED |
+| 岗位 POST | 固定 FIXED |
+| 部门 DEPT | 固定 FIXED · 与申请人相关 APPLICANT（申请人所在部门） |
+| 发起人主管 LEADER | （快捷：第 N 级主管，无来源选择） |
+| 发起人本人 INITIATOR | （快捷：无来源选择） |
+
+取舍：账户是"人"，动态来源全挂账户下；角色/岗位只做"固定选"（要动态角色用「账户+公式」的 `ROLE()` 函数）；"与申请人相关"只留在部门下（本人/主管已被两个快捷类型覆盖）。**不引入**单位/群组/服务API/共享任务/动态角色岗位。
+
+**AssigneeRule 结构（各来源专属字段）**
+
+```ts
+interface AssigneeRule {
+  kind: "ACCOUNT" | "ROLE" | "POST" | "DEPT" | "LEADER" | "INITIATOR"
+  source?: "FIXED" | "FORM_FIELD" | "VARIABLE" | "FORMULA" | "APPLICANT" | "PREV_HANDLER" | "NODE_HANDLER"
+  // 来源专属字段：
+  refs?: OrgRef[]             // FIXED（账户/角色/部门）：按 kind 限定 picker 范围
+  postName?: string           // FIXED（岗位）：岗位名/编码，逗号分隔多个
+  field?: string               // FORM_FIELD：选人字段 key
+  varName?: string             // VARIABLE：流程变量名（从 flowConfig.variables 选）
+  formula?: string             // FORMULA：公式表达式
+  applicantValue?: "DEPT"      // APPLICANT：目前仅"申请人所在部门"
+  fromNodeId?: string          // NODE_HANDLER：目标节点 id
+  takeLeader?: boolean         // PREV_HANDLER/NODE_HANDLER：取其直属主管
+  level?: number               // LEADER：第 N 级主管
+}
+```
+
+**后端解析（AssigneeResolver.evalRule，来源优先分发）**：先看 `source` 分发解析策略；`kind` 在"固定"时决定 `expandOrgRef` 展开方式，在跨节点来源时决定要不要取主管。`VARIABLE` → `execution.getVariable(varName)` → 解析 userId 集合；`PREV_HANDLER`/`NODE_HANDLER` → 注入 `HistoryService` 查本实例已完成 userTask 的 assignee（`NODE_HANDLER` 按 `taskDefinitionKey=fromNodeId` 精确匹配），`takeLeader=true` 时再解析其部门主管。多条规则取并集去重。离线预测（`resolveOffline`）：跨节点来源无历史可查时返回空集合，前端标注"运行时确定"。
+
+**向后兼容（不强制迁移旧 designerJson）**
+
+后端 `evalRule` 同时认新旧两种形状：新 `source` 优先分发；老 `type=LEADER/INITIATOR/FORM_FIELD/FORMULA/ACCOUNT/ROLE/POST/DEPT` 与老 `source=RELATED_TO_APPLICANT+sourceValue` 继续解析，已发布老定义不重存也能跑。前端 `deserializeDingtalk` 把老扁平映射到新 `{kind, source}`，下次保存落成新形状：
+
+| 旧 | 新 |
+|---|---|
+| `type:LEADER, level` | `kind:LEADER, level` |
+| `type:INITIATOR` | `kind:INITIATOR` |
+| `type:FORM_FIELD, field` | `kind:ACCOUNT, source:FORM_FIELD, field` |
+| `type:FORMULA, formula` | `kind:ACCOUNT, source:FORMULA, formula` |
+| `type:ORG/ACCOUNT, refs` | `kind:ACCOUNT, source:FIXED, refs` |
+| `type:ROLE, refs` | `kind:ROLE, source:FIXED, refs` |
+| `type:POST, postName` | `kind:POST, source:FIXED, postName` |
+| `type:DEPT, refs` | `kind:DEPT, source:FIXED, refs` |
+| `source:RELATED_TO_APPLICANT, sourceValue:APPLICANT` | `kind:INITIATOR` |
+| `source:RELATED_TO_APPLICANT, sourceValue:APPLICANT_DEPT_LEADER` | `kind:LEADER, level:1` |
+| `source:RELATED_TO_APPLICANT, sourceValue:APPLICANT_DEPT` | `kind:DEPT, source:APPLICANT` |
+
+详见设计稿 `docs/superpowers/specs/2026-07-08-assignee-model-2d-design.md`。
+
+### 办理人类型（AssigneeRule.type 扩展，对齐参考图22）—— 历史记录，已被上方两维模型取代
 现有 ORG/LEADER/FORM_FIELD/INITIATOR，P2 细化为：
 ```jsonc
 { "kind": "ACCOUNT|ROLE_POST|DEPT|UNIT|FIND_LEADER|GROUP|SERVICE_API|FORM_FIELD|INITIATOR",
@@ -250,6 +331,9 @@ BPMN 原生"更改类型"菜单列的是 BPMN 类型（Task/Service task…）�
 > 核心：P2/P3 过度照搬 warm-flow/钉钉参考图，加了我们系统没有的概念；同时漏了我们自己设计的特色(票签)与该有的节点分支。本节是校准+补全的完整清单，**待跟踪图 agent 完成后系统实施**(避免 dingtalk model/canvas + server 冲突)。
 
 ## A. 办理人体系（按我们组织模型：用户/部门树/岗位/角色/任职）
+
+> 本节的类型精简目标已达成，并在此基础上进一步做了类型×来源二维正交重构（`FORM_FIELD/FORMULA` 从"类型"归位为"来源"，新增 `VARIABLE/PREV_HANDLER/NODE_HANDLER` 来源）。**当前权威契约见前文「办理人模型（AssigneeRule：类型 × 来源 二维正交，现状契约）」节**，本节以下内容为历史决策记录。
+
 - **精简类型**，保留：指定人员(ACCOUNT) / 角色(ROLE) / 岗位(POST) / 部门(DEPT) / 发起人主管(LEADER,N级) / 表单人员字段(FORM_FIELD) / 发起人本人(INITIATOR)。
 - **去掉**：群组(GROUP) / 单位(UNIT) / 服务API(SERVICE_API) / 复杂找主管(合并进发起人主管)。前端 config.ts ASSIGNEE_KIND_META + property-panel AssigneeRulesEditor + serialize + 后端 AssigneeResolver 一并删。
 - **新增「自定义公式」类型**（用户要，参考低代码计算公式，前端+后端）：

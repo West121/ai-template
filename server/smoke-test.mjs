@@ -1647,6 +1647,81 @@ async function mkProcFull(code, designer, extra = {}) {
   }
 }
 
+/* ---------- assignee-model-2d：Task1(前端二维模型)+Task2(后端来源优先解析) 新来源端到端 ---------- */
+{
+  // --- NODE_HANDLER：C 节点办理人 = A 节点(已完成)的办理人本人（新增 HistoryService 查询） ---
+  // 三节点 A(王五)->B(经理，独立审批过渡)->C(NODE_HANDLER fromNodeId=a)：
+  // A/B 分处两次独立的 approve 请求(两个独立事务)，A 的历史任务在 C 求值时已在更早、已提交的事务中落库，
+  // 是 NODE_HANDLER 的正常/典型用法(引用一个更早的节点，而非严格意义上"上一个节点")。
+  {
+    const P_NH = await mkProc(`assignee2d_nh_${TS}`, [
+      approvalNode("a", "A节点固定王五", WANGWU),
+      approvalNode("b", "B节点固定经理(过渡)", MANAGER),
+      {
+        id: "c", type: "approval", name: "C节点跨节点办理人",
+        assigneeRules: [{ kind: "ACCOUNT", source: "NODE_HANDLER", fromNodeId: "a", takeLeader: false }],
+        multiMode: "ANY", emptyStrategy: "TO_ADMIN",
+      },
+    ])
+    const t = `NODE_HANDLER-${TS}`
+    const inst = await startInst(P_NH, t)
+    const taskA = await findTodo(wangwu.token, t)
+    check("assignee2d NODE_HANDLER A节点(固定王五)待办出现", !!taskA, JSON.stringify(taskA))
+    if (taskA) await call(wangwu.token, "POST", `/api/wf/tasks/${taskA.taskId}/approve`, { comment: "A通过" })
+
+    const taskB = await findTodo(manager.token, t)
+    check("assignee2d NODE_HANDLER B节点(固定经理)待办出现", !!taskB, JSON.stringify(taskB))
+    if (taskB) await call(manager.token, "POST", `/api/wf/tasks/${taskB.taskId}/approve`, { comment: "B通过" })
+
+    const detC = await call(zhangsan.token, "GET", `/api/wf/instances/${inst.id}`)
+    check(
+      "assignee2d NODE_HANDLER C节点当前办理人=A节点办理人(王五)",
+      (detC.body?.data?.currentNodes ?? []).some(
+        (n) => n.nodeId === "c" && (n.assignees ?? []).some((a) => String(a.userId) === String(WANGWU)),
+      ),
+      JSON.stringify(detC.body?.data?.currentNodes),
+    )
+    // 待办也应落在王五名下：若 NODE_HANDLER 解析失效(空集合)，emptyStrategy=TO_ADMIN 会把任务转给 admin，而非王五
+    const taskC = await findTodo(wangwu.token, t)
+    check("assignee2d NODE_HANDLER C节点待办出现在王五名下(而非兜底管理员)", !!taskC, JSON.stringify(taskC))
+    if (taskC) await call(wangwu.token, "POST", `/api/wf/tasks/${taskC.taskId}/approve`, { comment: "C通过" })
+    check("assignee2d NODE_HANDLER 全流程通过", (await bizStatus(zhangsan.token, inst.id)) === "APPROVED")
+  }
+
+  // --- VARIABLE：办理人取自流程变量（flowConfig.variables 注入，与表单字段同路径但走独立 varName） ---
+  {
+    const varCode = `assignee2d_var_${TS}`
+    const flowConfig = { variables: [{ name: "assigneeVar", type: "number", defaultValue: LISI }] }
+    await mkProcFull(varCode,
+      {
+        flowConfig,
+        nodes: [{
+          id: "ap", type: "approval", name: "变量办理人审",
+          assigneeRules: [{ kind: "ACCOUNT", source: "VARIABLE", varName: "assigneeVar" }],
+          multiMode: "ANY", emptyStrategy: "TO_ADMIN",
+        }],
+      },
+      { flowConfig: JSON.stringify(flowConfig) })
+    const t = `VARIABLE-${TS}`
+    const st = await call(zhangsan.token, "POST", "/api/wf/instances", { defCode: varCode, title: t, formData: {} })
+    check("assignee2d VARIABLE 发起成功", st.body?.code === 0, JSON.stringify(st.body))
+    const iid = st.body?.data?.id
+    const det = await call(zhangsan.token, "GET", `/api/wf/instances/${iid}`)
+    check(
+      "assignee2d VARIABLE 办理人解析为变量值对应用户(李四)",
+      (det.body?.data?.currentNodes ?? []).some(
+        (n) => n.nodeId === "ap" && (n.assignees ?? []).some((a) => String(a.userId) === String(LISI)),
+      ),
+      JSON.stringify(det.body?.data?.currentNodes),
+    )
+    // 待办也应落在李四名下：若 VARIABLE 解析失效(空集合)，emptyStrategy=TO_ADMIN 会把任务转给 admin，而非李四
+    const mt = await findTodo(lisi.token, t)
+    check("assignee2d VARIABLE 待办出现在李四名下(而非兜底管理员)", !!mt, JSON.stringify(mt))
+    if (mt) await call(lisi.token, "POST", `/api/wf/tasks/${mt.taskId}/approve`, { comment: "李四同意" })
+    check("assignee2d VARIABLE 全流程通过", (await bizStatus(zhangsan.token, iid)) === "APPROVED")
+  }
+}
+
 /* ---------- 汇总 ---------- */
 cleanupTestData() // 跑完自动清理测试数据，避免污染流程定义/待办列表
 console.log(`\n==> 通过 ${passed} 项，失败 ${failed} 项`)
