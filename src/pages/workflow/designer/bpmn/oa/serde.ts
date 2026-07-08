@@ -12,7 +12,16 @@
  * 解析生效——这里对齐后端契约，修复该隐藏 bug。
  */
 import type { OrgRef } from "@/components/org-picker"
-import type { AllowedOp, AssigneeRule, EmptyStrategy, HandleOptions, MultiMode, WfNodeProps } from "../../types"
+import type {
+  AllowedOp,
+  AssigneeRule,
+  BranchCondition,
+  ConditionOperator,
+  EmptyStrategy,
+  HandleOptions,
+  MultiMode,
+  WfNodeProps,
+} from "../../types"
 import {
   defaultFlowConfig,
   defaultNodeConfig,
@@ -265,4 +274,75 @@ export function writeFlowConfig(
   config: FlowConfig,
 ): void {
   applyExtensions(modeling, bpmnFactory, element, [{ type: "oa:FlowConfig", value: JSON.stringify(config) }])
+}
+
+/* ---------- SequenceFlow 结构化条件（排它网关分支，Task 2） ---------- */
+
+/** 结构化 → UEL 运算符（与 server ConditionCompiler 的 OPS 映射一致；contains/notContains 走方法调用，见下） */
+const OP_UEL: Record<ConditionOperator, string> = {
+  eq: "==",
+  ne: "!=",
+  gt: ">",
+  gte: ">=",
+  lt: "<",
+  lte: "<=",
+  contains: "contains",
+  notContains: "notContains",
+}
+
+/** 数值字面量判定：与 server ConditionCompiler#literal 相同的正则，命中则不加引号 */
+const NUMERIC_RE = /^-?\d+(\.\d+)?$/
+
+/** UEL 字面量：数值不加引号；否则单引号包裹并转义反斜杠/单引号（镜像 ConditionCompiler#literal） */
+function uelLiteral(value: string): string {
+  if (NUMERIC_RE.test(value)) return value
+  return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`
+}
+
+/**
+ * 结构化条件 → UEL 表达式（`${...}`），编译规则镜像 server `JsonToBpmnConverter` 的
+ * `ConditionCompiler`：AND→` && `/OR→` || ` 连接，数值字面量不加引号、其余单引号转义。
+ * contains/notContains 编译为字符串方法调用（`field.contains('v')` / `!field.contains('v')`）——
+ * server 端 `ConditionCompiler` 当前的白名单运算符（eq/ne/gt/gte/lt/lte）尚未收录这两个操作符，
+ * 仅在本设计器直写 BPMN XML 的路径（不经过 JSON→BPMN 转换）生效，Flowable UEL 原生支持该方法调用。
+ */
+function compileUel(cond: BranchCondition): string {
+  if (!cond.items?.length) return ""
+  const join = cond.logic === "OR" ? " || " : " && "
+  const parts = cond.items.map((it) => {
+    const v = uelLiteral(it.value)
+    if (it.operator === "contains") return `${it.field}.contains(${v})`
+    if (it.operator === "notContains") return `!${it.field}.contains(${v})`
+    return `${it.field} ${OP_UEL[it.operator]} ${v}`
+  })
+  return "${" + parts.join(join) + "}"
+}
+
+/** 读取 SequenceFlow 的结构化条件（`oa:Condition` JSON）；未配置时返回 undefined，由调用方兜底默认值 */
+export function readFlowCondition(bo: BusinessObjectLike | undefined): BranchCondition | undefined {
+  if (!bo) return undefined
+  return jsonOf<BranchCondition>(bo, "oa:Condition")
+}
+
+/**
+ * 写入 SequenceFlow 的结构化条件：`oa:condition`（结构化 JSON，供设计器回读）+ `conditionExpression`
+ * （UEL，供 Flowable 执行引擎求值）单次 updateProperties 落盘。
+ * `cond.isDefault` 时两者都清空——默认分支「其余分支都不满足则进入」的语义由网关 `default` 属性表达
+ * （由调用方在设好本条件后，另行把网关 default 指向/移出本 flow，见 editor.tsx）。
+ */
+export function writeFlowCondition(
+  modeling: ModelingLike,
+  bpmnFactory: BpmnFactoryLike,
+  flowEl: ElementLike,
+  cond: BranchCondition,
+): void {
+  const patches: ExtPatch[] = [{ type: "oa:Condition", value: cond.isDefault ? undefined : JSON.stringify(cond) }]
+  applyExtensions(modeling, bpmnFactory, flowEl, patches)
+  if (cond.isDefault) {
+    modeling.updateProperties(flowEl, { conditionExpression: undefined })
+    return
+  }
+  const uel = compileUel(cond)
+  const conditionExpression = uel ? bpmnFactory.create("bpmn:FormalExpression", { body: uel }) : undefined
+  modeling.updateProperties(flowEl, { conditionExpression })
 }

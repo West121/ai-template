@@ -53,8 +53,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { oaBusinessModule } from "./oa/providers"
 import { oaModdleDescriptor } from "./oa/moddle"
 import {
+  readFlowCondition,
   readFlowConfig,
   readNodeConfig,
+  writeFlowCondition,
   writeFlowConfig,
   writeNodeConfig,
 } from "./oa/serde"
@@ -131,6 +133,12 @@ interface BpmnBusinessObject {
   $type: string
   documentation?: Array<{ text?: string }>
   conditionExpression?: { body?: string }
+  /** bpmn:SequenceFlow：源节点（排它网关分支条件面板据此判断是否为排它网关出边） */
+  sourceRef?: BpmnBusinessObject
+  /** bpmn:ExclusiveGateway：出边列表（分支序号/优先级据此计算） */
+  outgoing?: Array<{ id: string }>
+  /** bpmn:ExclusiveGateway：默认分支（其余分支均不满足时进入） */
+  default?: { id: string }
 }
 
 export interface BpmnElement {
@@ -157,6 +165,7 @@ interface BpmnFactoryService {
 }
 interface ElementRegistryService {
   getAll(): BpmnElement[]
+  get(id: string): BpmnElement | undefined
 }
 
 type ModelerInstance = InstanceType<typeof Modeler> & {
@@ -302,6 +311,60 @@ function NodeConfigPanel({
   )
 }
 
+/**
+ * 排它网关出边（bpmn:SequenceFlow）的分支条件：复用共享 PropertyPanel（target.nodeType="condition"）。
+ * 结构化条件落盘为 `oa:condition`（回读用）+ `conditionExpression`（UEL，Flowable 执行用），见 oa/serde.ts。
+ * 默认分支（isDefault）改由网关 `default` 属性表达：置为默认时把网关 default 指向本 flow；
+ * 取消默认时若网关 default 恰好是本 flow 则一并清除，避免网关残留失效引用。
+ */
+function SequenceFlowConditionPanel({
+  modeler,
+  modeling,
+  bpmnFactory,
+  element,
+  formFields,
+}: {
+  modeler: ModelerInstance
+  modeling: ModelingService
+  bpmnFactory: BpmnFactoryService
+  element: BpmnElement
+  formFields: FormFieldOption[]
+}) {
+  const gw = element.businessObject.sourceRef as BpmnBusinessObject
+  const outs = gw.outgoing ?? []
+  const isDefault = gw.default?.id === element.id
+  const cond = readFlowCondition(element.businessObject as unknown as { $type: string }) ?? {
+    logic: "AND" as const,
+    items: [],
+    isDefault,
+  }
+
+  return (
+    <PropertyPanel
+      target={{ nodeId: element.id, nodeType: "condition" }}
+      config={{ condition: { ...cond, isDefault } }}
+      onChange={(next: WfNodeProps) => {
+        const c = next.condition ?? { logic: "AND" as const, items: [], isDefault: false }
+        writeFlowCondition(
+          modeling as unknown as SerdeModeling,
+          bpmnFactory as unknown as SerdeFactory,
+          element as unknown as SerdeElement,
+          c,
+        )
+        const gwElement = modeler.get("elementRegistry").get(gw.id)
+        if (!gwElement) return
+        if (c.isDefault) {
+          modeling.updateProperties(gwElement, { default: element.businessObject })
+        } else if (gw.default?.id === element.id) {
+          modeling.updateProperties(gwElement, { default: undefined })
+        }
+      }}
+      formFields={formFields}
+      branchMeta={{ isDefault, priority: outs.findIndex((o) => o.id === element.id) + 1 }}
+    />
+  )
+}
+
 /** 流程级配置区：未选中节点 / 选中流程根时展示，复用共享 PropertyPanel（target="process"） */
 function FlowConfigSection({
   modeler,
@@ -415,6 +478,20 @@ function PropertiesPanel({
   if (isTaskLike(element.type)) {
     return (
       <NodeConfigPanel
+        key={`${element.id}-${version}`}
+        modeler={modeler}
+        modeling={modeling}
+        bpmnFactory={bpmnFactory}
+        element={element}
+        formFields={formFields}
+      />
+    )
+  }
+
+  // 排它网关出边：结构化分支条件面板（共享 PropertyPanel），其余顺序流沿用下方通用 UEL 文本框
+  if (element.type === "bpmn:SequenceFlow" && element.businessObject.sourceRef?.$type === "bpmn:ExclusiveGateway") {
+    return (
+      <SequenceFlowConditionPanel
         key={`${element.id}-${version}`}
         modeler={modeler}
         modeling={modeling}
