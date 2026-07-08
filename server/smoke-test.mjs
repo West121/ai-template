@@ -11,16 +11,18 @@ const BASE = process.env.OA_BASE ?? "http://localhost:8081"
 
 /**
  * 冒烟测试会创建大量测试流程定义/实例；跑完自动清理，避免污染流程定义/待办等列表。
- * 仅保留种子 leave_approval。通过 docker psql 直连（本地环境）；不可用时静默跳过。
- * 设 OA_SMOKE_KEEP=1 可保留测试数据（调试用）。
+ * 保留种子 leave_approval 及手动测试样例 purchase_approval（复杂 BPMN 定义，表单 purchase_form）。
+ * 通过 docker psql 直连（本地环境）；不可用时静默跳过。设 OA_SMOKE_KEEP=1 可保留全部测试数据（调试用）。
  */
+const KEEP_DEF_CODES = ["leave_approval", "purchase_approval"]
 function cleanupTestData() {
   if (process.env.OA_SMOKE_KEEP === "1") {
     console.log("🧪 OA_SMOKE_KEEP=1，保留测试数据")
     return
   }
+  const keepList = KEEP_DEF_CODES.map((c) => `'${c}'`).join(",")
   const sql = [
-    "DELETE FROM wf_process_ext WHERE def_code <> 'leave_approval';",
+    `DELETE FROM wf_process_ext WHERE def_code NOT IN (${keepList});`,
     "TRUNCATE wf_instance_ext,wf_operation,wf_cc,wf_notify,wf_task_read,wf_add_sign,wf_vote RESTART IDENTITY;",
     "TRUNCATE act_ru_task,act_ru_execution,act_ru_variable,act_ru_identitylink,act_ru_actinst,act_ru_job,",
     "act_ru_timer_job,act_ru_suspended_job,act_ru_deadletter_job,act_ru_external_job,act_ru_entitylink,",
@@ -31,7 +33,7 @@ function cleanupTestData() {
   try {
     // execFile + 参数数组：不经 shell，sql/容器名作为独立参数传递，无注入风险
     execFileSync("docker", ["exec", pg, "psql", "-U", "oa", "-d", "oa_platform", "-c", sql], { stdio: "ignore" })
-    console.log("🧹 测试数据已清理（保留种子 leave_approval）")
+    console.log(`🧹 测试数据已清理（保留：${KEEP_DEF_CODES.join(", ")}）`)
   } catch {
     console.log("⚠️  测试数据清理跳过（docker/psql 不可用，可手动清理或设 OA_PG_CONTAINER）")
   }
