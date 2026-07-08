@@ -55,112 +55,32 @@ export const oaModdleDescriptor = {
     bodyType("CommentRequired"),
     bodyType("Events"),
     bodyType("CcUsers"),
-    /** 展示审批记录：BPMN 设计器本地展示开关，后端不消费，独立元素持久化避免刷新丢失 */
-    bodyType("ShowApprovalRecord"),
+    /** 挂在 bpmn:SequenceFlow 的 extensionElements 下：网关分支结构化条件（Task 2 消费，这里先注册） */
+    bodyType("Condition"),
   ],
 } as const
 
 export const OA_NS = "http://oa/bpmn"
 
-/* ---------- TS 侧配置契约（对齐 docs/flow-designer-v2.md P1 数据契约 nodeConfig / flowConfig） ---------- */
+/* ---------- TS 侧配置契约（统一到共享契约：../types 的 WfNodeProps / ../../shared/config 的 FlowConfig） ---------- */
 
-import type { OrgRef } from "@/components/org-picker"
-import type {
-  AssigneeRule,
-  AuditMenu,
-  EmptyStrategy,
-  FormPerms,
-  HandleOptions,
-  MultiMode,
-  NodeEvent,
-  NodeTimeout,
-  VoteConfig,
-} from "../../types"
-import type { FlowVariable } from "../../shared/config"
+import type { WfNodeProps } from "../../types"
 import { defaultHandleOptions } from "../../shared/config"
 
-/**
- * 节点级配置（UserTask）。逐字段以独立 oa:<name> 元素存入 extensionElements，随 saveXML 持久化。
- * assigneeRules/multiMode/emptyStrategy/voteConfig 等类型来自共享契约（../types），与仿钉钉设计器
- * 及后端保持一致的两维（类型×来源）办理人模型。
- */
-export interface NodeConfig {
-  /** 处理人规则（两维模型：类型(kind) × 来源(source)，与仿钉钉设计器共享） */
-  assigneeRules: AssigneeRule[]
-  /** 多人模式：或签(ANY) / 会签(ALL) / 依次(SEQUENCE) / 票签(VOTE) */
-  multiMode: MultiMode
-  /** 空值策略 */
-  emptyStrategy: EmptyStrategy
-  /** 抄送人（抄送节点用，仍是 OrgRef[]） */
-  ccUsers: OrgRef[]
-  /** 按钮操作白名单（对应后端 allowedOps） */
-  allowedOps: string[]
-  /** 是否展示审批记录（BPMN 设计器本地展示，后端不消费） */
-  showApprovalRecord: boolean
-  /** 办理选项（P2 全套，共享契约） */
-  handleOptions: HandleOptions
-  /** multiMode=VOTE 时的票签配置（阈值 + 权重） */
-  voteConfig?: VoteConfig
-  /** P2：审核菜单（跳转/退回） */
-  auditMenu?: AuditMenu
-  /** P2：审批意见必填 */
-  commentRequired?: boolean
-  /** P2：节点超时 */
-  timeout?: NodeTimeout
-  /** P2：表单字段权限 */
-  formPerms?: FormPerms
-  /** P3：节点事件 */
-  events?: NodeEvent[]
-}
-
-/** 流程级配置（Process） */
-export interface FlowConfig {
-  operations: {
-    terminate: boolean
-    retrieve: boolean
-    urge: boolean
-    cancel: boolean
-  }
-  start: {
-    /** 启动权限（空 = 不限） */
-    scope: OrgRef[]
-    mobileStart: boolean
-  }
-  /** 流程变量 */
-  variables?: FlowVariable[]
-}
-
-/** 全部可配按钮操作（顺序即展示/执行顺序；值与共享 AllowedOp 对齐） */
-export const ALLOWED_OPS: { value: string; label: string }[] = [
-  { value: "approve", label: "同意 / 办理" },
-  { value: "reject", label: "驳回" },
-  { value: "transfer", label: "转办" },
-  { value: "delegate", label: "委派" },
-  { value: "addSign", label: "加签" },
-  { value: "counterSign", label: "会签" },
-  { value: "assist", label: "协办" },
-  { value: "retrieve", label: "撤回" },
-  { value: "print", label: "打印" },
-]
+/** 节点级配置：与仿钉钉设计器共享同一类型（两维办理人模型 + P1/P2/P3 全套字段） */
+export type { WfNodeProps }
+/** 流程级 / 流程基础信息配置：与仿钉钉设计器共享同一类型（start.scope + taskTitle，无 mobileStart） */
+export type { FlowConfig, ProcessBase } from "../../shared/config"
+export { defaultFlowConfig } from "../../shared/config"
 
 /** 节点默认配置 */
-export function defaultNodeConfig(): NodeConfig {
+export function defaultNodeConfig(): WfNodeProps {
   return {
     assigneeRules: [],
     multiMode: "ANY",
     emptyStrategy: "TO_ADMIN",
     ccUsers: [],
     allowedOps: ["approve", "reject", "transfer"],
-    showApprovalRecord: true,
     handleOptions: defaultHandleOptions(),
-  }
-}
-
-/** 流程默认配置 */
-export function defaultFlowConfig(): FlowConfig {
-  return {
-    operations: { terminate: true, retrieve: false, urge: false, cancel: true },
-    start: { scope: [], mobileStart: true },
-    variables: [],
   }
 }

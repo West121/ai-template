@@ -12,12 +12,11 @@
  * 解析生效——这里对齐后端契约，修复该隐藏 bug。
  */
 import type { OrgRef } from "@/components/org-picker"
-import type { AssigneeRule, EmptyStrategy, MultiMode } from "../../types"
+import type { AllowedOp, AssigneeRule, EmptyStrategy, HandleOptions, MultiMode, WfNodeProps } from "../../types"
 import {
   defaultFlowConfig,
   defaultNodeConfig,
   type FlowConfig,
-  type NodeConfig,
 } from "./moddle"
 
 /* ---------- 精简 moddle 服务类型（只收敛用到的部分） ---------- */
@@ -27,7 +26,6 @@ interface ModdleEl {
   value?: string
   multiMode?: string
   emptyStrategy?: string
-  showApprovalRecord?: boolean
   extensionElements?: { values?: ModdleEl[] } | undefined
   [key: string]: unknown
 }
@@ -72,7 +70,6 @@ const NODE_ELEMS = {
   commentRequired: "oa:CommentRequired",
   events: "oa:Events",
   ccUsers: "oa:CcUsers",
-  showApprovalRecord: "oa:ShowApprovalRecord",
 } as const
 
 const bodyOf = (bo: BusinessObjectLike, type: string): string | undefined => findOaElement(bo, type)?.value
@@ -108,8 +105,8 @@ const EMPTY_MAP: Record<string, EmptyStrategy> = {
   BLOCK: "BLOCK",
 }
 
-/** 旧 oa:NodeConfig 单块 JSON → 新形状：枚举值映射 + 旧 OrgRef[] 办理人迁移为一条 ACCOUNT+FIXED 规则 */
-function migrateLegacyNode(parsed: Record<string, unknown>, base: NodeConfig): NodeConfig {
+/** 旧 oa:NodeConfig 单块 JSON → 新形状：枚举值映射 + 旧 OrgRef[] 办理人迁移为一条 ACCOUNT+FIXED 规则（showApprovalRecord 丢弃，WfNodeProps 无此字段） */
+function migrateLegacyNode(parsed: Record<string, unknown>, base: WfNodeProps): WfNodeProps {
   const rawRules = Array.isArray(parsed.assigneeRules) ? (parsed.assigneeRules as unknown[]) : []
   // 旧 OrgRef[]（元素有 type/id 无 kind）→ 单条 ACCOUNT+FIXED 规则；已是新形状（有 kind）则直接使用
   const isLegacyRefs =
@@ -118,18 +115,19 @@ function migrateLegacyNode(parsed: Record<string, unknown>, base: NodeConfig): N
   const assigneeRules: AssigneeRule[] = isLegacyRefs
     ? [{ kind: "ACCOUNT", source: "FIXED", refs: rawRules as OrgRef[] }]
     : (rawRules as AssigneeRule[])
+  const { showApprovalRecord: _discard, ...rest } = parsed
   return {
     ...base,
-    ...parsed,
+    ...rest,
     assigneeRules,
     multiMode: MULTI_MAP[String(parsed.multiMode)] ?? base.multiMode,
     emptyStrategy: EMPTY_MAP[String(parsed.emptyStrategy)] ?? base.emptyStrategy,
     handleOptions: { ...base.handleOptions, ...(parsed.handleOptions as object) },
-  } as NodeConfig
+  } as WfNodeProps
 }
 
 /** 读取 UserTask 的办理人/多人模式/空值策略等配置；优先逐个独立元素，缺失才回退旧单块 oa:NodeConfig */
-export function readNodeConfig(bo: BusinessObjectLike | undefined): NodeConfig {
+export function readNodeConfig(bo: BusinessObjectLike | undefined): WfNodeProps {
   const base = defaultNodeConfig()
   if (!bo) return base
 
@@ -142,14 +140,15 @@ export function readNodeConfig(bo: BusinessObjectLike | undefined): NodeConfig {
       emptyStrategy: (bodyOf(bo, NODE_ELEMS.emptyStrategy) as EmptyStrategy) ?? base.emptyStrategy,
       voteConfig: jsonOf(bo, NODE_ELEMS.voteConfig),
       ccUsers: jsonOf<OrgRef[]>(bo, NODE_ELEMS.ccUsers) ?? [],
-      allowedOps: jsonOf<string[]>(bo, NODE_ELEMS.allowedOps) ?? base.allowedOps,
-      handleOptions: { ...base.handleOptions, ...jsonOf(bo, NODE_ELEMS.handleOptions) },
+      allowedOps: jsonOf<AllowedOp[]>(bo, NODE_ELEMS.allowedOps) ?? base.allowedOps,
+      // jsonOf(...) 类型含 undefined；直接 spread 会令合并结果各字段被推断为 optional，
+      // 故整体 as HandleOptions（JSON.parse 不会产出字段级 undefined，仅整块缺失/解析失败）
+      handleOptions: { ...base.handleOptions, ...jsonOf(bo, NODE_ELEMS.handleOptions) } as HandleOptions,
       auditMenu: jsonOf(bo, NODE_ELEMS.auditMenu),
       timeout: jsonOf(bo, NODE_ELEMS.timeout),
       formPerms: jsonOf(bo, NODE_ELEMS.formPerms),
       commentRequired: jsonOf<boolean>(bo, NODE_ELEMS.commentRequired),
       events: jsonOf(bo, NODE_ELEMS.events),
-      showApprovalRecord: jsonOf<boolean>(bo, NODE_ELEMS.showApprovalRecord) ?? base.showApprovalRecord,
     }
   }
 
@@ -225,30 +224,34 @@ function applyExtensions(
   modeling.updateProperties(element, { extensionElements })
 }
 
-/** 写入 UserTask 的办理人/多人模式/空值策略等配置：逐字段 upsert 独立元素，单次 updateProperties */
+/**
+ * 写入 UserTask 的办理人/多人模式/空值策略等配置：逐字段 upsert 独立元素，单次 updateProperties。
+ * config（WfNodeProps）字段皆可选（与仿钉钉共享面板契约一致）——先与默认值合并，核心字段（assigneeRules/
+ * multiMode/emptyStrategy/allowedOps/handleOptions/ccUsers）始终写出非 undefined 值。
+ */
 export function writeNodeConfig(
   modeling: ModelingLike,
   bpmnFactory: BpmnFactoryLike,
   element: ElementLike,
-  config: NodeConfig,
+  config: WfNodeProps,
 ): void {
+  const merged: WfNodeProps = { ...defaultNodeConfig(), ...config }
   const patches: ExtPatch[] = [
-    { type: NODE_ELEMS.assigneeRules, value: JSON.stringify(config.assigneeRules) },
-    { type: NODE_ELEMS.multiMode, value: config.multiMode },
-    { type: NODE_ELEMS.emptyStrategy, value: config.emptyStrategy },
-    { type: NODE_ELEMS.voteConfig, value: config.voteConfig ? JSON.stringify(config.voteConfig) : undefined },
-    { type: NODE_ELEMS.allowedOps, value: JSON.stringify(config.allowedOps) },
-    { type: NODE_ELEMS.handleOptions, value: JSON.stringify(config.handleOptions) },
-    { type: NODE_ELEMS.ccUsers, value: JSON.stringify(config.ccUsers) },
-    { type: NODE_ELEMS.auditMenu, value: config.auditMenu ? JSON.stringify(config.auditMenu) : undefined },
-    { type: NODE_ELEMS.timeout, value: config.timeout ? JSON.stringify(config.timeout) : undefined },
-    { type: NODE_ELEMS.formPerms, value: config.formPerms ? JSON.stringify(config.formPerms) : undefined },
+    { type: NODE_ELEMS.assigneeRules, value: JSON.stringify(merged.assigneeRules) },
+    { type: NODE_ELEMS.multiMode, value: merged.multiMode },
+    { type: NODE_ELEMS.emptyStrategy, value: merged.emptyStrategy },
+    { type: NODE_ELEMS.voteConfig, value: merged.voteConfig ? JSON.stringify(merged.voteConfig) : undefined },
+    { type: NODE_ELEMS.allowedOps, value: JSON.stringify(merged.allowedOps) },
+    { type: NODE_ELEMS.handleOptions, value: JSON.stringify(merged.handleOptions) },
+    { type: NODE_ELEMS.ccUsers, value: JSON.stringify(merged.ccUsers) },
+    { type: NODE_ELEMS.auditMenu, value: merged.auditMenu ? JSON.stringify(merged.auditMenu) : undefined },
+    { type: NODE_ELEMS.timeout, value: merged.timeout ? JSON.stringify(merged.timeout) : undefined },
+    { type: NODE_ELEMS.formPerms, value: merged.formPerms ? JSON.stringify(merged.formPerms) : undefined },
     {
       type: NODE_ELEMS.commentRequired,
-      value: config.commentRequired != null ? String(config.commentRequired) : undefined,
+      value: merged.commentRequired != null ? String(merged.commentRequired) : undefined,
     },
-    { type: NODE_ELEMS.events, value: config.events ? JSON.stringify(config.events) : undefined },
-    { type: NODE_ELEMS.showApprovalRecord, value: JSON.stringify(config.showApprovalRecord) },
+    { type: NODE_ELEMS.events, value: merged.events ? JSON.stringify(merged.events) : undefined },
   ]
   // 迁移：清掉旧单块元素（与新元素一并计算，单次 updateProperties）
   applyExtensions(modeling, bpmnFactory, element, patches, ["oa:NodeConfig"])

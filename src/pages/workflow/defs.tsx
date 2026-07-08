@@ -892,6 +892,22 @@ export default function WorkflowDefsPage() {
             heightClass="h-full"
             hideFileTools
             className="h-full rounded-none border-0"
+            base={{
+              name: editor.name,
+              description: editor.description,
+              icon: editor.icon,
+              category: editor.category,
+            }}
+            onBaseChange={(next: ProcessBase) =>
+              setEditor((e) => ({
+                ...e,
+                name: next.name,
+                description: next.description,
+                icon: next.icon,
+                category: next.category,
+              }))
+            }
+            formFields={editor.formFields}
           />
         )}
       </Modal>

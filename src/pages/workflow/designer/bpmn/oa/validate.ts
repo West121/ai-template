@@ -143,7 +143,7 @@ export function validateBpmn(modeler: ModelerLike): ValidationIssue[] {
     // 4c. 审批节点(UserTask) 必配处理人
     if (isType(node, "bpmn:UserTask")) {
       const cfg = readNodeConfig(node.businessObject)
-      if (cfg.assigneeRules.length === 0) {
+      if ((cfg.assigneeRules ?? []).length === 0) {
         issues.push({ elementId: node.id, level: "error", message: `审批节点「${labelOf(node)}」未配置处理人` })
       }
     }

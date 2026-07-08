@@ -42,31 +42,16 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { isDarkMode } from "@/lib/theme"
 import { useAppStore } from "@/stores/app-store"
-import { OrgPicker, OrgPickerField } from "@/components/org-picker"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
-import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { oaBusinessModule } from "./oa/providers"
-import {
-  ALLOWED_OPS,
-  oaModdleDescriptor,
-  type FlowConfig,
-  type NodeConfig,
-} from "./oa/moddle"
+import { oaModdleDescriptor } from "./oa/moddle"
 import {
   readFlowConfig,
   readNodeConfig,
@@ -74,8 +59,9 @@ import {
   writeNodeConfig,
 } from "./oa/serde"
 import { validateBpmn, type ValidationIssue } from "./oa/validate"
-import { AssigneeRulesEditor } from "../shared/property-panel"
-import { EMPTY_STRATEGY_META, MULTI_MODE_META, type EmptyStrategy, type MultiMode } from "../types"
+import { PropertyPanel } from "../shared/property-panel"
+import type { FormFieldOption, ProcessBase, ProcessConfig } from "../shared/config"
+import type { WfNodeProps } from "../types"
 
 /** 空白流程（仅一个开始事件） */
 export const BLANK_BPMN_XML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -263,182 +249,71 @@ function typeMetaOf(type: string) {
 
 const isTaskLike = (type: string) => type === "bpmn:UserTask" || type === "bpmn:Task" || type === "bpmn:ServiceTask"
 
-/* ---------- 节点业务配置（oa:nodeConfig，真持久化到 extensionElements） ---------- */
+/* ---------- 节点业务配置：复用共享 PropertyPanel（../shared/property-panel），不再手搓 ---------- */
 
 /**
- * UserTask/Task/ServiceTask 的业务属性区。配置直接读写 businessObject 的
- * `<bpmn:extensionElements><oa:nodeConfig>`，saveXML() 即含这些数据 —— 取代旧版
- * “演示存储在前端状态、保存即丢”的实现。
+ * UserTask/Task/ServiceTask 的业务属性区：复用仿钉钉设计器同款共享面板（基础信息 + 按 nodeType 分区
+ * 的高级属性：办理选项/审核菜单/超时/表单字段权限/节点事件），不再手搓 OrgPicker/Select/Switch。
+ * 配置读写 businessObject 的 `<bpmn:extensionElements>`（oa:<name> 逐元素），saveXML() 即含这些数据。
  */
-function NodeConfigSection({
+function NodeConfigPanel({
   modeler,
   modeling,
   bpmnFactory,
   element,
+  formFields,
 }: {
   modeler: ModelerInstance
   modeling: ModelingService
   bpmnFactory: BpmnFactoryService
   element: BpmnElement
+  formFields: FormFieldOption[]
 }) {
-  const [ccOpen, setCcOpen] = useState(false)
-
-  const config: NodeConfig = readNodeConfig(element.businessObject as unknown as { $type: string })
-  const isApproval = element.type === "bpmn:UserTask"
+  const cfg = readNodeConfig(element.businessObject as unknown as { $type: string })
   const isCc = element.type === "bpmn:Task"
 
-  const write = (patch: Partial<NodeConfig>) => {
-    writeNodeConfig(
-      modeling as unknown as SerdeModeling,
-      bpmnFactory as unknown as SerdeFactory,
-      element as unknown as SerdeElement,
-      { ...config, ...patch },
-    )
-  }
-
-  const toggleOp = (op: string, on: boolean) =>
-    write({
-      allowedOps: on ? [...config.allowedOps, op] : config.allowedOps.filter((o) => o !== op),
-    })
-
   // 本流程其它 UserTask（供「指定节点办理人」来源选择），排除当前节点自身
-  const otherUserTasks = modeler
+  const others = modeler
     .get("elementRegistry")
     .getAll()
-    .filter((el) => el.businessObject?.$type === "bpmn:UserTask" && el.id !== element.id)
-    .map((el) => ({ id: el.id, name: el.businessObject.name || el.id }))
+    .filter((e) => e.type === "bpmn:UserTask" && e.id !== element.id)
+    .map((e) => ({ id: e.id, name: e.businessObject.name || e.id }))
 
-  // 流程变量（供「来自变量」来源选择）：从 Process 根元素的 oa:flowConfig 读取
-  let flowVariableOptions: string[] = []
-  try {
-    const root = modeler.get("canvas").getRootElement()
-    if (root.businessObject?.$type === "bpmn:Process") {
-      const flowConfig = readFlowConfig(root.businessObject as unknown as { $type: string })
-      flowVariableOptions = (flowConfig.variables ?? []).map((v) => v.name)
-    }
-  } catch {
-    // 根节点尚未就绪（如协作图），流程变量选项留空
-  }
+  const rootBo = modeler.get("canvas").getRootElement().businessObject
 
   return (
-    <section className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Label className="text-xs text-muted-foreground">{isCc ? "抄送配置" : "办理配置"}</Label>
-        <Badge variant="secondary" className="text-[10px]">
-          已持久化到 XML
-        </Badge>
-      </div>
-
-      {isCc ? (
-        /* 抄送人：仍是 OrgRef[]，保留 OrgPicker */
-        <div className="space-y-1.5">
-          <Label className="text-xs">抄送人</Label>
-          <OrgPickerField
-            value={config.ccUsers}
-            multiple
-            placeholder="选择成员 / 部门 / 角色"
-            onOpen={() => setCcOpen(true)}
-            onRemove={(ref) =>
-              write({ ccUsers: config.ccUsers.filter((r) => !(r.type === ref.type && r.id === ref.id)) })
-            }
-          />
-          <OrgPicker
-            open={ccOpen}
-            onOpenChange={setCcOpen}
-            title="选择抄送人"
-            value={config.ccUsers}
-            onConfirm={(refs) => write({ ccUsers: refs })}
-          />
-        </div>
-      ) : (
-        /* 处理人：共享二维模型（类型 kind × 来源 source），复用仿钉钉设计器同款编辑器 */
-        <div className="space-y-1.5">
-          <Label className="text-xs">处理人规则</Label>
-          <AssigneeRulesEditor
-            rules={config.assigneeRules}
-            onChange={(assigneeRules) => write({ assigneeRules })}
-            // BPMN 表单字段来源待接：BPMN 设计器暂无动态表单字段数据源，传空数组——
-            // 处理人编辑器其余能力（部门/角色/岗位/发起人主管/变量/公式等）不受影响，
-            // 仅 FORM_FIELD 来源下拉暂无候选项。
-            fields={[]}
-            nodeOptions={otherUserTasks}
-            variableOptions={flowVariableOptions}
-          />
-        </div>
-      )}
-
-      {isApproval && (
-        <>
-          {/* 多人模式 */}
-          <div className="space-y-1.5">
-            <Label className="text-xs">多人办理模式</Label>
-            <Select value={config.multiMode} onValueChange={(v) => write({ multiMode: v as MultiMode })}>
-              <SelectTrigger size="sm" className="h-8 w-full text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(MULTI_MODE_META).map(([value, meta]) => (
-                  <SelectItem key={value} value={value}>
-                    {meta.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* 空值策略 */}
-          <div className="space-y-1.5">
-            <Label className="text-xs">处理人为空时</Label>
-            <Select
-              value={config.emptyStrategy}
-              onValueChange={(v) => write({ emptyStrategy: v as EmptyStrategy })}
-            >
-              <SelectTrigger size="sm" className="h-8 w-full text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(EMPTY_STRATEGY_META).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>
-                    {label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* 按钮操作白名单 */}
-          <div className="space-y-2">
-            <Label className="text-xs">按钮操作（allowedOps）</Label>
-            <div className="grid grid-cols-1 gap-1.5">
-              {ALLOWED_OPS.map((op) => (
-                <label key={op.value} className="flex items-center justify-between gap-2 text-sm">
-                  <span className="text-xs">{op.label}</span>
-                  <Switch
-                    checked={config.allowedOps.includes(op.value)}
-                    onCheckedChange={(on) => toggleOp(op.value, on)}
-                  />
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {/* 审批记录 */}
-          <label className="flex items-center justify-between gap-2">
-            <span className="text-xs">展示审批记录</span>
-            <Switch
-              checked={config.showApprovalRecord}
-              onCheckedChange={(on) => write({ showApprovalRecord: on })}
-            />
-          </label>
-        </>
-      )}
-    </section>
+    <PropertyPanel
+      target={{ nodeId: element.id, nodeType: isCc ? "cc" : "approval" }}
+      config={cfg}
+      onChange={(next: WfNodeProps) =>
+        writeNodeConfig(
+          modeling as unknown as SerdeModeling,
+          bpmnFactory as unknown as SerdeFactory,
+          element as unknown as SerdeElement,
+          next,
+        )
+      }
+      formFields={formFields}
+      nodeName={element.businessObject.name}
+      onNodeNameChange={(name) => modeling.updateProperties(element, { name })}
+      nodeOptions={others}
+      flowConfig={readFlowConfig(rootBo as unknown as { $type: string })}
+    />
   )
 }
 
-/** 流程级配置区（oa:flowConfig，落 Process 的 extensionElements） */
-function FlowConfigSection({ modeler }: { modeler: ModelerInstance }) {
-  const [scopeOpen, setScopeOpen] = useState(false)
+/** 流程级配置区：未选中节点 / 选中流程根时展示，复用共享 PropertyPanel（target="process"） */
+function FlowConfigSection({
+  modeler,
+  base,
+  onBaseChange,
+  formFields,
+}: {
+  modeler: ModelerInstance
+  base: ProcessBase
+  onBaseChange: (b: ProcessBase) => void
+  formFields: FormFieldOption[]
+}) {
   const [root, setRoot] = useState<BpmnElement | null>(null)
   // 在提交后读取根元素：getRootElement() 首次访问会 fire 事件，放渲染期会触发
   // “setState during render” 告警，故移入 effect。
@@ -458,89 +333,33 @@ function FlowConfigSection({ modeler }: { modeler: ModelerInstance }) {
           <MousePointerClick className="size-5" />
         </div>
         <div className="text-sm">点击画布中的节点</div>
-        <div className="text-xs text-muted-foreground/70">
-          选中节点或连线可编辑其属性；此处为流程级属性（暂不可用）
-        </div>
+        <div className="text-xs text-muted-foreground/70">选中节点或连线可编辑其属性</div>
       </div>
     )
   }
+
   const modeling = modeler.get("modeling")
   const bpmnFactory = modeler.get("bpmnFactory")
-  const config: FlowConfig = readFlowConfig(root.businessObject as unknown as { $type: string })
-
-  const write = (patch: Partial<FlowConfig>) => {
-    writeFlowConfig(
-      modeling as unknown as SerdeModeling,
-      bpmnFactory as unknown as SerdeFactory,
-      root as unknown as SerdeElement,
-      { ...config, ...patch },
-    )
-  }
-  const op = (key: keyof FlowConfig["operations"], on: boolean) =>
-    write({ operations: { ...config.operations, [key]: on } })
+  const flow = readFlowConfig(root.businessObject as unknown as { $type: string })
 
   return (
-    <ScrollArea className="h-full">
-      <div className="space-y-5 p-4">
-        <div className="flex items-center gap-2">
-          <Label className="text-sm font-semibold">流程属性</Label>
-          <Badge variant="secondary" className="text-[10px]">
-            已持久化到 XML
-          </Badge>
-        </div>
-        <Separator />
-        <section className="space-y-2">
-          <Label className="text-xs text-muted-foreground">流程操作</Label>
-          {(
-            [
-              ["terminate", "允许作废"],
-              ["cancel", "允许撤销"],
-              ["retrieve", "允许收回"],
-              ["urge", "允许催办"],
-            ] as const
-          ).map(([key, label]) => (
-            <label key={key} className="flex items-center justify-between gap-2">
-              <span className="text-xs">{label}</span>
-              <Switch checked={config.operations[key]} onCheckedChange={(on) => op(key, on)} />
-            </label>
-          ))}
-        </section>
-        <Separator />
-        <section className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">启动权限（空 = 不限）</Label>
-          <OrgPickerField
-            value={config.start.scope}
-            multiple
-            placeholder="选择可发起的成员 / 部门 / 角色"
-            onOpen={() => setScopeOpen(true)}
-            onRemove={(ref) =>
-              write({
-                start: {
-                  ...config.start,
-                  scope: config.start.scope.filter((r) => !(r.type === ref.type && r.id === ref.id)),
-                },
-              })
-            }
-          />
-          <OrgPicker
-            open={scopeOpen}
-            onOpenChange={setScopeOpen}
-            title="选择启动权限"
-            value={config.start.scope}
-            onConfirm={(refs) => write({ start: { ...config.start, scope: refs } })}
-          />
-          <label className="flex items-center justify-between gap-2 pt-1">
-            <span className="text-xs">允许移动端发起</span>
-            <Switch
-              checked={config.start.mobileStart}
-              onCheckedChange={(on) => write({ start: { ...config.start, mobileStart: on } })}
-            />
-          </label>
-        </section>
-      </div>
-    </ScrollArea>
+    <PropertyPanel
+      target="process"
+      config={{ base, flow }}
+      onChange={(next: ProcessConfig) => {
+        onBaseChange(next.base)
+        writeFlowConfig(
+          modeling as unknown as SerdeModeling,
+          bpmnFactory as unknown as SerdeFactory,
+          root as unknown as SerdeElement,
+          next.flow,
+        )
+      }}
+      formFields={formFields}
+    />
   )
 }
+
 
 /* ---------- 属性面板 ---------- */
 
@@ -548,10 +367,16 @@ function PropertiesPanel({
   modeler,
   element,
   version,
+  base,
+  onBaseChange,
+  formFields,
 }: {
   modeler: ModelerInstance | null
   element: BpmnElement | null
   version: number
+  base: ProcessBase
+  onBaseChange: (b: ProcessBase) => void
+  formFields: FormFieldOption[]
 }) {
   const [docText, setDocText] = useState("")
   const [condition, setCondition] = useState("")
@@ -575,14 +400,32 @@ function PropertiesPanel({
     )
   }
 
-  // 未选中节点 / 选中流程根 → 展示流程级属性
+  // 未选中节点 / 选中流程根 → 展示流程级属性（复用共享 PropertyPanel）
   if (!element || element.type === "bpmn:Process") {
-    return <FlowConfigSection key={version} modeler={modeler} />
+    return (
+      <FlowConfigSection key={version} modeler={modeler} base={base} onBaseChange={onBaseChange} formFields={formFields} />
+    )
+  }
+
+  const modeling = modeler.get("modeling")
+  const bpmnFactory = modeler.get("bpmnFactory")
+
+  // 任务节点（审批/抄送/AI）：整体交给共享 PropertyPanel（基础信息 + 高级属性一体），不再叠加手搓的
+  // 基础信息/备注小节，避免与共享面板内已有的节点名称等区块重复。
+  if (isTaskLike(element.type)) {
+    return (
+      <NodeConfigPanel
+        key={`${element.id}-${version}`}
+        modeler={modeler}
+        modeling={modeling}
+        bpmnFactory={bpmnFactory}
+        element={element}
+        formFields={formFields}
+      />
+    )
   }
 
   const meta = typeMetaOf(element.type)
-  const modeling = modeler.get("modeling")
-  const bpmnFactory = modeler.get("bpmnFactory")
 
   const saveDoc = () => {
     modeling.updateProperties(element, {
@@ -637,20 +480,6 @@ function PropertiesPanel({
             <Input value={element.id} readOnly className="h-8 bg-muted/50 font-mono text-xs" />
           </div>
         </section>
-
-        {/* 任务业务配置（真持久化） */}
-        {isTaskLike(element.type) && (
-          <>
-            <Separator />
-            <NodeConfigSection
-              key={`${element.id}-${version}`}
-              modeler={modeler}
-              modeling={modeling}
-              bpmnFactory={bpmnFactory}
-              element={element}
-            />
-          </>
-        )}
 
         {/* 顺序流条件 */}
         {element.type === "bpmn:SequenceFlow" && (
@@ -735,7 +564,17 @@ export interface BpmnDesignerProps {
   hideFileTools?: boolean
   ref?: Ref<BpmnDesignerHandle>
   className?: string
+  /**
+   * 流程级基础信息（映射 ProcessDef name/remark/icon/category），供流程属性面板「基础信息」编辑。
+   * 嵌入 /workflow/defs 时应受控传入（与 ProcessDef 同步）；独立 demo 场景可不传，组件内部兜底维护。
+   */
+  base?: ProcessBase
+  onBaseChange?: (base: ProcessBase) => void
+  /** 绑定表单的字段，供节点/流程面板条件、表单字段权限、办理人来源等选择；未绑定表单时为空 */
+  formFields?: FormFieldOption[]
 }
+
+const EMPTY_PROCESS_BASE: ProcessBase = { name: "", description: "", icon: "", category: "" }
 
 export function BpmnDesigner({
   initialXml = BLANK_BPMN_XML,
@@ -743,7 +582,15 @@ export function BpmnDesigner({
   hideFileTools = false,
   ref,
   className,
+  base,
+  onBaseChange,
+  formFields = [],
 }: BpmnDesignerProps) {
+  // 未受控传入 base/onBaseChange（如独立 demo 页）时内部兜底维护，避免影响未接线的旧调用方
+  const [internalBase, setInternalBase] = useState<ProcessBase>(EMPTY_PROCESS_BASE)
+  const effectiveBase = base ?? internalBase
+  const effectiveOnBaseChange = onBaseChange ?? setInternalBase
+
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
   const xmlRef = useRef<string | null>(null)
@@ -972,7 +819,14 @@ export function BpmnDesigner({
       <div className={cn("flex", fullscreen ? "h-[calc(100dvh-48px)]" : heightClass)}>
         <div key={dark ? "dark" : "light"} ref={canvasRef} className="relative min-w-0 flex-1 bg-white dark:bg-background" />
         <aside className="w-80 shrink-0 border-l bg-card">
-          <PropertiesPanel modeler={modeler} element={selected} version={version} />
+          <PropertiesPanel
+            modeler={modeler}
+            element={selected}
+            version={version}
+            base={effectiveBase}
+            onBaseChange={effectiveOnBaseChange}
+            formFields={formFields}
+          />
         </aside>
       </div>
     </Card>
