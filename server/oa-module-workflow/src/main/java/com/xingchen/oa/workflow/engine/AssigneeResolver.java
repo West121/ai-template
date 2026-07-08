@@ -150,11 +150,19 @@ public class AssigneeResolver {
     public List<Long> resolveOffline(JsonNode rules, Long initiatorId, Long initiatorDeptId,
                                      java.util.Map<String, Object> values) {
         Set<Long> users = new LinkedHashSet<>();
+        // 离线 lookup：从表单值 map 取变量（与运行时 execution::getVariable 对偶）
+        Function<String, Object> lookup = values == null ? k -> null : values::get;
         if (rules != null && rules.isArray()) {
             for (JsonNode rule : rules) {
-                if ("RELATED_TO_APPLICANT".equalsIgnoreCase(rule.path("source").asString("SPECIFIED"))) {
-                    users.addAll(resolveApplicantSource(rule.path("sourceValue").asString("APPLICANT"),
-                            initiatorId, initiatorDeptId));
+                // 来源优先分发（与 evalRule 共用 resolveDataSource）：命中数据类来源即用离线表单值求值
+                Set<Long> bySource = resolveDataSource(rule, lookup, initiatorId, initiatorDeptId);
+                if (bySource != null) {
+                    users.addAll(bySource);
+                    continue;
+                }
+                // 跨节点来源(PREV_HANDLER/NODE_HANDLER)离线无历史/执行上下文可查 → 空集（前端标注"运行时确定"）
+                String source = rule.path("source").asString("");
+                if ("PREV_HANDLER".equalsIgnoreCase(source) || "NODE_HANDLER".equalsIgnoreCase(source)) {
                     continue;
                 }
                 String type = rule.path("type").asString("");
@@ -173,14 +181,16 @@ public class AssigneeResolver {
                             users.add(leader);
                         }
                     }
+                    // 旧形状 {type/kind:FORM_FIELD}（无 source）：仍从离线表单值读取
                     case "FORM_FIELD" -> {
                         String field = rule.path("field").asString(null);
                         if (field != null && values != null) {
                             users.addAll(parseUserRefs(values.get(field)));
                         }
                     }
+                    // 旧形状 {type/kind:FORMULA}（无 source）：仍离线求值公式
                     case "FORMULA" -> users.addAll(evalFormula(rule.path("formula").asString(null),
-                            values == null ? k -> null : values::get, initiatorId, initiatorDeptId));
+                            lookup, initiatorId, initiatorDeptId));
                     case "POST", "ROLE_POST" -> users.addAll(resolvePost(rule));
                     case "ORG", "ACCOUNT", "ROLE", "DEPT",
                          "GROUP", "UNIT" -> {
@@ -202,6 +212,52 @@ public class AssigneeResolver {
     }
 
     /**
+     * 来源优先分发中「数据类」来源的统一求值，供运行时 {@link #evalRule} 与离线 {@link #resolveOffline} 共用，
+     * 仅在变量取值来源上有别：运行时 lookup={@code execution::getVariable}，离线 lookup={@code values::get}。
+     * 处理 {@code RELATED_TO_APPLICANT / VARIABLE / FORM_FIELD / FORMULA / APPLICANT}。
+     * 跨节点来源（{@code PREV_HANDLER/NODE_HANDLER}）不在此处（需 execution+历史/流程变量），由调用方各自处理；
+     * 返回 {@code null} 表示「非数据类来源（FIXED/空/跨节点）」，交由调用方落到 type/kind 分支。
+     */
+    private Set<Long> resolveDataSource(JsonNode rule, Function<String, Object> lookup,
+                                        Long initiatorId, Long initiatorDeptId) {
+        // 旧来源：与流程申请人相关（优先于 kind/refs）
+        if ("RELATED_TO_APPLICANT".equalsIgnoreCase(rule.path("source").asString("SPECIFIED"))) {
+            return resolveApplicantSource(rule.path("sourceValue").asString("APPLICANT"),
+                    initiatorId, initiatorDeptId);
+        }
+        String source = rule.path("source").asString("");
+        switch (source.toUpperCase()) {
+            case "VARIABLE" -> {
+                Set<Long> out = new LinkedHashSet<>();
+                String var = rule.path("varName").asString(null);
+                if (var != null) {
+                    out.addAll(parseUserRefs(lookup.apply(var)));
+                }
+                return out;
+            }
+            case "FORM_FIELD" -> {
+                Set<Long> out = new LinkedHashSet<>();
+                String field = rule.path("field").asString(null);
+                if (field != null) {
+                    out.addAll(parseUserRefs(lookup.apply(field)));
+                }
+                return out;
+            }
+            case "FORMULA" -> {
+                return evalFormula(rule.path("formula").asString(null), lookup, initiatorId, initiatorDeptId);
+            }
+            case "APPLICANT" -> {
+                // 目前仅 "DEPT"：申请人所在部门全体
+                return resolveApplicantSource("APPLICANT_DEPT", initiatorId, initiatorDeptId);
+            }
+            default -> {
+                // FIXED/空/跨节点来源：返回 null，交由调用方处理
+                return null;
+            }
+        }
+    }
+
+    /**
      * 单条办理人规则求值。精简后的类型集：
      * {@code ACCOUNT(指定人员=USER) / ROLE(角色) / POST(岗位) / DEPT(部门) /
      * LEADER(发起人 N 级主管) / FORM_FIELD(表单人员字段) / INITIATOR(发起人本人) / FORMULA(自定义公式)}。
@@ -211,47 +267,21 @@ public class AssigneeResolver {
      */
     private Set<Long> evalRule(JsonNode rule, DelegateExecution execution, Long initiatorId, Long initiatorDeptId) {
         Set<Long> out = new LinkedHashSet<>();
-        // 来源：与流程申请人相关（优先于 kind/refs）
-        if ("RELATED_TO_APPLICANT".equalsIgnoreCase(rule.path("source").asString("SPECIFIED"))) {
-            out.addAll(resolveApplicantSource(rule.path("sourceValue").asString("APPLICANT"),
-                    initiatorId, initiatorDeptId));
-            return out;
+        // 来源优先（Task 1 二维模型）：数据类来源（RELATED_TO_APPLICANT/VARIABLE/FORM_FIELD/FORMULA/APPLICANT）
+        // 统一走 resolveDataSource（运行时 lookup=execution::getVariable）；命中即返回，null=未命中落到下方 kind 分支。
+        Set<Long> bySource = resolveDataSource(rule, execution::getVariable, initiatorId, initiatorDeptId);
+        if (bySource != null) {
+            return bySource;
         }
-        // 来源优先（Task 1 二维模型）：source 命中以下取值时直接求值返回，不再落入下方 kind 分支
+        // 跨节点来源：需 execution + 历史/流程变量上下文，运行时单独处理（离线预测则返回空=运行时确定）
         String source = rule.path("source").asString("");
         switch (source.toUpperCase()) {
-            case "VARIABLE" -> {
-                String var = rule.path("varName").asString(null);
-                if (var != null) {
-                    out.addAll(parseUserRefs(execution.getVariable(var)));
-                }
-                return out;
-            }
-            case "FORM_FIELD" -> {
-                String field = rule.path("field").asString(null);
-                if (field != null) {
-                    out.addAll(parseUserRefs(execution.getVariable(field)));
-                }
-                return out;
-            }
-            case "FORMULA" -> {
-                out.addAll(evalFormula(rule.path("formula").asString(null),
-                        execution::getVariable, initiatorId, initiatorDeptId));
-                return out;
-            }
-            case "APPLICANT" -> {
-                // 目前仅 "DEPT"：申请人所在部门全体
-                out.addAll(resolveApplicantSource("APPLICANT_DEPT", initiatorId, initiatorDeptId));
-                return out;
-            }
             case "PREV_HANDLER" -> {
-                out.addAll(resolvePrevHandler(execution, rule.path("takeLeader").asBoolean(false)));
-                return out;
+                return resolvePrevHandler(execution, rule.path("takeLeader").asBoolean(false));
             }
             case "NODE_HANDLER" -> {
-                out.addAll(resolveNodeHandler(execution, rule.path("fromNodeId").asString(null),
-                        rule.path("takeLeader").asBoolean(false)));
-                return out;
+                return resolveNodeHandler(execution, rule.path("fromNodeId").asString(null),
+                        rule.path("takeLeader").asBoolean(false));
             }
             default -> {
                 // FIXED 或空 source：落到下方 kind 分支（含旧形状 type/kind）

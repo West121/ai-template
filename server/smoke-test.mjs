@@ -1075,6 +1075,33 @@ const P_PREDICT = await mkProc(`p3predict_${TS}`, [
   const bt = await findTodo(lisi.token, tBig); if (bt) await call(lisi.token, "POST", `/api/wf/tasks/${bt.taskId}/approve`, {})
 }
 
+// --- 离线预测覆盖新版二维来源：FUTURE 节点 {kind:ACCOUNT, source:FORM_FIELD} 必须能离线预测出人 ---
+// 回归防护：resolveOffline 曾只按 type/kind 分发，新形状 {kind:ACCOUNT, source:FORM_FIELD} 会落到
+// ACCOUNT/refs 分支预测为空（老形状 {kind:FORM_FIELD} 才从 values 读取）。修复后 resolveOffline 与
+// evalRule 共用来源优先分发，FORM_FIELD 从离线表单值求值，故未来节点预计审批人应非空。
+{
+  const P_PRED_SRC = await mkProc(`p3predsrc_${TS}`, [
+    approvalNode("m1", "初审经理", MANAGER),
+    {
+      id: "fut", type: "approval", name: "表单指定审(来源FORM_FIELD)",
+      assigneeRules: [{ kind: "ACCOUNT", source: "FORM_FIELD", field: "approver" }],
+      multiMode: "ANY", emptyStrategy: "TO_ADMIN",
+    },
+  ])
+  const t = `预测来源FORM_FIELD-${TS}`
+  const inst = await startInst(P_PRED_SRC, t, { approver: LISI })
+  const pred = await call(zhangsan.token, "POST", `/api/wf/instances/${inst.id}/predict`)
+  const futNode = (pred.body?.data?.path ?? []).find((n) => n.nodeId === "fut")
+  check(
+    "p3 预测:新版二维来源 FORM_FIELD 未来节点预计审批人非空(离线来源分发回归)",
+    !!futNode && (futNode.assignees ?? []).length > 0,
+    JSON.stringify(pred.body?.data?.path),
+  )
+  // 清理：走完流程
+  const mt = await findTodo(manager.token, t); if (mt) await call(manager.token, "POST", `/api/wf/tasks/${mt.taskId}/approve`, {})
+  const lt = await findTodo(lisi.token, t); if (lt) await call(lisi.token, "POST", `/api/wf/tasks/${lt.taskId}/approve`, {})
+}
+
 // --- 穿越时空：bizTime 业务时间 ---
 {
   const t = `穿越时空-${TS}`
