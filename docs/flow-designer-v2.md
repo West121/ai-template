@@ -161,8 +161,8 @@ BPMN 原生"更改类型"菜单列的是 BPMN 类型（Task/Service task…）�
 | `VARIABLE` 来自变量 | 流程变量（前置服务/脚本算出） | 读变量，与表单同路径 |
 | `FORMULA` 来自公式 | 低代码公式 | `FormulaEvaluator` |
 | `APPLICANT` 与申请人相关 | 申请人所在部门 | `resolveApplicantSource` |
-| `PREV_HANDLER` 与上个办理人相关 | 上个节点 assignee（可选取其主管） | `HistoryService` 查询本实例最近已完成 userTask |
-| `NODE_HANDLER` 与指定节点办理人相关 | 选定节点 assignee（可选取其主管） | `HistoryService` 按 `taskDefinitionKey=fromNodeId` 查询本实例该节点已完成任务 |
+| `PREV_HANDLER` 与上个办理人相关 | 上个节点 assignee（可选取其主管） | 优先读任务完成时捕获的 `__lastHandler` 流程变量；变量缺失时回退 `HistoryService` 查询本实例最近已完成 userTask |
+| `NODE_HANDLER` 与指定节点办理人相关 | 选定节点 assignee（可选取其主管） | 优先读任务完成时捕获的 `__handler_<fromNodeId>` 流程变量；变量缺失时回退 `HistoryService` 按 `taskDefinitionKey=fromNodeId` 查询本实例该节点已完成任务 |
 
 **来源矩阵（哪个类型挂哪些来源）**
 
@@ -196,7 +196,7 @@ interface AssigneeRule {
 }
 ```
 
-**后端解析（AssigneeResolver.evalRule，来源优先分发）**：先看 `source` 分发解析策略；`kind` 在"固定"时决定 `expandOrgRef` 展开方式，在跨节点来源时决定要不要取主管。`VARIABLE` → `execution.getVariable(varName)` → 解析 userId 集合；`PREV_HANDLER`/`NODE_HANDLER` → 注入 `HistoryService` 查本实例已完成 userTask 的 assignee（`NODE_HANDLER` 按 `taskDefinitionKey=fromNodeId` 精确匹配），`takeLeader=true` 时再解析其部门主管。多条规则取并集去重。离线预测（`resolveOffline`）：跨节点来源无历史可查时返回空集合，前端标注"运行时确定"。
+**后端解析（AssigneeResolver.evalRule，来源优先分发）**：先看 `source` 分发解析策略；`kind` 在"固定"时决定 `expandOrgRef` 展开方式，在跨节点来源时决定要不要取主管。`VARIABLE` → `execution.getVariable(varName)` → 解析 userId 集合；`PREV_HANDLER`/`NODE_HANDLER` → 先读任务完成时捕获的流程变量（`__lastHandler` / `__handler_<fromNodeId>`，由 `WfTaskService.approve` 及 `WfTimeoutScheduler` AUTO_PASS 在 `complete()` 推进流程前写入根执行），命中即返回；仅在变量缺失（如本次修复前发起的旧实例）时回退 `HistoryService` 查本实例已完成 userTask 的 assignee（`NODE_HANDLER` 按 `taskDefinitionKey=fromNodeId` 精确匹配）。这样修复了同事务顺序流（A→B 一次 complete 内推进）中，刚完成任务的历史行对本事务查询不可见、导致误落 `emptyStrategy` 兜底的 bug。`takeLeader=true` 时再解析其部门主管。多条规则取并集去重。离线预测（`resolveOffline`）：跨节点来源无历史可查时返回空集合，前端标注"运行时确定"。
 
 **向后兼容（不强制迁移旧 designerJson）**
 

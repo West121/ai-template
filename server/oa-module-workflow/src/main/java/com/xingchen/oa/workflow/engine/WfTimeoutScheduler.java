@@ -83,6 +83,10 @@ public class WfTimeoutScheduler {
             case "AUTO_PASS" -> {
                 audit.op(t.getProcessInstanceId(), t.getId(), t.getTaskDefinitionKey(), t.getName(), null,
                         WfOperation.ACTION_APPROVE, "超时自动通过");
+                // 与 WfTaskService.approve 同源修复：complete() 在同事务内推进流程并对下一节点求值，
+                // 若下一节点是 PREV_HANDLER/NODE_HANDLER，HistoryService 查询看不到刚完成的任务，
+                // 故在 complete() 前把超时任务的办理人捕获到流程变量供其优先读取（assignee 为空的候选池任务则跳过，允许兜底）。
+                captureHandlerVars(t.getProcessInstanceId(), t.getTaskDefinitionKey(), parseLong(t.getAssignee()));
                 taskService.complete(t.getId());
             }
             case "AUTO_REJECT" -> {
@@ -135,6 +139,18 @@ public class WfTimeoutScheduler {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /**
+     * 跨节点办理人求值修复（与 WfTaskService.captureHandlerVars 同逻辑）：在 complete() 推进流程前，
+     * 把完成人写入根执行流程变量，供下一节点 PREV_HANDLER/NODE_HANDLER 优先读取。defKey/uid 为空则跳过。
+     */
+    private void captureHandlerVars(String pid, String defKey, Long uid) {
+        if (defKey == null || uid == null) {
+            return;
+        }
+        runtimeService.setVariable(pid, "__lastHandler", uid);
+        runtimeService.setVariable(pid, "__handler_" + defKey, uid);
     }
 
     private Long parseLong(String s) {
