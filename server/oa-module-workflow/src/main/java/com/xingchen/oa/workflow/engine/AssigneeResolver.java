@@ -411,6 +411,7 @@ public class AssigneeResolver {
         List<HistoricTaskInstance> tasks = historyService.createHistoricTaskInstanceQuery()
                 .processInstanceId(execution.getProcessInstanceId())
                 .taskDefinitionKey(nodeId)
+                .finished()
                 .list();
         for (HistoricTaskInstance t : tasks) {
             collectAssignee(t, out, takeLeader);
