@@ -19,6 +19,7 @@ import org.flowable.bpmn.model.FlowElement;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.delegate.DelegateExecution;
+import org.flowable.task.api.history.HistoricTaskInstance;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -216,6 +217,46 @@ public class AssigneeResolver {
                     initiatorId, initiatorDeptId));
             return out;
         }
+        // 来源优先（Task 1 二维模型）：source 命中以下取值时直接求值返回，不再落入下方 kind 分支
+        String source = rule.path("source").asString("");
+        switch (source.toUpperCase()) {
+            case "VARIABLE" -> {
+                String var = rule.path("varName").asString(null);
+                if (var != null) {
+                    out.addAll(parseUserRefs(execution.getVariable(var)));
+                }
+                return out;
+            }
+            case "FORM_FIELD" -> {
+                String field = rule.path("field").asString(null);
+                if (field != null) {
+                    out.addAll(parseUserRefs(execution.getVariable(field)));
+                }
+                return out;
+            }
+            case "FORMULA" -> {
+                out.addAll(evalFormula(rule.path("formula").asString(null),
+                        execution::getVariable, initiatorId, initiatorDeptId));
+                return out;
+            }
+            case "APPLICANT" -> {
+                // 目前仅 "DEPT"：申请人所在部门全体
+                out.addAll(resolveApplicantSource("APPLICANT_DEPT", initiatorId, initiatorDeptId));
+                return out;
+            }
+            case "PREV_HANDLER" -> {
+                out.addAll(resolvePrevHandler(execution, rule.path("takeLeader").asBoolean(false)));
+                return out;
+            }
+            case "NODE_HANDLER" -> {
+                out.addAll(resolveNodeHandler(execution, rule.path("fromNodeId").asString(null),
+                        rule.path("takeLeader").asBoolean(false)));
+                return out;
+            }
+            default -> {
+                // FIXED 或空 source：落到下方 kind 分支（含旧形状 type/kind）
+            }
+        }
         String type = rule.path("type").asString("");
         if (type.isBlank()) {
             type = rule.path("kind").asString("");
@@ -345,6 +386,70 @@ public class AssigneeResolver {
             out.addAll(expandOrgRef(ref, "POST"));
         }
         return out;
+    }
+
+    /** 与上个办理人相关：本实例最近一个已完成 userTask 的 assignee（takeLeader 时取其 1 级主管）。 */
+    private Set<Long> resolvePrevHandler(DelegateExecution execution, boolean takeLeader) {
+        Set<Long> out = new LinkedHashSet<>();
+        List<HistoricTaskInstance> done = historyService.createHistoricTaskInstanceQuery()
+                .processInstanceId(execution.getProcessInstanceId())
+                .finished()
+                .orderByHistoricTaskInstanceEndTime().desc()
+                .listPage(0, 1);
+        for (HistoricTaskInstance t : done) {
+            collectAssignee(t, out, takeLeader);
+        }
+        return out;
+    }
+
+    /** 与指定节点办理人相关：指定 taskDefinitionKey 的历史 assignee（takeLeader 时取其 1 级主管）。 */
+    private Set<Long> resolveNodeHandler(DelegateExecution execution, String nodeId, boolean takeLeader) {
+        Set<Long> out = new LinkedHashSet<>();
+        if (nodeId == null || nodeId.isBlank()) {
+            return out;
+        }
+        List<HistoricTaskInstance> tasks = historyService.createHistoricTaskInstanceQuery()
+                .processInstanceId(execution.getProcessInstanceId())
+                .taskDefinitionKey(nodeId)
+                .list();
+        for (HistoricTaskInstance t : tasks) {
+            collectAssignee(t, out, takeLeader);
+        }
+        return out;
+    }
+
+    /** 从历史任务提取 assignee；takeLeader 时改取该 assignee 所属部门的 1 级主管。 */
+    private void collectAssignee(HistoricTaskInstance t, Set<Long> out, boolean takeLeader) {
+        if (t.getAssignee() == null || t.getAssignee().isBlank()) {
+            return;
+        }
+        Long uid;
+        try {
+            uid = Long.valueOf(t.getAssignee().trim());
+        } catch (NumberFormatException e) {
+            return;
+        }
+        if (!takeLeader) {
+            out.add(uid);
+            return;
+        }
+        Long deptId = deptIdOfUser(uid);
+        Long leader = leaderOf(deptId, 1);
+        if (leader != null) {
+            out.add(leader);
+        }
+    }
+
+    /** 用户所属部门（主任职优先，沿用 assignmentRepository 同款数据源）。 */
+    private Long deptIdOfUser(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        return assignmentRepository.findByUserIdAndEnabledTrueOrderByPrimaryFlagDescIdAsc(userId)
+                .stream()
+                .findFirst()
+                .map(a -> a.getDept() != null ? a.getDept().getId() : null)
+                .orElse(null);
     }
 
     /** 角色名→id（按 name 或 code 精确匹配，小表全扫）。 */
