@@ -169,12 +169,26 @@ public class WfTaskService {
             voteService.recordApprove(task, ctx.getUserId());
         }
         String completedNode = task.getTaskDefinitionKey();
+        captureHandlerVars(pid, completedNode, ctx.getUserId());
         if (vars.isEmpty()) {
             taskService.complete(taskId);
         } else {
             taskService.complete(taskId, vars);
         }
         applyResumeStrategy(pid, completedNode);
+    }
+
+    /**
+     * 跨节点办理人求值修复：在 {@code complete()} 推进流程之前，把完成人写入流程变量
+     * （同事务内 execution.getVariable 对根执行可见，而 HistoryService 查询在同事务内看不到刚完成的任务），
+     * 供下一节点 PREV_HANDLER/NODE_HANDLER 求值时优先读取，避免误落 emptyStrategy=TO_ADMIN 兜底。
+     */
+    private void captureHandlerVars(String pid, String defKey, Long uid) {
+        if (defKey == null || uid == null) {
+            return;
+        }
+        runtimeService.setVariable(pid, "__lastHandler", uid);
+        runtimeService.setVariable(pid, "__handler_" + defKey, uid);
     }
 
     /**

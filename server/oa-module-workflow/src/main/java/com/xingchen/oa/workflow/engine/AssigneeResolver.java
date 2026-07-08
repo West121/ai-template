@@ -388,8 +388,19 @@ public class AssigneeResolver {
         return out;
     }
 
-    /** 与上个办理人相关：本实例最近一个已完成 userTask 的 assignee（takeLeader 时取其 1 级主管）。 */
+    /**
+     * 与上个办理人相关：本实例最近一个已完成 userTask 的 assignee（takeLeader 时取其 1 级主管）。
+     * 优先读取 {@code __lastHandler} 流程变量（由 WfTaskService 在 complete() 推进流程前写入，
+     * 同事务内 HistoryService 查询看不到刚完成的任务，故变量优先）；变量缺失（如历史实例未走过新版
+     * 完成逻辑）时回退旧的 HistoryService 查询。
+     */
     private Set<Long> resolvePrevHandler(DelegateExecution execution, boolean takeLeader) {
+        Long uid = asLong(execution.getVariable("__lastHandler"));
+        if (uid != null) {
+            Set<Long> out = new LinkedHashSet<>();
+            collectAssigneeFromUserId(uid, out, takeLeader);
+            return out;
+        }
         Set<Long> out = new LinkedHashSet<>();
         List<HistoricTaskInstance> done = historyService.createHistoricTaskInstanceQuery()
                 .processInstanceId(execution.getProcessInstanceId())
@@ -402,10 +413,19 @@ public class AssigneeResolver {
         return out;
     }
 
-    /** 与指定节点办理人相关：指定 taskDefinitionKey 的历史 assignee（takeLeader 时取其 1 级主管）。 */
+    /**
+     * 与指定节点办理人相关：指定 taskDefinitionKey 的历史 assignee（takeLeader 时取其 1 级主管）。
+     * 优先读取 {@code __handler_<nodeId>} 流程变量（同上，complete() 前写入，避免同事务查询不到），
+     * 变量缺失时回退旧的 HistoryService 查询（保持 {@code .finished()} 语义）。
+     */
     private Set<Long> resolveNodeHandler(DelegateExecution execution, String nodeId, boolean takeLeader) {
         Set<Long> out = new LinkedHashSet<>();
         if (nodeId == null || nodeId.isBlank()) {
+            return out;
+        }
+        Long uid = asLong(execution.getVariable("__handler_" + nodeId));
+        if (uid != null) {
+            collectAssigneeFromUserId(uid, out, takeLeader);
             return out;
         }
         List<HistoricTaskInstance> tasks = historyService.createHistoricTaskInstanceQuery()
@@ -428,6 +448,18 @@ public class AssigneeResolver {
         try {
             uid = Long.valueOf(t.getAssignee().trim());
         } catch (NumberFormatException e) {
+            return;
+        }
+        collectAssigneeFromUserId(uid, out, takeLeader);
+    }
+
+    /**
+     * 从已知 userId 出发按 takeLeader 语义归集：不取 leader 则直接收该 uid，
+     * 取 leader 则改收其所属部门的 1 级主管。供流程变量命中（__lastHandler/__handler_&lt;node&gt;）
+     * 与历史任务提取（collectAssignee）共用，避免重复实现。
+     */
+    private void collectAssigneeFromUserId(Long uid, Set<Long> out, boolean takeLeader) {
+        if (uid == null) {
             return;
         }
         if (!takeLeader) {

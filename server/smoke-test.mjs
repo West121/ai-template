@@ -1720,6 +1720,74 @@ async function mkProcFull(code, designer, extra = {}) {
     if (mt) await call(lisi.token, "POST", `/api/wf/tasks/${mt.taskId}/approve`, { comment: "李四同意" })
     check("assignee2d VARIABLE 全流程通过", (await bizStatus(zhangsan.token, iid)) === "APPROVED")
   }
+
+  // --- Task 4 bug 修复验证：PREV_HANDLER 同事务顺序流(A→B，一次 approve 请求内直接推进到 B) ---
+  // 修复前：taskService.complete(A) 在同一事务内同步推进流程并对 B 求值 assigneeRules，
+  // 此时 A 的 HistoricTaskInstance 尚未在本事务提交/可见，PREV_HANDLER 走 HistoryService 查询会查到空集合，
+  // 导致 emptyStrategy=TO_ADMIN 误把 B 落到 admin，而非真正的上一个办理人(王五)。
+  // 修复后：WfTaskService 在 complete() 前把完成人写入 __lastHandler 流程变量，AssigneeResolver 优先读取该变量。
+  {
+    const P_PH = await mkProc(`assignee2d_ph_${TS}`, [
+      approvalNode("a", "A节点固定王五", WANGWU),
+      {
+        id: "b", type: "approval", name: "B节点与上个办理人相关",
+        assigneeRules: [{ kind: "ACCOUNT", source: "PREV_HANDLER" }],
+        multiMode: "ANY", emptyStrategy: "TO_ADMIN",
+      },
+    ])
+    const t = `PREV_HANDLER-${TS}`
+    const inst = await startInst(P_PH, t)
+    const taskA = await findTodo(wangwu.token, t)
+    check("assignee2d PREV_HANDLER A节点(固定王五)待办出现", !!taskA, JSON.stringify(taskA))
+    if (taskA) await call(wangwu.token, "POST", `/api/wf/tasks/${taskA.taskId}/approve`, { comment: "A通过" })
+
+    const detB = await call(zhangsan.token, "GET", `/api/wf/instances/${inst.id}`)
+    check(
+      "assignee2d PREV_HANDLER B节点当前办理人=A节点办理人(王五)",
+      (detB.body?.data?.currentNodes ?? []).some(
+        (n) => n.nodeId === "b" && (n.assignees ?? []).some((a) => String(a.userId) === String(WANGWU)),
+      ),
+      JSON.stringify(detB.body?.data?.currentNodes),
+    )
+    // 待办应落在王五名下；修复前该节点因同事务查询不到 A 的历史任务而空集合 → 误落 admin，此断言检查具体 userId 而非仅“有待办”
+    const taskB = await findTodo(wangwu.token, t)
+    check("assignee2d PREV_HANDLER B节点待办出现在王五名下(而非兜底管理员，验证同事务顺序流修复)", !!taskB, JSON.stringify(taskB))
+    check("assignee2d PREV_HANDLER B节点待办未误落管理员", !(await findTodo(admin.token, t)))
+    if (taskB) await call(wangwu.token, "POST", `/api/wf/tasks/${taskB.taskId}/approve`, { comment: "B通过" })
+    check("assignee2d PREV_HANDLER 全流程通过", (await bizStatus(zhangsan.token, inst.id)) === "APPROVED")
+  }
+
+  // --- Task 4 bug 修复验证：NODE_HANDLER 引用紧邻前驱节点(fromNodeId=同一 approve 请求内刚完成的上一节点) ---
+  // 与上面 Task 3 已有的 NODE_HANDLER 用例不同：那里 fromNodeId 指向的节点在更早、已提交的独立事务中完成，
+  // 本用例的 fromNodeId="a" 恰是当前这次 approve 请求同事务内刚完成的节点，是修复前会失败的场景。
+  {
+    const P_NHI = await mkProc(`assignee2d_nhi_${TS}`, [
+      approvalNode("a", "A节点固定王五", WANGWU),
+      {
+        id: "b", type: "approval", name: "B节点与指定节点(紧邻前驱)办理人相关",
+        assigneeRules: [{ kind: "ACCOUNT", source: "NODE_HANDLER", fromNodeId: "a", takeLeader: false }],
+        multiMode: "ANY", emptyStrategy: "TO_ADMIN",
+      },
+    ])
+    const t = `NODE_HANDLER_IMM-${TS}`
+    const inst = await startInst(P_NHI, t)
+    const taskA = await findTodo(wangwu.token, t)
+    check("assignee2d NODE_HANDLER(紧邻前驱) A节点(固定王五)待办出现", !!taskA, JSON.stringify(taskA))
+    if (taskA) await call(wangwu.token, "POST", `/api/wf/tasks/${taskA.taskId}/approve`, { comment: "A通过" })
+
+    const detB = await call(zhangsan.token, "GET", `/api/wf/instances/${inst.id}`)
+    check(
+      "assignee2d NODE_HANDLER(紧邻前驱) B节点当前办理人=A节点办理人(王五)",
+      (detB.body?.data?.currentNodes ?? []).some(
+        (n) => n.nodeId === "b" && (n.assignees ?? []).some((a) => String(a.userId) === String(WANGWU)),
+      ),
+      JSON.stringify(detB.body?.data?.currentNodes),
+    )
+    const taskB = await findTodo(wangwu.token, t)
+    check("assignee2d NODE_HANDLER(紧邻前驱) B节点待办出现在王五名下(而非兜底管理员，验证同事务修复)", !!taskB, JSON.stringify(taskB))
+    if (taskB) await call(wangwu.token, "POST", `/api/wf/tasks/${taskB.taskId}/approve`, { comment: "B通过" })
+    check("assignee2d NODE_HANDLER(紧邻前驱) 全流程通过", (await bizStatus(zhangsan.token, inst.id)) === "APPROVED")
+  }
 }
 
 /* ---------- 汇总 ---------- */
