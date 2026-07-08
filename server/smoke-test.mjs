@@ -1819,6 +1819,69 @@ async function mkProcFull(code, designer, extra = {}) {
   }
 }
 
+/* ---------- Task 2：BPMN 设计器 oa:assigneeRules 运行时真解析（回归 Task 1 隐藏 bug）---------- */
+// 背景：BPMN 设计器此前把办理人等配置整体写作单块 oa:NodeConfig JSON body，运行时 AssigneeResolver
+// 从不读取该元素 —— 任何"BPMN 原生"定义（designerType=BPMN）的办理人恒空，静默兜底 admin，从未被发现。
+// Task 1 已把 BPMN 设计器改为写逐个规范元素（oa:assigneeRules/oa:multiMode/oa:emptyStrategy 等，
+// 与 JsonToBpmnConverter 写出的格式、AssigneeResolver 读取的格式三方一致）。本用例验证修复后
+// **designerType:BPMN** 的定义在运行时确实按 oa:assigneeRules 解析出指定办理人。
+// 拿合法 bpmnXml 的方式：先建 DINGTALK 底稿→发布(后端 JsonToBpmnConverter 转换生成含 oa:assigneeRules
+// + BPMNDI 的 bpmnXml)→原地 PUT 把 designerType 改成 BPMN 并落库该 bpmnXml(PUT 为纯字段覆盖，
+// 不做二次转换)→重新发布(BPMN 分支按原样部署 bpmnXml，不再经 JSON 转换，即"BPMN 原生"执行路径)。
+{
+  const bpmnCode = `bpmn_assignee_${TS}`
+  const dingC = await call(admin.token, "POST", "/api/wf/process-defs", {
+    defCode: bpmnCode, name: "BPMN办理人真解析验证", designerType: "DINGTALK",
+    designerJson: JSON.stringify({
+      nodes: [
+        {
+          id: "ap", type: "approval", name: "固定王五审批",
+          assigneeRules: [{ kind: "ACCOUNT", source: "FIXED", refs: [orgUser(WANGWU)] }],
+          multiMode: "ANY", emptyStrategy: "TO_ADMIN",
+        },
+      ],
+    }),
+  })
+  check("bpmn2e 创建 DINGTALK 底稿", dingC.body?.code === 0 && !!dingC.body?.data?.id, JSON.stringify(dingC.body))
+  const defId = dingC.body?.data?.id
+  const pub1 = await call(admin.token, "POST", `/api/wf/process-defs/${defId}/publish`)
+  const bpmnXml = pub1.body?.data?.bpmnXml ?? ""
+  check(
+    "bpmn2e 转换器产出含 oa:assigneeRules 的合法 bpmnXml",
+    pub1.body?.code === 0 && bpmnXml.includes("oa:assigneeRules") && bpmnXml.includes("<process"),
+    String(bpmnXml.length),
+  )
+
+  // 原地切换为 BPMN 类型，落库同一份 bpmnXml（PUT 纯字段覆盖，不做 JSON→BPMN 转换）
+  const toBpmn = await call(admin.token, "PUT", `/api/wf/process-defs/${defId}`, {
+    defCode: bpmnCode, name: "BPMN办理人真解析验证", designerType: "BPMN", bpmnXml,
+  })
+  check("bpmn2e 原地切换 designerType=BPMN", toBpmn.body?.code === 0, JSON.stringify(toBpmn.body))
+  // BPMN 分支发布：按原样部署 bpmnXml，不再经 JSON 转换 —— 这才是本用例要验证的"BPMN 原生可执行"路径
+  const pub2 = await call(admin.token, "POST", `/api/wf/process-defs/${defId}/publish`)
+  check(
+    "bpmn2e BPMN 类型定义发布成功(原样部署，非二次转换)",
+    pub2.body?.code === 0 && pub2.body?.data?.designerType === "BPMN",
+    JSON.stringify(pub2.body),
+  )
+
+  const t = `BPMN真解析-${TS}`
+  const inst = await startInst(bpmnCode, t)
+  check("bpmn2e 发起 BPMN 原生定义成功", !!inst?.id, JSON.stringify(inst))
+  // 关键断言：BPMN 定义 oa:assigneeRules 应被运行时解析出固定办理人(王五)，而非落入 admin 兜底
+  // （若 Task1 修复未生效或回归，运行时读不到 oa:assigneeRules → emptyStrategy=TO_ADMIN 落 admin(1) → 本断言必失败）
+  check(
+    "bpmn2e BPMN 定义 oa:assigneeRules 应被运行时解析（当前办理人=王五，非 admin 兜底）",
+    (inst?.currentNodes ?? []).some((n) => (n.assignees ?? []).some((a) => String(a.userId) === String(WANGWU))),
+    JSON.stringify(inst?.currentNodes),
+  )
+  const taskWangwu = await findTodo(wangwu.token, t)
+  check("bpmn2e 王五名下出现该待办(真实办理人，非仅解析结果字段)", !!taskWangwu, JSON.stringify(taskWangwu))
+  check("bpmn2e admin 名下未出现该待办(反证兜底未被误触发)", !(await findTodo(admin.token, t)))
+  if (taskWangwu) await call(wangwu.token, "POST", `/api/wf/tasks/${taskWangwu.taskId}/approve`, { comment: "王五通过" })
+  check("bpmn2e 全流程通过", (await bizStatus(zhangsan.token, inst.id)) === "APPROVED")
+}
+
 /* ---------- 汇总 ---------- */
 cleanupTestData() // 跑完自动清理测试数据，避免污染流程定义/待办列表
 console.log(`\n==> 通过 ${passed} 项，失败 ${failed} 项`)
