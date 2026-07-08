@@ -293,6 +293,9 @@ const OP_UEL: Record<ConditionOperator, string> = {
 /** 数值字面量判定：与 server ConditionCompiler#literal 相同的正则，命中则不加引号 */
 const NUMERIC_RE = /^-?\d+(\.\d+)?$/
 
+/** 合法字段名：与 server ConditionCompiler#FIELD 一致——非法字段跳过，避免产出无效 UEL 并杜绝表达式注入面 */
+const FIELD_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
 /** UEL 字面量：数值不加引号；否则单引号包裹并转义反斜杠/单引号（镜像 ConditionCompiler#literal） */
 function uelLiteral(value: string): string {
   if (NUMERIC_RE.test(value)) return value
@@ -309,12 +312,17 @@ function uelLiteral(value: string): string {
 function compileUel(cond: BranchCondition): string {
   if (!cond.items?.length) return ""
   const join = cond.logic === "OR" ? " || " : " && "
-  const parts = cond.items.map((it) => {
-    const v = uelLiteral(it.value)
-    if (it.operator === "contains") return `${it.field}.contains(${v})`
-    if (it.operator === "notContains") return `!${it.field}.contains(${v})`
-    return `${it.field} ${OP_UEL[it.operator]} ${v}`
-  })
+  const parts = cond.items
+    // 字段名非法（空 / 不匹配 FIELD_RE）的条目跳过：既避免产出 `${ == 'x'}` 之类无效 UEL，
+    // 也在未来若放开字段自由输入时封堵 UEL 注入面（与 server ConditionCompiler 的 FIELD 校验一致）
+    .filter((it) => FIELD_RE.test(it.field ?? ""))
+    .map((it) => {
+      const v = uelLiteral(it.value)
+      if (it.operator === "contains") return `${it.field}.contains(${v})`
+      if (it.operator === "notContains") return `!${it.field}.contains(${v})`
+      return `${it.field} ${OP_UEL[it.operator]} ${v}`
+    })
+  if (!parts.length) return ""
   return "${" + parts.join(join) + "}"
 }
 

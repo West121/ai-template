@@ -48,6 +48,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { oaBusinessModule } from "./oa/providers"
@@ -314,8 +315,13 @@ function NodeConfigPanel({
 /**
  * 排它网关出边（bpmn:SequenceFlow）的分支条件：复用共享 PropertyPanel（target.nodeType="condition"）。
  * 结构化条件落盘为 `oa:condition`（回读用）+ `conditionExpression`（UEL，Flowable 执行用），见 oa/serde.ts。
- * 默认分支（isDefault）改由网关 `default` 属性表达：置为默认时把网关 default 指向本 flow；
- * 取消默认时若网关 default 恰好是本 flow 则一并清除，避免网关残留失效引用。
+ *
+ * 默认分支（isDefault）由网关 `default` 属性表达，且**必须由本组件的显式「设为默认分支」开关**驱动——
+ * 共享 ConditionEditor 内没有切换 isDefault 的控件，故不能依赖 PropertyPanel 的 onChange 携带 isDefault
+ * 变化（那样开关永远是死代码）。开关直接读写 bpmn-js：
+ *  - 打开：把网关 default 指向本 flow，并清空本 flow 的 oa:condition + conditionExpression（默认分支无条件）；
+ *  - 关闭：清除网关 default（仅当前正指向本 flow 时），条件留空待用户重新添加。
+ * 非默认时，PropertyPanel 内的条件编辑器用于增删条件项，经本组件 onChange→writeFlowCondition 落盘。
  */
 function SequenceFlowConditionPanel({
   modeler,
@@ -330,38 +336,59 @@ function SequenceFlowConditionPanel({
   element: BpmnElement
   formFields: FormFieldOption[]
 }) {
-  const gw = element.businessObject.sourceRef as BpmnBusinessObject
-  const outs = gw.outgoing ?? []
-  const isDefault = gw.default?.id === element.id
+  const gw = element.businessObject.sourceRef
+  const outs = gw?.outgoing ?? []
+  const isDefault = gw?.default?.id === element.id
   const cond = readFlowCondition(element.businessObject as unknown as { $type: string }) ?? {
     logic: "AND" as const,
     items: [],
     isDefault,
   }
 
+  const writeCond = (c: WfNodeProps["condition"] & object) =>
+    writeFlowCondition(
+      modeling as unknown as SerdeModeling,
+      bpmnFactory as unknown as SerdeFactory,
+      element as unknown as SerdeElement,
+      c,
+    )
+
+  const toggleDefault = (checked: boolean) => {
+    const gwElement = gw ? modeler.get("elementRegistry").get(gw.id) : undefined
+    if (!gwElement) return
+    if (checked) {
+      modeling.updateProperties(gwElement, { default: element.businessObject })
+      // 默认分支无条件：清空 oa:condition + conditionExpression
+      writeCond({ logic: "AND", items: [], isDefault: true })
+    } else {
+      // 取消默认：清除网关 default（仅当前正指向本 flow 时），条件留空待用户重新添加
+      if (gw?.default?.id === element.id) modeling.updateProperties(gwElement, { default: undefined })
+      writeCond({ logic: cond.logic, items: cond.items, isDefault: false })
+    }
+  }
+
   return (
-    <PropertyPanel
-      target={{ nodeId: element.id, nodeType: "condition" }}
-      config={{ condition: { ...cond, isDefault } }}
-      onChange={(next: WfNodeProps) => {
-        const c = next.condition ?? { logic: "AND" as const, items: [], isDefault: false }
-        writeFlowCondition(
-          modeling as unknown as SerdeModeling,
-          bpmnFactory as unknown as SerdeFactory,
-          element as unknown as SerdeElement,
-          c,
-        )
-        const gwElement = modeler.get("elementRegistry").get(gw.id)
-        if (!gwElement) return
-        if (c.isDefault) {
-          modeling.updateProperties(gwElement, { default: element.businessObject })
-        } else if (gw.default?.id === element.id) {
-          modeling.updateProperties(gwElement, { default: undefined })
-        }
-      }}
-      formFields={formFields}
-      branchMeta={{ isDefault, priority: outs.findIndex((o) => o.id === element.id) + 1 }}
-    />
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-between gap-3 border-b px-3.5 py-3">
+        <div className="space-y-0.5">
+          <Label className="text-sm font-medium">设为默认分支</Label>
+          <div className="text-xs text-muted-foreground">其余分支条件均不满足时进入</div>
+        </div>
+        <Switch checked={isDefault} onCheckedChange={toggleDefault} />
+      </div>
+      <div className="min-h-0 flex-1">
+        <PropertyPanel
+          target={{ nodeId: element.id, nodeType: "condition" }}
+          config={{ condition: { ...cond, isDefault } }}
+          onChange={(next: WfNodeProps) => {
+            const c = next.condition ?? { logic: "AND" as const, items: [], isDefault: false }
+            writeCond({ ...c, isDefault })
+          }}
+          formFields={formFields}
+          branchMeta={{ isDefault, priority: outs.findIndex((o) => o.id === element.id) + 1 }}
+        />
+      </div>
+    </div>
   )
 }
 
