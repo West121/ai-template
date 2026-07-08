@@ -1,0 +1,89 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: oa-postgres
+    environment:
+      POSTGRES_DB: oa_platform
+      POSTGRES_USER: oa
+      POSTGRES_PASSWORD: oa123456
+    ports:
+      - "15432:5432"
+    volumes:
+      - oa-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oa -d oa_platform"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: oa-redis
+    ports:
+      - "26379:6379"
+    volumes:
+      - oa-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------- XXL-Job 调度中心（admin 官方仅支持 MySQL，独立一套存储） ----------
+  xxl-job-mysql:
+    image: mysql:8.4
+    container_name: oa-xxl-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: xxl123456
+    ports:
+      - "23306:3306"
+    volumes:
+      - oa-xxl-mysqldata:/var/lib/mysql
+      # 首次启动自动执行官方建表脚本（doc/db/tables_xxl_job.sql @ v3.1.0）
+      - ./docker/xxl-job:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -pxxl123456"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  xxl-job-admin:
+    image: xuxueli/xxl-job-admin:3.1.0
+    container_name: oa-xxl-admin
+    depends_on:
+      xxl-job-mysql:
+        condition: service_healthy
+    environment:
+      PARAMS: >-
+        --spring.datasource.url=jdbc:mysql://xxl-job-mysql:3306/xxl_job?useUnicode=true&characterEncoding=UTF-8&autoReconnect=true&serverTimezone=Asia/Shanghai
+        --spring.datasource.username=root
+        --spring.datasource.password=xxl123456
+        --xxl.job.accessToken=default_token
+    ports:
+      - "8082:8080"
+
+  # ---------- MinIO 对象存储（oa.storage.type=minio|s3 时使用） ----------
+  # 宿主 9000/9001 与 19000/19001 均已被本机其他项目占用，映射到 19002/19003
+  minio:
+    image: minio/minio
+    container_name: oa-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "19002:9000"
+      - "19003:9001"
+    volumes:
+      - oa-miniodata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || curl -f http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  oa-pgdata:
+  oa-redisdata:
+  oa-xxl-mysqldata:
+  oa-miniodata:

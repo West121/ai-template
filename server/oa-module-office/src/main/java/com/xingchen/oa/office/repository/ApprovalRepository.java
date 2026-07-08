@@ -1,0 +1,8 @@
+package com.xingchen.oa.office.repository;
+
+import com.xingchen.oa.office.entity.Approval;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+
+public interface ApprovalRepository extends JpaRepository<Approval, Long>, JpaSpecificationExecutor<Approval> {
+}

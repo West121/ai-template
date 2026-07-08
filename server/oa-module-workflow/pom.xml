@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.xingchen.oa</groupId>
+        <artifactId>oa-server</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>oa-module-workflow</artifactId>
+    <name>oa-module-workflow</name>
+    <description>OA workflow domain: Flowable engine + form/process definitions + runtime APIs</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.xingchen.oa</groupId>
+            <artifactId>oa-common</artifactId>
+        </dependency>
+        <!-- system 基础域（组织架构：LEADER/ORG 审批人规则展开） -->
+        <dependency>
+            <groupId>com.xingchen.oa</groupId>
+            <artifactId>oa-module-system</artifactId>
+        </dependency>
+        <!-- Flowable 8 process 引擎（Spring Boot starter，自动装配 ProcessEngine，复用平台 DataSource/事务） -->
+        <dependency>
+            <groupId>org.flowable</groupId>
+            <artifactId>flowable-spring-boot-starter-process</artifactId>
+        </dependency>
+        <!-- @PreAuthorize 注解 -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

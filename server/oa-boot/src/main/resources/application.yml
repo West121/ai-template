@@ -1,0 +1,97 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: oa-platform
+  datasource:
+    url: jdbc:postgresql://localhost:15432/oa_platform
+    username: oa
+    password: oa123456
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  data:
+    redis:
+      host: localhost
+      port: 26379
+  docker:
+    compose:
+      file: ./docker-compose.yml
+      lifecycle-management: start_only
+  servlet:
+    multipart:
+      max-file-size: 200MB
+      max-request-size: 220MB
+
+# Flowable 8 内嵌流程引擎（复用平台 DataSource / 事务；ACT_* 表由引擎自建，不进 Flyway）
+flowable:
+  database-schema-update: true       # 引擎自建/升级 ACT_* 表
+  async-executor-activate: true      # 异步执行器（定时/超时催办用）
+  check-process-definitions: false   # 不自动扫描 classpath 部署，改由 WorkflowInitializer 编程部署
+  idm:
+    enabled: false                   # 关闭 IDM 引擎（用户/权限走平台 sys_* 体系）
+
+oa:
+  storage:
+    # local | minio | s3（minio 与 s3 共用 S3 协议客户端，切换后重启生效）
+    type: local
+    local:
+      base-path: ./data/upload
+      chunk-path: ./data/chunk
+    # minio / s3 示例（docker-compose 中 minio 服务映射宿主 19002/19003，
+    # 因宿主 19000/19001 已被其他项目 MinIO 占用）：
+    # minio:
+    #   endpoint: http://localhost:19002
+    #   access-key: minioadmin
+    #   secret-key: minioadmin
+    #   bucket: oa-files
+  jwt:
+    # HS256 密钥，>= 64 字符；生产环境务必通过环境变量覆盖
+    secret: xK9mP2vQ7rT4wY6zB1nC3eF5hJ8kL0aD2gS4uV6xW8yZ1bE3cH5jM7pR9tN4qA6s
+    expire-minutes: 720
+  # AI 审批节点（P3）：默认关闭 → AI 节点走规则模拟并在意见明示「AI模拟」。
+  # 启用真实调用：enabled=true 且配置 api-key（DeepSeek / OpenAI / 任意 OpenAI 兼容 chat completions 网关）。
+  # 预设 DeepSeek（推荐，OpenAI 兼容、性价比高）：base-url=https://api.deepseek.com  model=deepseek-chat
+  #   OpenAI：base-url=https://api.openai.com/v1  model=gpt-4o-mini
+  # 也可用环境变量覆盖：OA_AI_ENABLED / OA_AI_API_KEY / OA_AI_BASE_URL / OA_AI_MODEL
+  ai:
+    enabled: ${OA_AI_ENABLED:false}
+    base-url: ${OA_AI_BASE_URL:https://api.deepseek.com}
+    api-key: ${OA_AI_API_KEY:}
+    model: ${OA_AI_MODEL:deepseek-chat}
+    timeout-seconds: 20
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+# 运行日志落盘，供 GET /api/infra/logs/runtime tail
+logging:
+  file:
+    name: ./logs/oa-platform.log
+
+# XXL-Job 执行器（调度中心由 docker-compose 的 xxl-job-admin 提供，默认账号 admin/123456）
+xxl:
+  job:
+    enabled: true
+    admin-addresses: http://localhost:8082/xxl-job-admin
+    access-token: default_token
+    executor:
+      appname: oa-executor
+      port: 9999
+      log-path: ./logs/xxl-job
+      log-retention-days: 7

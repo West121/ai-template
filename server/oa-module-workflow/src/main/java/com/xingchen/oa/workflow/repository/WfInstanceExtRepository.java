@@ -1,0 +1,41 @@
+package com.xingchen.oa.workflow.repository;
+
+import com.xingchen.oa.workflow.entity.WfInstanceExt;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+import java.util.Optional;
+
+public interface WfInstanceExtRepository extends JpaRepository<WfInstanceExt, Long> {
+
+    Optional<WfInstanceExt> findByProcInstId(String procInstId);
+
+    Page<WfInstanceExt> findByInitiatorId(Long initiatorId, Pageable pageable);
+
+    Page<WfInstanceExt> findByInitiatorIdAndBizStatus(Long initiatorId, String bizStatus, Pageable pageable);
+
+    /** 管理员实例检索：status/keyword 均可空。 */
+    @Query("select i from WfInstanceExt i where (:status is null or i.bizStatus = :status) "
+            + "and (:kw is null or i.title like %:kw% or i.defName like %:kw%)")
+    Page<WfInstanceExt> adminSearch(@Param("status") String status, @Param("kw") String kw, Pageable pageable);
+
+    /**
+     * 关联表单记录：按表单编码查已提交（非 DRAFT）的实例，keyword 匹配标题；id 降序。
+     * 表单被绑定到流程后，实例的 form_code 即该表单编码；未被任何流程使用则查无记录。
+     */
+    @Query("select i from WfInstanceExt i where i.formCode = :formCode and i.bizStatus <> 'DRAFT' "
+            + "and (:kw is null or i.title like %:kw%) order by i.id desc")
+    Page<WfInstanceExt> findFormRecords(@Param("formCode") String formCode, @Param("kw") String kw, Pageable pageable);
+
+    /** 监控总览：按业务状态分组计数，返回 [bizStatus, count]。 */
+    @Query("select i.bizStatus, count(i) from WfInstanceExt i group by i.bizStatus")
+    java.util.List<Object[]> countGroupByStatus();
+
+    /** 监控总览：按流程定义分组计数（排除草稿），返回 [defCode, defName, count]，count 降序。 */
+    @Query("select i.defCode, i.defName, count(i) from WfInstanceExt i where i.bizStatus <> 'DRAFT' "
+            + "group by i.defCode, i.defName order by count(i) desc")
+    java.util.List<Object[]> countGroupByDef();
+}

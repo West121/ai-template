@@ -1,0 +1,236 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.5rem;
+  --background: oklch(0.985 0.002 247.839);
+  --foreground: oklch(0.208 0.032 265.755);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.208 0.032 265.755);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.208 0.032 265.755);
+  --primary: oklch(0.546 0.215 262.881);
+  --primary-foreground: oklch(0.985 0.002 247.839);
+  --secondary: oklch(0.957 0.007 247.896);
+  --secondary-foreground: oklch(0.208 0.032 265.755);
+  --muted: oklch(0.957 0.007 247.896);
+  --muted-foreground: oklch(0.554 0.041 257.417);
+  --accent: oklch(0.957 0.007 247.896);
+  --accent-foreground: oklch(0.208 0.032 265.755);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0.002 247.839);
+  --border: oklch(0.921 0.011 255.508);
+  --input: oklch(0.921 0.011 255.508);
+  --ring: oklch(0.546 0.215 262.881);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.208 0.032 265.755);
+  --sidebar-primary: oklch(0.546 0.215 262.881);
+  --sidebar-primary-foreground: oklch(0.985 0.002 247.839);
+  --sidebar-accent: oklch(0.957 0.007 247.896);
+  --sidebar-accent-foreground: oklch(0.208 0.032 265.755);
+  --sidebar-border: oklch(0.921 0.011 255.508);
+  --sidebar-ring: oklch(0.546 0.215 262.881);
+}
+
+.dark {
+  --background: oklch(0.179 0.021 265.755);
+  --foreground: oklch(0.929 0.013 255.508);
+  --card: oklch(0.225 0.025 265.755);
+  --card-foreground: oklch(0.929 0.013 255.508);
+  --popover: oklch(0.225 0.025 265.755);
+  --popover-foreground: oklch(0.929 0.013 255.508);
+  --primary: oklch(0.623 0.188 259.815);
+  --primary-foreground: oklch(0.985 0.002 247.839);
+  --secondary: oklch(0.28 0.028 260.031);
+  --secondary-foreground: oklch(0.929 0.013 255.508);
+  --muted: oklch(0.28 0.028 260.031);
+  --muted-foreground: oklch(0.704 0.031 256.788);
+  --accent: oklch(0.28 0.028 260.031);
+  --accent-foreground: oklch(0.929 0.013 255.508);
+  --destructive: oklch(0.637 0.208 25.331);
+  --destructive-foreground: oklch(0.985 0.002 247.839);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 16%);
+  --ring: oklch(0.623 0.188 259.815);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.225 0.025 265.755);
+  --sidebar-foreground: oklch(0.929 0.013 255.508);
+  --sidebar-primary: oklch(0.623 0.188 259.815);
+  --sidebar-primary-foreground: oklch(0.985 0.002 247.839);
+  --sidebar-accent: oklch(0.28 0.028 260.031);
+  --sidebar-accent-foreground: oklch(0.929 0.013 255.508);
+  --sidebar-border: oklch(1 0 0 / 12%);
+  --sidebar-ring: oklch(0.623 0.188 259.815);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family:
+      -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica,
+      Arial, sans-serif;
+  }
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-border;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* 谷歌浏览器风格标签页：激活标签两侧的内凹圆角 */
+.chrome-tab-active {
+  background: var(--background);
+}
+.chrome-tab-active::before,
+.chrome-tab-active::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  width: 8px;
+  height: 8px;
+  pointer-events: none;
+}
+.chrome-tab-active::before {
+  left: -8px;
+  background: radial-gradient(circle at 0 0, transparent 8px, var(--background) 8.5px);
+}
+.chrome-tab-active::after {
+  right: -8px;
+  background: radial-gradient(circle at 100% 0, transparent 8px, var(--background) 8.5px);
+}
+
+/* bpmn-js 暗色适配：组件面板 / 上下文菜单 / 弹出层 */
+.dark .djs-palette {
+  background: var(--card);
+  border-color: var(--border);
+}
+.dark .djs-palette .entry,
+.dark .djs-palette .djs-palette-toggle {
+  color: var(--foreground);
+}
+.dark .djs-palette .entry:hover,
+.dark .djs-palette .djs-palette-toggle:hover {
+  color: var(--primary);
+}
+.dark .djs-palette .separator {
+  border-color: var(--border);
+}
+.dark .djs-context-pad .entry {
+  background: var(--card);
+  box-shadow: 0 0 0 1px var(--border);
+  color: var(--foreground);
+}
+.dark .djs-context-pad .entry:hover {
+  color: var(--primary);
+}
+.dark .djs-popup {
+  background: var(--popover);
+  border-color: var(--border);
+  color: var(--popover-foreground);
+}
+.dark .djs-popup .entry:hover,
+.dark .djs-popup .djs-popup-header .entry:hover {
+  background: var(--accent);
+}
+.dark .djs-popup-search input {
+  background: var(--background);
+  border-color: var(--input);
+  color: var(--foreground);
+}
+.dark .djs-direct-editing-parent {
+  background: var(--card) !important;
+  border-color: var(--primary) !important;
+  color: var(--foreground) !important;
+}
+
+/* 发布校验错误高亮：validateBpmn 给错误元素加 .oa-error marker */
+.djs-element.oa-error .djs-visual > :nth-child(1) {
+  stroke: var(--destructive) !important;
+  fill: color-mix(in oklch, var(--destructive) 12%, transparent) !important;
+}
+.djs-element.oa-error .djs-outline {
+  stroke: var(--destructive) !important;
+  stroke-width: 2px;
+}
+
+/* bpmn-js 「更改类型」弹窗：约束宽度并跟随主题，避免超出画布 */
+.djs-popup.bpmn-replace {
+  max-width: 300px;
+}
+
+/* diagram-js-grid 画布网格：模块在 defs>pattern 内渲染 circle 点阵，默认 #ccc，统一改为主题边框色 */
+.djs-container pattern[id^="djs-grid-pattern"] circle {
+  fill: var(--border);
+}
+.dark .djs-container pattern[id^="djs-grid-pattern"] circle {
+  fill: oklch(1 0 0 / 18%);
+}
+
+/* 灰色模式（哀悼日等场景） */
+html.grayscale-mode {
+  filter: grayscale(100%);
+}
+
+/* 色弱模式 */
+html.color-weak-mode {
+  filter: invert(80%);
+}

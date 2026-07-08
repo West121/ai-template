@@ -1,0 +1,302 @@
+# OA 平台 API 契约（前后端开发共同遵守）
+
+- 基址：前端经 Vite 代理 `/api` → `http://localhost:8081`
+- 统一响应：`R<T> = { code: 0成功|其他失败, message, data }`；分页 `PageResult<T> = { list, total, pageNum, pageSize }`
+- 认证：除 `/api/auth/login` 外均需 `Authorization: Bearer <jwt>`；401=未登录，403=无功能权限
+- 时间格式：日期 `yyyy-MM-dd`，时间戳 ISO（`2026-07-07T09:00:00`）
+- 数据权限：标注【DS】的列表接口按当前激活身份的数据范围过滤（dept_id ∈ 可见部门 OR 本人数据）
+- 功能权限：标注【P:code】的接口用 `@PreAuthorize("hasAuthority('code')")` 保护
+
+## 认证（已实现，勿改契约）
+- POST `/api/auth/login` {username,password} → {token,user:{id,username,name},assignments:[AssignmentInfo],activeAssignmentId,permissions[]}
+- POST `/api/auth/switch` {assignmentId:"ALL"|"<id>"} → 同上
+- GET `/api/auth/me` → 同上（无 token 字段）
+- AssignmentInfo = {id,deptId,deptName,postName,roleNames[],primary}
+
+## 审批中心（oa-module-office）
+Approval 响应 = {id,title,type,applicant,applicantId,deptId,deptName,status,reason,startDate?,endDate?,createdAt}
+status: PENDING/APPROVED/REJECTED/WITHDRAWN；type: LEAVE/EXPENSE/TRIP/OVERTIME/SEAL/PURCHASE/CONTRACT/OTHER
+- GET `/api/office/approvals?status=&pageNum=&pageSize=`【DS】待办等通用查询（已实现）
+- GET `/api/office/approvals/pending-count`【DS】→ Long（已实现）
+- POST `/api/office/approvals` {title,type,reason,startDate?,endDate?,ccUserIds?:number[]} 自动填 applicant/dept（已实现，需扩展 ccUserIds/日期）
+- GET `/api/office/approvals/my?status=&pageNum=` 我发起的（不走 DS，applicant_id=me）
+- GET `/api/office/approvals/done?pageNum=` 我处理过的（依据操作日志）响应加 {myAction:APPROVE|REJECT, actedAt}
+- GET `/api/office/approvals/cc?pageNum=` 抄送我的，响应加 {readFlag:boolean}
+- POST `/api/office/approvals/cc/{approvalId}/read` 标记已读；POST `/api/office/approvals/cc/read-all`
+- POST `/api/office/approvals/{id}/approve` {comment?}【P:office:approval:approve】（已实现，补日志）
+- POST `/api/office/approvals/{id}/reject` {reason}【P:office:approval:approve】（已实现，补日志）
+- POST `/api/office/approvals/{id}/withdraw` 仅本人且 PENDING → WITHDRAWN
+- GET `/api/office/approvals/{id}/logs` → [{action:CREATE|APPROVE|REJECT|WITHDRAW, actorName, comment?, createdAt}]
+
+## 公文（oa-module-office）
+Document = {id,direction:RECEIVE|SEND,code,title,unit(来文/主送单位),secret:PUBLIC|INTERNAL|SECRET,urgency:NORMAL|URGENT|EXTRA,status,drafter?,signer?,docDate,deptId,deptName,createdAt}
+RECEIVE status: TO_SIGN(待签收)/PROCESSING(办理中)/FINISHED(已办结)；SEND status: DRAFT(拟稿)/REVIEWING(核稿中)/ISSUED(已签发)/PUBLISHED(已发布)
+- GET `/api/office/documents?direction=&status=&keyword=&pageNum=`【DS】
+- POST `/api/office/documents` {direction:SEND,title,unit,secret,urgency,content?} → code 自动 `星发〔2026〕N号`，status=DRAFT
+- POST `/api/office/documents/{id}/sign` 待签收→办理中；POST `/{id}/finish` 办理中→已办结
+- POST `/api/office/documents/{id}/review` DRAFT→REVIEWING；POST `/{id}/issue` REVIEWING→ISSUED（signer=当前人）
+- DELETE `/api/office/documents/{id}`【P:office:document:edit】
+
+## 会议（oa-module-office）
+- GET `/api/office/meeting-rooms?date=2026-07-07` → [{id,name,floor,capacity,devices:string[],status:FREE|BUSY|MAINTAIN, bookings:[{startHour,endHour,subject,booker}]}]（bookings 为该日）
+- POST `/api/office/meetings` {roomId,subject,date,startHour,endHour} 时段冲突 → BusinessException(409,"该时段已被预订")
+- GET `/api/office/meetings/my?pageNum=` → {id,subject,roomName,organizer,organizerId,date,startHour,endHour,status:UPCOMING|ONGOING|FINISHED|CANCELED,role:HOST|ATTENDEE}
+- POST `/api/office/meetings/{id}/cancel` 仅 HOST 且未开始
+
+## 考勤（oa-module-office，均为"我的"数据）
+- GET `/api/office/attendance/records?month=2026-07` → {summary:{days,late,early,absent,overtimeHours}, list:[{date,week,checkIn?,checkOut?,hours?,status:NORMAL|LATE|EARLY|ABSENT|REST}]}
+- POST `/api/office/attendance/check` {} → 当日打卡（无记录=签到，有签到无签退=签退）返回当日记录
+- GET `/api/office/leaves?pageNum=`【DS】→ {id,type:ANNUAL|PERSONAL|SICK|COMP,startDate,endDate,days,reason,status:PENDING|APPROVED|REJECTED|WITHDRAWN,applicant,deptName,createdAt}
+- GET `/api/office/leaves/quotas` → [{type,total,used}]（ANNUAL 10/5、COMP 4/2、SICK 15/1 种子）
+- POST `/api/office/leaves` {type,startDate,endDate,days,reason}；POST `/{id}/withdraw`
+- GET `/api/office/trips?pageNum=`【DS】→ {id,destination,startDate,endDate,transport:TRAIN|FLIGHT|CAR,budget,reason,status同上,applicant,deptName}
+- POST `/api/office/trips` {...}；POST `/{id}/withdraw`
+
+## 公告（oa-module-office，全员可见）
+- GET `/api/office/announcements?category=&pageNum=` → {id,category:NOTICE|RULE|NEWS,title,content,publisher,deptName,top,reads,publishAt,readFlag}
+- GET `/api/office/announcements/unread-count` → Long
+- POST `/api/office/announcements` {category,title,content,top}【P:office:announcement:publish】
+- POST `/api/office/announcements/{id}/read`（幂等，reads+1 仅首次）
+
+## 日程（oa-module-office，我的数据）
+- GET `/api/office/schedules?month=2026-07` → [{id,title,date,startTime:"14:00",endTime,place,type:MEETING|REVIEW|TRIP|TRAINING|OTHER}]
+- POST `/api/office/schedules` {...}；DELETE `/api/office/schedules/{id}`
+
+## 工作台聚合（oa-module-office）
+- GET `/api/office/dashboard` → {pendingCount【DS】, todayMeetings, monthAttendanceDays, unreadAnnouncements, todayCheckIn?:"09:02", pendingList:前5条【DS】, announcements:前4条, todaySchedules:[...], weekApprovalStats:[{day:"周一",count}] }
+
+## 系统管理（oa-module-system）
+- GET `/api/system/depts/tree` → [{id,name,parentId,sort,code,leaderId,leaderName,enabled,createdAt,userCount,children[]}]（userCount 含任职人数；leaderName 由后端按 leaderId 一次 findAllById 组装，无 N+1）
+- POST `/api/system/depts` {name,parentId,sort,code?,leaderId?,enabled?}（code 全局唯一 uk_sys_dept_code，重复→400"部门编码已存在"；leaderId 须存在→否则 400"负责人不存在"；enabled 缺省 true）【P:system:dept:edit】
+- PUT `/api/system/depts/{id}` 部分更新：仅覆盖请求中非 null 字段 {name?,sort?,code?,leaderId?,enabled?,parentId?}；leaderId=0 表示清空负责人，code 传空串表示清空编码；可单发 {enabled} 即时切换状态、{sort} 调整排序【P:system:dept:edit】
+- DELETE `/api/system/depts/{id}`（有子部门或任职→BusinessException）【P:system:dept:edit】
+- GET `/api/system/posts?keyword=&pageNum=` → {id,code,name,sort,userCount}
+- POST/PUT/DELETE `/api/system/posts...`【P:system:post:edit】
+- GET `/api/system/users?keyword=&deptId=&enabled=&pageNum=` → {id,username,name,empNo,phone,email,gender:MALE|FEMALE|UNKNOWN,birthday,hireDate,officeLocation,leaderId,leaderName,avatar,remark,enabled,createdAt,primaryDeptName,primaryPostName,roleNames[]}；keyword 匹配 name/username/empNo/phone；leaderName 由后端按 leaderId 一次 findAllById 组装（无 N+1）；GET `/{id}` 返回同样全字段
+- POST `/api/system/users` {username,name,phone,password,deptId,postId,roleIds[],empNo?,email?,gender?,birthday?,hireDate?,officeLocation?,leaderId?,avatar?,remark?}（建主任职；empNo 缺省自动生成 XC+4 位递增，传入则查重、唯一约束 uk_sys_user_emp_no）【P:system:user:edit】
+- PUT `/api/system/users/{id}` {name,phone,email?,gender?,birthday?,hireDate?,officeLocation?,leaderId?,avatar?,remark?}（工号不可改；leaderId 不能为本人、须存在）；PUT `/{id}/enabled` {enabled}；POST `/{id}/reset-password`（重置 admin123）；DELETE `/{id}`【P:system:user:edit】
+- GET `/api/system/users/{id}/assignments` → AssignmentInfo[]；POST `/api/system/users/{id}/assignments` {deptId,postId,roleIds[],primary:false} 添加兼任；DELETE `/api/system/assignments/{aid}`（主任职不可删）【P:system:user:edit】
+- GET `/api/system/roles?pageNum=` → {id,code,name,dataScope,enabled,userCount,remark?}
+- POST/PUT/DELETE `/api/system/roles...` {code,name,dataScope,remark}【P:system:role:edit】
+- GET `/api/system/roles/{id}/permissions` → number[]；PUT `/api/system/roles/{id}/permissions` {permissionIds:number[]}【P:system:role:edit】
+- GET `/api/system/permissions/tree` → [{id,code,name,type:MENU|BUTTON,children[]}]
+
+## 新增权限码与角色授权（V3 种子，B1 负责写入）
+新权限码：office:document:list/edit、office:announcement:publish、system:dept:edit、system:post:edit、system:user:edit、system:role:edit
+授权：ADMIN=全部；DEPT_MANAGER 增加 office:document:list/edit、office:announcement:publish；EMPLOYEE/FINANCE 增加 office:document:list。
+其余列表接口只要求登录（不加 @PreAuthorize），保证演示不 403 满屏。
+
+## 前端离线兜底约定
+所有接真实数据的页面：捕获 NetworkError（`@/lib/api`）→ 显示"后端未启动"卡片 + 重试按钮（参考 `src/pages/approval/pending.tsx`），不得白屏。
+
+## 基础设施域（oa-module-infra：文件 / 字典 / 日志）
+依赖方向调整：common ← infra ← system ← office ← boot（system 可用 infra 的登录日志仓库）
+
+### 文件管理（存储可切换 local | minio | s3）
+FileRecord = {id,originalName,ext,size,contentType,storageType:LOCAL|MINIO|S3,objectKey,uploaderId,uploaderName,createdAt}
+- GET `/api/infra/files?keyword=&pageNum=&pageSize=` 分页（keyword 匹配 originalName）
+- POST `/api/infra/files/upload` multipart(file) → FileRecord（小文件直传）
+- GET `/api/infra/files/{id}/download` → 文件流（attachment；MINIO/S3 也统一走后端流式转发）
+- DELETE `/api/infra/files/{id}`【P:system:file:edit】（同时删存储对象）
+- 分片上传/断点续传/秒传：
+  - POST `/api/infra/files/chunk/init` {fileName,size,contentType,chunkSize,fileHash} → {uploadId,uploaded:number[],instant:boolean,file?:FileRecord}
+    （fileHash 命中已有完整文件 → instant=true 秒传返回 file；否则返回已上传分片序号供续传）
+  - POST `/api/infra/files/chunk` multipart(uploadId,index,chunk) → {uploaded:number[]}
+  - POST `/api/infra/files/chunk/merge` {uploadId} → FileRecord（分片本地暂存合并后推目标存储）
+- 配置 application.yml：`oa.storage.type=local|minio|s3`；local: base-path；minio/s3 统一 S3 协议字段 endpoint/access-key/secret-key/bucket（MinIO SDK 同时适配二者）
+
+### 字典管理（字典项支持树形）
+DictType = {id,code,name,remark,enabled,itemCount}；DictItem = {id,typeId,parentId,label,value,sort,enabled,remark,children[]}
+- GET `/api/infra/dict/types?keyword=&pageNum=`；POST/PUT `/{id}`/DELETE `/{id}`（code 唯一；删除有字典项→400）【P:system:dict:edit】
+- GET `/api/infra/dict/types/{typeId}/items` → 树形数组
+- POST `/api/infra/dict/items` {typeId,parentId?,label,value,sort}；PUT `/{id}`；DELETE `/{id}`（有子项→400）【P:system:dict:edit】
+- GET `/api/infra/dict/{code}/options` → 树形（业务侧取字典用，登录即可）
+- 种子：leave_type 请假类型（平铺）、education 学历（平铺）、region 行政区划（树形：广东省>广州/深圳>区，浙江省>杭州>区 两省示例）
+
+### 日志管理
+- 登录日志 LoginLog={id,username,ip,location,userAgent,success,message,createdAt}：GET `/api/infra/logs/login?keyword=&pageNum=`；登录成功/失败由 AuthService 自动落库；location=IP 归属地（ip2region v2 离线库：内网 IP→"内网"，国内→"省份城市" 如 "广东省广州市"，国外→"国家 城市"，解析失败→"未知"）
+- 操作日志 OperLog={id,username,module,action,method,params,status:SUCCESS|FAIL,errorMsg,costMs,ip,createdAt}：GET `/api/infra/logs/oper?keyword=&module=&pageNum=`
+  记录机制：`@OperLog(module,action)` 注解（放 oa-common）+ infra 内 AOP 切面；在关键写接口标注（审批同意/驳回、用户/部门/角色/字典增删改、公告发布、文件上传删除等）
+- 运行日志：GET `/api/infra/logs/runtime?lines=200` → {file,lines:string[]}（tail 应用日志文件；boot 配置 logging.file.name=./logs/oa-platform.log）
+新权限码（V6 种子）：system:file:edit、system:dict:edit、system:log:list（超管代码级全量自动拥有）
+
+## 工作流域（oa-module-workflow / Flowable 8）
+前缀 `/api/wf`；认证复用现有 JWT/Security（CurrentUserHolder）。运行时接口（发起/待办/审批/通知）登录即可；定义管理接口需【P:wf:def:edit】。
+ACT_* 引擎表由引擎自建（不进 Flyway）；业务扩展表 wf_form_def/wf_process_ext/wf_instance_ext/wf_operation/wf_cc/wf_notify（V7）。
+
+### 表单定义（版本化：code+version 唯一，PUBLISHED 不可改，改=同 code 新版本 DRAFT）
+FormDef = {id,code,name,version,schemaJson,status:DRAFT|PUBLISHED|DISABLED,remark,createdAt}（schemaJson 为前端表单设计器 widgets JSON，原样存取）
+- GET `/api/wf/form-defs?keyword=&pageNum=&pageSize=`
+- GET `/api/wf/form-defs/{id}`；GET `/api/wf/form-defs/{code}/latest`；GET `/api/wf/form-defs/{code}/versions` → [FormDef]
+- POST `/api/wf/form-defs` {code,name,schemaJson,remark?}【P:wf:def:edit】 同 code 已存在则版本+1 建 DRAFT
+- PUT `/api/wf/form-defs/{id}` {code,name,schemaJson,remark?}【P:wf:def:edit】 仅 DRAFT 可改
+- POST `/api/wf/form-defs/{id}/publish`【P:wf:def:edit】 → PUBLISHED
+- GET `/api/wf/form-defs/{defCode}/records?keyword=&pageNum=&pageSize=`【登录】 → PageResult<FormRecord>
+  - relation 控件（数据源 type=form）的可选项：查以该表单为 form_code、已提交（非 DRAFT）的流程实例；keyword 匹配标题；未被任何流程使用则空页
+  - FormRecord = {id, procInstId, title, label, value, summary}；value=procInstId（存储唯一值），label=实例标题或首个文本字段（展示），summary=表单标量字段摘要
+
+### 流程定义（wf_process_ext 一条/def_code；引擎负责流程版本）
+ProcessDef = {id,defCode,name,category,icon,formCode,formVersion,designerType:DINGTALK|BPMN,designerJson,bpmnXml,status,processDefinitionId,remark,createdAt,formType:DYNAMIC|CUSTOM,formSubmitPath,formViewPath,flowConfig}
+  （P1-C 扩展：formType 缺省 DYNAMIC=动态表单；CUSTOM=自定义 React 路由表单，formSubmitPath 发起页路由、formViewPath 详情查看路由；flowConfig=流程级配置 JSON，见下）
+- GET `/api/wf/process-defs?keyword=&pageNum=&pageSize=`
+- GET `/api/wf/process-defs/{id}`；GET `/api/wf/process-defs/{code}/latest`；GET `/api/wf/process-defs/{code}/diagram` → bpmnXml(String)
+- POST `/api/wf/process-defs` {defCode,name,category?,icon?,formCode?,formVersion?,designerType,designerJson|bpmnXml,remark?,formType?,formSubmitPath?,formViewPath?,flowConfig?}【P:wf:def:edit】
+  - **defCode 须为 BPMN 合法 id（字母数字下划线，首字符非数字）**；含 `-` 等特殊字符会被转换器 sanitize 成下划线，导致 startProcessInstanceByKey 找不到 key。
+- PUT `/api/wf/process-defs/{id}` 同上【P:wf:def:edit】
+- POST `/api/wf/process-defs/{id}/publish`【P:wf:def:edit】 发布=DINGTALK JSON→BPMN 转换 / BPMN 校验 → repositoryService 部署（引擎 parse 失败即回滚报错）
+  - DINGTALK designerJson 结构：`{"nodes":[StepNode...]}`，StepNode：
+    - approval：`{id,type:"approval",name,assigneeRules:[{kind:...,...}],multiMode:ANY|ALL|SEQUENCE|VOTE,emptyStrategy:AUTO_PASS|TO_ADMIN|BLOCK}`
+      - **emptyStrategy 语义**：`AUTO_PASS`=审批人空则节点自动通过；`TO_ADMIN`=空则静默转管理员(admin)；`BLOCK`=**真阻塞**，审批人空即抛业务异常中断流转(发起/流转失败)，与 TO_ADMIN 明确区分
+      （refs:[{kind:USER|DEPT|ROLE|POST,id}]，**前端 OrgPicker 统一用 id 制**（引擎亦兼容 username 回退，但设计器产出请用 id））
+      - **办理人类型（精简后，按我们的组织模型）**：`kind:ACCOUNT|ROLE|POST|DEPT|LEADER|FORM_FIELD|INITIATOR|FORMULA`（兼容旧 `type`；旧 `FIND_LEADER` 并入 `LEADER`）：
+        - `ACCOUNT`（指定人员）→ refs 按 id/username 取用户；`ROLE`（角色）→ 角色全员；`POST`（岗位）→ **优先读 `postName`(岗位名或编码)查 sys_post→展开该岗位任职用户**，再叠加 refs 里的 POST 引用；`DEPT`（部门）→ 部门全员（refs.kind 缺省按规则类型推断，ref 自带 kind 优先）；
+        - `LEADER.level:N` → 沿申请人部门 ancestors 上溯第 N 级主管；`FORM_FIELD.field` → 表单人员字段；`INITIATOR` → 发起人本人；
+        - `FORMULA.formula:"<表达式>"` → **自定义公式**（受限求值引擎）：取人函数 `USER(id...) / ROLE("名称") / DEPT(id) / POST("名称") / DEPT_LEADER(level) / INITIATOR()`、逻辑 `IF(cond,a,b) / AND / OR / NOT`（亦支持中缀 `&& || !`）、比较 `> < >= <= == !=`，操作数含表单字段标识符/数字/字符串/true·false。示例 `IF(days>3, ROLE("总经理"), DEPT_LEADER(1))`。求值失败降级空集 + 日志。
+        - **已下线**：`GROUP / UNIT / SERVICE_API / ROLE_POST`——收到时按空/退化处理不报错（refs 自带 kind 仍可展开），前端不再产出。
+        - **来源** `source:RELATED_TO_APPLICANT` + `sourceValue:APPLICANT|APPLICANT_DEPT|APPLICANT_DEPT_LEADER|APPLICANT_DEPT_LEADER_2...` 仍兼容，置 source 后优先于 kind/refs
+      - **多人模式统一**：以基础属性 `multiMode`(ANY 或签/ALL 会签/SEQUENCE 依次/VOTE 票签) 为准；旧高级「办理选项签署模式」`handleOptions.signMode` 已删，后端不再读取
+    - condition：`{id,type:"condition",name,branches:[{id,name,logic:"AND"|"OR",conditions:[{field,operator,value}],steps:[StepNode...]}|{default:true,steps:[...]}]}`
+      operator 白名单：== != > >= < <=；`logic` 缺省 AND（→ `&&`），OR → `||`，多条件按 logic 连接编译为 UEL（如 `${amount > 1000 || urgent == true}`，禁用户手写 UEL）；每个 condition 节点须含且仅含一个 `default:true` 默认分支
+    - cc：`{id,type:"cc",name,users:[{kind:"USER",id}]}`（同用 id 制，兼容 username 回退）
+    - **P1-C 节点级 nodeConfig（approval 节点，写入 BPMN extensionElements）**：`allowedOps:[approve|reject|transfer|delegate|addSign|counterSign|reduceSign|assist|retrieve|print...]`（按钮操作白名单，运行时详情 allowedOps 据此覆盖默认全集；**服务端强制**：approve/reject/transfer/delegate/addSign/counterSign/reduceSign/assist 等操作若不在白名单内直接 403，不再仅约束 UI；无 allowedOps=全放行）、`handleOptions:{candidate?,historyFirst?,autoSkip?}`（办理选项，P1 存储 P2 落地）
+    - **P2/P3 节点级 nodeConfig（approval 节点扩展，写入 BPMN extensionElements + 运行时生效）**：
+      - `handleOptions` 精简为 `{candidate,historyFirst,autoSkip}`（引擎生效）+ `{accountChecked,accountDisabled}`（纯前端办理页勾选态，随详情透传）：
+        **candidate**=true → 任务入公共池待认领（等价 groupMode:CLAIM）；**historyFirst**=true → 节点再次进入改用该节点历史办理人；**autoSkip**=true → 申请人本人不审自己 + 本实例已办过者去重，符合则集合空→节点自动通过。
+        （**已下线空壳**：accountSort/limitRange/includeSelf/includeConcurrent/completeLimit/warnLimit——前端不再产出，后端不再作为契约）
+      - `auditMenu`：简化为 `{allowJump:bool,allowReturn:bool}`（是否允许跳转/退回），随详情 `auditMenu` 透传，前端据此展示按钮（复用 P2 jump/reject 能力）。（旧 `special` 的 JUMP_WAIT_*/RETURN 细分已下线）
+      - `commentRequired:bool`：审批意见必填，approve 无 comment → 400
+      - `events:[{trigger,action:NOTIFY|WEBHOOK,notify:{to:[OrgRef],template},webhookUrl}]`：**6 种真触发**节点事件（trigger=ACTIVITY_CONFIRM_PARTICIPANTS/TASK_AFTER_CREATED/TASK_BEFORE_COMPLETE/TASK_AFTER_COMPLETE/TASK_BEFORE_UNDO/TASK_AFTER_UNDO；其余 FORM_*/SUSPEND/RESUME/TIMEOUT 等已下线）。
+        转换器按 trigger 挂 taskListener（create/complete/delete），运行时由 `wfEventDelegate` 统一分发：**NOTIFY**=站内通知目标人（template 为内容）、**WEBHOOK**=异步 POST 外部 URL。（**SCRIPT action 已下线**）
+      - `formPerms:{field:HIDDEN|READ|EDIT}`（P3 节点表单字段权限，详情 nodeFormPerms 返回）、`timeout:{hours|seconds,action:REMIND|AUTO_PASS|AUTO_REJECT,remindEvery}`（P2 超时基建；**TRANSFER action 已下线**，扫描器未实现，落到 REMIND 默认）
+  - **P1-C/P3 顶层 flowConfig（designerJson.flowConfig，写入 process extensionElements oa:flowConfig；亦可经请求体 flowConfig 存 wf_process_ext.flow_config 列）**：
+    `{operations:{terminate,retrieve,urge,cancel},start:{scope:[OrgRef],taskTitle},variables:[{name,type,defaultValue}]}`
+    - **operations 开关（已落地强制）**：`cancel/terminate/urge/retrieve` 布尔，缺省=允许，显式 `false` 关闭对应操作——详情 `canCancel` 随 cancel 开关，撤销/终止/催办/拿回端点关闭时返回 **403**
+    - **start.scope 发起权限（已落地强制）**：`scope:[OrgRef{kind:USER|DEPT|ROLE,id}]` 展开为允许发起的用户集合；**空/缺省=不限（人人可发起）**。`GET /api/wf/startable` 仅返回当前用户在 scope 内的流程；`POST /api/wf/instances` 校验发起人在 scope 内，否则 **403**
+    - **P3 落地**：`variables` 发起时注入流程变量（number/boolean/string 按 type 转换，不覆盖表单同名字段，供条件网关路由）；`start.taskTitle` fx 模板发起时插值生成实例标题（未显式传 title 时；占位 `${field}` 与 `{field}`，内置 `initiatorName`/别名 `申请人`）
+    - **已下线的 flowConfig 空壳**：`operations.cancelOptions/track`、`security(secretLevel/formSecurity)`、`misc(completeLimit/warnLimit/level/modelCategory)`、`signals`、`messages`、`start.taskSummary/mobileStart` 等（前端不再产出，后端不再作为契约）
+
+### 发起
+- GET `/api/wf/startable` → [StartableItem{defCode,name,category,icon,formCode,formVersion,formSchema,formType,formSubmitPath,formViewPath}]（已发布流程卡片墙；formType=CUSTOM 时前端卡片点击跳转 formSubmitPath 而非弹动态表单）
+- POST `/api/wf/instances` {defCode,formData:{...},title?} → InstanceDetail（title 默认「{发起人}的{流程名}」；formData 快照进 wf_instance_ext 并扁平化为流程变量供条件判断；CUSTOM 表单的 formData 由自定义页面提交，后端照存不做动态 schema 校验）
+
+### 实例
+InstanceListItem = {id,procInstId,defCode,defName,title,bizStatus:RUNNING|APPROVED|REJECTED|CANCELED|TERMINATED,initiatorId,initiatorName,createdAt,endedAt}
+InstanceDetail = {id,procInstId,defCode,defName,title,bizStatus:RUNNING|APPROVED|REJECTED|CANCELED|TERMINATED|DRAFT,initiatorId,initiatorName,createdAt,endedAt,formSchema,formData,
+  currentNodes:[{nodeId,nodeName,assignees:[{userId,name,status}]}],
+  timeline:[{nodeId,nodeName,actorName,action,comment,createdAt}],
+  highlight:{completed:[activityId],active:[activityId]}, bpmnXml, canCancel, myTaskId,
+  allowedOps:[string], isAdmin, jumpTargets:[{nodeId,name}], comments:[{taskId,fromName,content,createdAt}], readByMe,
+  currentHandlers:[{userId,name,taskId}],
+  subInstances:[{nodeId,subInstanceId,title,bizStatus}], predictable, resurrectable, seals:[{nodeName,sealImageUrl,userName,time}], bizTime, nodeFormPerms:{field:"HIDDEN"|"READ"|"EDIT"},
+  formType:DYNAMIC|CUSTOM, formViewPath,
+  nodeHandleOptions:{candidate?,historyFirst?,autoSkip?,accountChecked?,accountDisabled?}, auditMenu:{allowJump?,allowReturn?}}
+  （P1-C 扩展：formType=CUSTOM 时前端详情表单区改用 formViewPath 路由/内嵌 + formData 只读展示；DYNAMIC 走表单快照）
+  （P2 扩展：allowedOps=我当前任务可用操作(节点白名单∩权限)；isAdmin=我有 wf:instance:admin；jumpTargets=可跳转/驳回办理节点；comments=沟通线程；readByMe=我是否已阅；currentHandlers=我所在节点除我以外的活动处理人，供减签勾选）
+  （P3 扩展：subInstances=CallActivity 子流程入口(活动+历史)；predictable=运行中可预测；resurrectable=已结束可唤醒；seals=已用电子章；bizTime=穿越时空业务时间(本地时区)；nodeFormPerms=当前节点表单字段权限，前端 FormRenderer 按此显隐/只读）
+  （P2/P3 透传：nodeHandleOptions=当前节点办理选项(候选/历史优先/自动跳过/账户勾选/限制范围等)，前端渲染开关态；auditMenu=当前节点审核菜单声明的 JUMP/RETURN 动作，前端据此展示跳转/退回按钮）
+  健壮性：转办/委派/加签/协办/追加节点等选人操作若传入不存在的 userId → 400 业务错误（不静默创建幽灵任务）
+- GET `/api/wf/instances/my?pageNum=&pageSize=` → PageResult<InstanceListItem>（发起人=me）
+- GET `/api/wf/instances/{id}` → InstanceDetail（打开即记抄送已读）
+- POST `/api/wf/instances/{id}/cancel` → InstanceDetail（仅发起人且无节点通过 → CANCELED）
+- POST `/api/wf/instances/{id}/resubmit` {formData?} → InstanceDetail（仅被退回 REJECTED 的实例；可改表单后重新发起，复用同一实例行）
+- GET `/api/wf/instances/cc?pageNum=&pageSize=` → PageResult<CcItem{id,procInstId,title,defName,initiatorName,bizStatus,readFlag,createdAt}>
+
+### 任务
+TaskItem = {taskId,procInstId,instanceTitle,defName,nodeName,initiatorName,createdAt,groupClaim,delegated}
+（groupClaim=待认领的公共池任务；delegated=委派受托中）
+- GET `/api/wf/tasks/todo?pageNum=&pageSize=` → PageResult<TaskItem>（assignee=me 或 我为候选/代理 的活动任务；已转办/委派出去的不再出现）
+- GET `/api/wf/tasks/done?pageNum=&pageSize=` → PageResult<TaskItem>（me 已完成的历史任务）
+- POST `/api/wf/tasks/{id}/approve` {comment?,attachments?:number[],formData?} → addComment + wf_operation(APPROVE) + complete（formData 可改表单/影响后续条件；委派受托人 approve = resolveTask 回委派人；票签节点自动记赞成票）
+- POST `/api/wf/tasks/{id}/reject` {comment,target:"PREV"|"START"|"NODE",targetNodeId?,resumeStrategy?:"CONTINUE"|"BACK"} → wf_operation(REJECT)；START=退回发起人（实例 REJECTED 可重提）；PREV=退回上一步；NODE=任意指定节点（ChangeActivityState.moveActivityIdsToSingleActivityId）；resumeStrategy CONTINUE=被驳节点重审后跳回驳回点续走 / BACK=重走中间路径(默认)
+  仅任务当前办理人（或候选/代理人）可操作，否则 403
+
+### 任务操作（P2 中国式全家桶，前缀 /api/wf/tasks/{id}）
+所有选人入参统一 OrgRef `{kind:"USER"|"DEPT"|"ROLE", id:<number>}`；均写 wf_operation 审计 + 通知。
+- POST `add-sign` {mode:"PRE"|"POST",users:[OrgRef],comment?} → 加签（**串行链**，wf_add_sign）：把当前任务沿链依次流转，不复用节点多实例（避免 ANY 或签退化）。**PRE**=被加签人先审→回到原审批人→原审批人审→下一节点（顺序 B→A→next）；**POST**=原审批人先审→被加签人审→下一节点（顺序 A→B→next）。链上每步照写 wf_operation + 通知；末位审批才真正推进节点
+- POST `counter-sign` {users:[OrgRef],comment?} → 并签：追加平行审批人
+- POST `reduce-sign` {removeUserIds:[number]} → 减签：移除本节点未办理的其他审批人（deleteMultiInstanceExecution，剩余≥1）
+- POST `transfer` {user:OrgRef,comment?} → 转办：setOwner(我)+setAssignee(对方)，责任转移
+- POST `delegate` {user:OrgRef,comment?} → 委派：delegateTask，对方 approve 后 resolve 回我，我再提交
+- POST `retrieve` {comment?} → 拿回：我已办任务在下一节点无人处理前取回重办（{id}=我的历史任务 id）
+- POST `assist` {users:[OrgRef],comment} → 协办/征求意见：建独立 ad-hoc 意见任务，不参与主流程完成条件
+- POST `complete-adhoc` {comment?} → 办理协办/追加节点的 ad-hoc 任务（意见汇入时间线）
+- POST `communicate` {toUserIds:[number],content} → 沟通留言（不影响流转，通知对方，入详情 comments 线程）
+- POST `read` → 已阅标记（wf_task_read）
+- POST `claim` / POST `unclaim` → 认领 / 退回公共池（分组 CLAIM 节点候选任务）
+
+### 流转控制 + 治理（前缀 /api/wf）
+- POST `/api/wf/instances/{id}/jump` {targetNodeId,comment?}【P:wf:instance:admin】→ 管理员跳转到任意办理节点
+- POST `/api/wf/instances/{id}/terminate` {comment?}【P:wf:instance:admin】→ 终止实例（biz_status=TERMINATED）
+- POST `/api/wf/instances/{id}/urge` {comment?} → 催办当前处理人（通知+记录，可重复）
+- POST `/api/wf/instances/{id}/append-node` {afterNodeId?,name,assignees:[OrgRef],multiMode?} → 追加节点：实例级动态加处理人（ad-hoc，不改定义）
+- GET `/api/wf/instances/admin?status=&keyword=&pageNum=&pageSize=`【P:wf:instance:admin】→ PageResult<InstanceListItem> 管理员全实例检索
+- POST `/api/wf/handover` {fromUserId,toUserId,comment?}【P:wf:instance:admin】→ Integer 离职交接：批量转办某人全部在途任务，返回转交条数
+
+### 流程监控（管理员视角，供「流程监控」页）
+- GET `/api/wf/monitor/overview`【P:wf:instance:admin】→ 运行态总览（wf_instance_ext 聚合）
+  `{total,running,approved,rejected,canceled,terminated,timeout,byDef:[{defCode,defName,count}]}`
+  （total=非草稿实例总数；timeout=当前有超时活动任务的实例数，按超时扫描器口径读节点 oa:timeout 配置，无则 0；byDef=按流程定义维度实例数）
+- GET `/api/wf/monitor/bottleneck`【P:wf:instance:admin】→ 节点瓶颈分析（ACT_HI_ACTINST 聚合 userTask 已完成活动）
+  `[{defCode,defName,nodeId,nodeName,avgDurationMs,count}]`（各 userTask 节点平均停留时长 avg(duration_) + 样本数，按 avgDurationMs 降序找最慢节点）
+
+### 暂存草稿（P2-C，biz_status=DRAFT，不启动引擎）
+- POST `/api/wf/instances/draft` {defCode,formData,title?} → InstanceListItem（proc_inst_id 用 DRAFT- 占位）
+- PUT `/api/wf/instances/{id}/draft` {formData?,title?} → InstanceListItem（仅 DRAFT + 本人）
+- POST `/api/wf/instances/{id}/submit` {formData?} → InstanceDetail（激活：启动引擎，DRAFT→RUNNING）
+- GET `/api/wf/instances/drafts?pageNum=&pageSize=` → PageResult<InstanceListItem>（我的草稿）
+
+### 委托规则（P2-D 代理预设）
+DelegateRuleItem = {id,ownerId,delegateToId,delegateToName,defCode,startDate,endDate,enabled,createdAt}
+- GET `/api/wf/delegate-rules` → [DelegateRuleItem]（owner=me）
+- POST `/api/wf/delegate-rules` {delegateToId,defCode?(null=全部),startDate?,endDate?,enabled?} → 命中时任务创建自动给受托人挂 candidate，双方可见可办，任一办结即结束
+- DELETE `/api/wf/delegate-rules/{id}`
+
+### 定义侧引擎增强（P2-E，DINGTALK 节点属性，转换器生成，无新增运行时 API）
+- 票签 VOTE：approval 节点 `multiMode:"VOTE"` + `voteConfig:{threshold:0.5,weights?:{userId:weight}}` → 并行多实例 + completionCondition `wfVote.pass(execution)`（投票记录 wf_vote，过阈值提前完成、剩余票收敛）：
+  - **无 weights → 按比例**（每人等权）：赞成人数 / 总办理人数(多实例 nrOfInstances) > threshold 才通过（非旧的「一票即通过」）；
+  - **有 weights → 按权重**：赞成权重和 > threshold × 总权重
+- 包容分支：`type:"inclusive"` 或 condition 节点 `gatewayType:"INCLUSIVE"`（缺省 EXCLUSIVE）→ inclusiveGateway，满足的多分支都走并汇聚，全不满足走 default
+- 并行分支：`{id,type:"parallel",name,branches:[{steps:[StepNode...]}...]}` → parallelGateway fork（无条件全激活各分支）→ parallelGateway join 汇聚（全部到达才继续）
+- 自动通过：`{id,type:"autoApprove",name}` → serviceTask `${wfAutoDecide}`，到达即记 wf_operation.action=AUTO_APPROVE 并放行后续节点
+- 自动拒绝：`{id,type:"autoReject",name}` → serviceTask `${wfAutoDecide}` 记 action=AUTO_REJECT 并把实例置 REJECTED，随后 terminateEndEvent 终止整实例（其后节点不可达；发起即终止的边界由 InstanceService 依 AUTO_REJECT 操作修正落库状态）
+- 分组策略：approval 节点 `groupMode:"CLAIM"` → candidateUsers 运行时求值，任务入池待 claim；缺省(或 ALL)=展开成员进多实例
+- 超时：approval 节点 `timeout:{hours|seconds,action:"REMIND"|"AUTO_PASS"|"AUTO_REJECT",remindEvery?(秒)}` → 服务层扫描器(WfTimeoutScheduler，等价 timer)驱动，REMIND 按 remindEvery 重复提醒
+- 操作白名单：approval 节点 `allowedOps:[...]` → 详情 allowedOps 据此约束（缺省全集）；**服务端强制**：白名单外的 approve/reject/transfer/delegate/addSign/counterSign/reduceSign/assist 操作直接 403
+- WEBHOOK 事件：`webhook` 节点 `{type:"webhook",name,url}` → serviceTask delegateExpression `wfWebhookDelegate`，异步 POST 实例上下文 JSON({event,procInstId,nodeId,defCode,title,bizStatus})，失败重试+日志，不阻塞流转
+- 通知渠道 SPI：NotifyChannel（内置 STATION 站内 wf_notify + LOG 日志；短信/邮件/微信/钉钉实现接口注册 bean 即自动纳入 NotifyDispatcher 分发）
+
+### 通知（站内收件箱 wf_notify，type=TODO 待办到达 / RESULT 结果 / URGE 催办 / CC 抄送）
+NotifyItem = {id,type,title,content,procInstId,readFlag,createdAt}
+- GET `/api/wf/notifies?pageNum=&pageSize=` → PageResult<NotifyItem>
+- GET `/api/wf/notifies/unread-count` → Long
+- POST `/api/wf/notifies/{id}/read`；POST `/api/wf/notifies/read-all`
+
+### P3 高级能力（前缀 /api/wf）
+运行时端点：
+- POST `/api/wf/instances/{id}/predict` → `{path:[{nodeId,nodeName,type,assignees:[{name}]}], note?}` 流程预测：按当前表单值/流程变量静态 DFS 走 designerJson，条件分支离线求值（结构化条件，白名单操作符），输出后续未完成节点 + 预计审批人（离线试算 ORG/LEADER/FORM_FIELD/INITIATOR），不落库；BPMN 专业模式返回空 path + note
+- POST `/api/wf/instances/{id}/resurrect` {nodeId,comment?} → InstanceDetail 唤醒：仅已结束实例(APPROVED/REJECTED/TERMINATED/CANCELED)按快照(form_data)重建新实例并 ChangeActivityState 定位到 nodeId 重审，复用同一 ext 行(proc_inst_id 更新)，ext.resurrect_from 记原实例，通知发起人
+- POST `/api/wf/instances`（增强）可选 `bizTime`(ISO 日期 yyyy-MM-dd 或带时区日期时间) → 穿越时空：ext.biz_time + 首个 SUBMIT 操作 biz_time 记录；详情 bizTime 按服务器本地时区展示，引擎真实时间不动
+- POST `/api/wf/instances/{id}/adhoc-task` {name,assignees:[OrgRef]} → 动态构建 ad-hoc 任务（taskService.newTask，不体现在流程图、不参与主流程完成条件，服务层管理；办理走 tasks/{id}/complete-adhoc）
+
+电子章管理（SealItem = {id,name,imageFileId,imageUrl,enabled,createdAt}；imageUrl=/api/infra/files/{imageFileId}/download）：
+- GET `/api/wf/seals` → [SealItem]（登录即可）
+- POST `/api/wf/seals` {name,imageFileId?,enabled?}【P:wf:def:edit】→ SealItem
+- PUT `/api/wf/seals/{id}` {name?,imageFileId?,enabled?}【P:wf:def:edit】→ SealItem
+- DELETE `/api/wf/seals/{id}`【P:wf:def:edit】
+
+打印/盖章：无需新端点，前端用 GET instances/{id}（表单快照 + timeline + seals）渲染套打页 + 浏览器打印。
+
+### 定义侧 P3 节点类型（DINGTALK designerJson，JsonToBpmnConverter 生成，无新增运行时 API）
+- 子流程 `{type:"subprocess",name,defCode,async:bool,paramMap?:{子变量:父字段}}` → CallActivity(calledElement=defCode,inheritVariables=true,inParameters=paramMap)；**同步** async=false 主流程等子流程结束再继续；**异步** async=true 并行网关旁路(fork→子流程分支到独立 end + 主流程分支继续，不阻塞)。被调子流程需先部署。详情 subInstances 展示父子联动
+- 定时 `{type:"timer",name,mode:"duration"|"date",value}` → intermediateCatchEvent(timerEventDefinition，duration=ISO-8601 如 PT5S / date=时间点)，AsyncExecutor 驱动到期进入下一步
+- 触发 `{type:"trigger",name,triggerType:"IMMEDIATE"|"TIMER",handler?,webhookUrl?,config?,timer?}` → serviceTask delegateExpression `wfTriggerDelegate`：handler 命中注册的 `WfTrigger` bean(可写流程变量影响路由)，否则 webhookUrl 异步 POST；TIMER 前置一个 timer 事件。内置示例触发器 bean `wfEchoTrigger`。SPI：实现 `WfTrigger` 注册 bean，节点 handler 指向 bean 名
+- AI 审批 `{type:"ai",name,model?,systemPrompt?,formContext?:[字段],outputMap?:{approve/reject/route→变量}}` → serviceTask delegateExpression `wfAiApprovalDelegate`：组装表单上下文交 `AiApprovalProvider` 决策 → 写 wf_operation(actor=AI,action=AI_APPROVE,意见) + 按 outputMap 设流程变量(供后续排它网关路由)。**AI SPI**：默认实现 enabled 且有 key 走 OpenAI 兼容 chat completions；无 key 降级规则模拟并在意见明示「AI模拟」。配置 `oa.ai.{enabled,base-url,api-key,model,timeout-seconds}`(默认 enabled=false)
+- 节点表单字段权限 `approval` 节点 `formPerms:{field:"HIDDEN"|"READ"|"EDIT"}` → 存扩展元素，详情/待办按当前节点返回 nodeFormPerms，前端 FormRenderer 按此显隐/只读
+
+### 种子（V7 + WorkflowInitializer 启动部署）
+- 表单定义「请假申请单」(code=leave,v1,PUBLISHED)：请假类型 select / 开始日期 / 结束日期 / 天数 number / 事由 textarea
+- 流程定义「请假审批」(defCode=leave_approval,DINGTALK)：发起 → 部门经理(LEADER level1,ANY) → 条件(天数>3 → 总经理 admin，否则跳过) → 抄送 hr(zhangsan) → 结束
+  （V7 将请假发起人所在「人事行政部」leader 设为王经理 manager，使 LEADER level1 解析出与总经理 admin 不同的审批人）
+- 权限点：workflow(MENU)、wf:def:edit(BUTTON)、wf:instance:admin(BUTTON，跳转/终止/交接/管理员列表) 授予 ADMIN
+- P2 业务表：wf_delegate_rule(委托规则)、wf_task_read(已阅,V10)、wf_vote(票签权重,V11)、wf_add_sign(加签串行链,V12)；测试用户 lisi(李四)/wangwu(王五) 主任职人事行政部(V9)
+- P3(V13)：wf_instance_ext 增 biz_time(穿越时空)/resurrect_from(唤醒来源)、wf_operation 增 biz_time；电子章沿用 V7 的 wf_seal；子流程/定时/触发/AI 为纯 BPMN 转换无新表。AI 配置 oa.ai.*(application.yml，默认 enabled=false)

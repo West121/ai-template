@@ -1,0 +1,691 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useNavigate, useParams } from "react-router-dom"
+import Viewer from "bpmn-js/lib/NavigatedViewer"
+import "bpmn-js/dist/assets/diagram-js.css"
+import "bpmn-js/dist/assets/bpmn-js.css"
+import "bpmn-js/dist/assets/bpmn-font/css/bpmn.css"
+import {
+  ArrowLeft,
+  Bell,
+  CloudOff,
+  ExternalLink,
+  FileCode2,
+  GitBranch,
+  History,
+  MessagesSquare,
+  RotateCw,
+  Send,
+  ShieldAlert,
+  Undo2,
+  ZoomIn,
+  ZoomOut,
+  Scan,
+  Maximize2,
+  Minimize2,
+} from "lucide-react"
+import { toast } from "sonner"
+import { cn } from "@/lib/utils"
+import { isDarkMode } from "@/lib/theme"
+import { useAppStore } from "@/stores/app-store"
+import { useAuthStore } from "@/stores/auth-store"
+import { api, NetworkError } from "@/lib/api"
+import { FormRenderer } from "@/components/form-renderer"
+import { Modal } from "@/components/modal"
+import { Drawer } from "@/components/drawer"
+import { WfOpBar } from "@/components/wf-op-dialogs"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  parseFormData,
+  parseFormSchema,
+  WF_STATUS_META,
+  wfFormatTime,
+  type WfComment,
+  type WfFormData,
+  type WfHighlight,
+  type WfTimelineItem,
+} from "@/types/workflow"
+import type { WfInstanceDetailP3 } from "@/types/workflow-p3"
+import { SubInstanceLinks, WfP3Bar } from "./wf-p3"
+import { SealStrip } from "./wf-print"
+import { DingtalkTrack } from "./wf-dingtalk-track"
+
+/* ================= 跟踪图：bpmn-js Viewer + 高亮 ================= */
+
+interface ViewerCanvas {
+  zoom(scale?: number | "fit-viewport", center?: unknown): number
+  addMarker(elementId: string, marker: string): void
+}
+
+type ViewerInstance = InstanceType<typeof Viewer> & {
+  get(name: "canvas"): ViewerCanvas
+}
+
+/** 高亮标记样式：completed 绿色描边、active 主题色脉冲 */
+const TRACK_CSS = `
+.wf-track .wf-node-completed .djs-visual > :first-child {
+  stroke: #10b981 !important;
+  stroke-width: 2px !important;
+}
+.wf-track .wf-node-completed .djs-visual > :first-child:not(path) {
+  fill: color-mix(in srgb, #10b981 8%, transparent) !important;
+}
+.wf-track .wf-node-active .djs-visual > :first-child {
+  stroke: var(--primary) !important;
+  stroke-width: 2.5px !important;
+  animation: wf-track-pulse 1.6s ease-in-out infinite;
+}
+.wf-track .wf-node-active .djs-visual > :first-child:not(path) {
+  fill: color-mix(in srgb, var(--primary) 10%, transparent) !important;
+}
+@keyframes wf-track-pulse {
+  0%, 100% { stroke-opacity: 1; }
+  50% { stroke-opacity: 0.35; }
+}
+`
+
+function BpmnTrack({ xml, highlight }: { xml: string; highlight?: WfHighlight }) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const viewerRef = useRef<ViewerInstance | null>(null)
+  const [renderError, setRenderError] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
+  const dark = isDarkMode(useAppStore((s) => s.themeMode))
+
+  useEffect(() => {
+    if (!containerRef.current) return
+    const viewer = new Viewer({
+      container: containerRef.current,
+      bpmnRenderer: dark
+        ? { defaultFillColor: "#232a3b", defaultStrokeColor: "#c3cbdc", defaultLabelColor: "#c3cbdc" }
+        : { defaultFillColor: "#ffffff", defaultStrokeColor: "#22242a", defaultLabelColor: "#22242a" },
+    }) as ViewerInstance
+    viewerRef.current = viewer
+
+    let disposed = false
+    void viewer
+      .importXML(xml)
+      .then(() => {
+        if (disposed) return
+        const canvas = viewer.get("canvas")
+        canvas.zoom("fit-viewport")
+        for (const id of highlight?.completed ?? []) {
+          try {
+            canvas.addMarker(id, "wf-node-completed")
+          } catch {
+            /* 高亮的节点可能不在图上（如子流程），忽略 */
+          }
+        }
+        for (const id of highlight?.active ?? []) {
+          try {
+            canvas.addMarker(id, "wf-node-active")
+          } catch {
+            /* ignore */
+          }
+        }
+      })
+      .catch(() => {
+        if (!disposed) setRenderError(true)
+      })
+
+    return () => {
+      disposed = true
+      viewerRef.current = null
+      viewer.destroy()
+    }
+  }, [xml, highlight, dark])
+
+  // 全屏切换后视图尺寸变化，重新适配
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+    const t = setTimeout(() => {
+      try {
+        viewer.get("canvas").zoom("fit-viewport")
+      } catch {
+        /* ignore */
+      }
+    }, 60)
+    return () => clearTimeout(t)
+  }, [fullscreen])
+
+  const zoomBy = useCallback((factor: number) => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+    const canvas = viewer.get("canvas")
+    const cur = canvas.zoom()
+    canvas.zoom(Math.min(4, Math.max(0.2, cur * factor)))
+  }, [])
+
+  const fit = useCallback(() => {
+    viewerRef.current?.get("canvas").zoom("fit-viewport")
+  }, [])
+
+  if (renderError) {
+    return (
+      <div className="flex h-105 flex-col items-center justify-center gap-2 text-muted-foreground">
+        <ShieldAlert className="size-8 opacity-40" />
+        <span className="text-sm">流程图解析失败</span>
+      </div>
+    )
+  }
+
+  const toolbar = (
+    <div className="absolute top-3 right-3 z-10 flex items-center gap-1 rounded-md border bg-card/90 p-1 shadow-sm backdrop-blur">
+      <Button variant="ghost" size="icon" className="size-7" title="放大" onClick={() => zoomBy(1.2)}>
+        <ZoomIn className="size-4" />
+      </Button>
+      <Button variant="ghost" size="icon" className="size-7" title="缩小" onClick={() => zoomBy(1 / 1.2)}>
+        <ZoomOut className="size-4" />
+      </Button>
+      <Button variant="ghost" size="icon" className="size-7" title="适应画布" onClick={fit}>
+        <Scan className="size-4" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-7"
+        title={fullscreen ? "退出全屏" : "全屏查看"}
+        onClick={() => setFullscreen((v) => !v)}
+      >
+        {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+      </Button>
+    </div>
+  )
+
+  const legend = (
+    <div className="pointer-events-none absolute bottom-3 right-3 flex items-center gap-4 rounded-md border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur">
+      <span className="flex items-center gap-1.5">
+        <span className="size-2.5 rounded-sm border-2 border-emerald-500" /> 已完成
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className="size-2.5 animate-pulse rounded-sm border-2 border-primary" /> 进行中
+      </span>
+      <span className="hidden sm:inline opacity-70">· 滚轮缩放 · 拖拽平移</span>
+    </div>
+  )
+
+  return (
+    <div
+      className={cn(
+        "wf-track relative",
+        fullscreen && "fixed inset-0 z-50 flex flex-col bg-background p-4",
+      )}
+    >
+      <style>{TRACK_CSS}</style>
+      <div
+        key={dark ? "dark" : "light"}
+        ref={containerRef}
+        className={cn(
+          "w-full rounded-md border bg-white dark:bg-background",
+          fullscreen ? "flex-1" : "h-105",
+        )}
+      />
+      {toolbar}
+      {legend}
+    </div>
+  )
+}
+
+/* ================= 审批记录时间线 ================= */
+
+const TIMELINE_META: Record<string, { label: string; dot: string }> = {
+  START: { label: "发起申请", dot: "bg-blue-500" },
+  CREATE: { label: "发起申请", dot: "bg-blue-500" },
+  SUBMIT: { label: "发起申请", dot: "bg-blue-500" },
+  APPROVE: { label: "同意", dot: "bg-emerald-500" },
+  REJECT: { label: "驳回", dot: "bg-rose-500" },
+  RESUBMIT: { label: "重新提交", dot: "bg-blue-500" },
+  CANCEL: { label: "撤销申请", dot: "bg-gray-400" },
+  TERMINATE: { label: "终止流程", dot: "bg-orange-500" },
+  CC: { label: "抄送", dot: "bg-violet-500" },
+  URGE: { label: "催办", dot: "bg-amber-500" },
+  COMMENT: { label: "意见", dot: "bg-slate-400" },
+  AI_APPROVE: { label: "AI 通过", dot: "bg-emerald-500" },
+  AI_REJECT: { label: "AI 拒绝", dot: "bg-rose-500" },
+}
+
+function Timeline({ items }: { items: WfTimelineItem[] }) {
+  if (items.length === 0) {
+    return <div className="py-6 text-center text-sm text-muted-foreground">暂无流转记录</div>
+  }
+  return (
+    <div className="space-y-0 py-1">
+      {items.map((item, index) => {
+        const meta = TIMELINE_META[item.action] ?? { label: item.action, dot: "bg-muted-foreground/30" }
+        return (
+          <div key={index} className="relative flex gap-3 pb-6 last:pb-0">
+            {index < items.length - 1 && <div className="absolute left-[5px] top-4 h-full w-px bg-border" />}
+            <div className={cn("mt-1 size-[11px] shrink-0 rounded-full", meta.dot)} />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium">{meta.label}</span>
+                {item.nodeName && (
+                  <Badge variant="outline" className="h-5 px-1.5 text-[11px] font-normal text-muted-foreground">
+                    {item.nodeName}
+                  </Badge>
+                )}
+              </div>
+              <div className="mt-0.5 text-xs text-muted-foreground">
+                {item.actorName ?? "系统"} · {wfFormatTime(item.createdAt)}
+              </div>
+              {item.comment && <div className="mt-1 rounded bg-muted/60 px-2 py-1 text-xs">{item.comment}</div>}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/* ================= 沟通线程 ================= */
+
+function CommentThread({ items }: { items: WfComment[] }) {
+  if (items.length === 0) {
+    return <div className="py-6 text-center text-sm text-muted-foreground">暂无沟通记录</div>
+  }
+  return (
+    <div className="space-y-3 py-1">
+      {items.map((item, index) => (
+        <div key={index} className="rounded-lg border bg-muted/30 px-3 py-2">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">{item.fromName ?? "系统"}</span>
+            <span>{wfFormatTime(item.createdAt)}</span>
+          </div>
+          <div className="mt-1 text-sm">{item.content}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/* ================= 页面 ================= */
+
+export default function WorkflowInstanceDetailPage() {
+  const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
+  const offline = useAuthStore((s) => s.offline)
+  const userId = useAuthStore((s) => s.userId)
+
+  const [detail, setDetail] = useState<WfInstanceDetailP3 | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  // 操作弹窗
+  const [canceling, setCanceling] = useState(false)
+  const [acting, setActing] = useState(false)
+  // 流程跟踪侧边栏
+  const [trackOpen, setTrackOpen] = useState(false)
+
+  const load = useCallback(async () => {
+    if (!id) return
+    setLoading(true)
+    setLoadError(null)
+    try {
+      const data = await api<WfInstanceDetailP3>(`/api/wf/instances/${id}`)
+      setDetail(data)
+    } catch (err) {
+      if (err instanceof NetworkError) setLoadError("network")
+      else setLoadError(err instanceof Error ? err.message : "加载失败")
+    } finally {
+      setLoading(false)
+    }
+  }, [id])
+
+  useEffect(() => {
+    if (offline) {
+      setLoading(false)
+      setLoadError("network")
+      return
+    }
+    void load()
+  }, [load, offline])
+
+  // 打开详情自动标记已阅（仅当有我的任务且未阅；后端未就绪时静默失败）
+  useEffect(() => {
+    if (!detail?.myTaskId || detail.readByMe) return
+    void api(`/api/wf/tasks/${detail.myTaskId}/read`, { method: "POST" }).catch(() => {
+      /* 已阅接口未就绪：忽略 */
+    })
+  }, [detail?.myTaskId, detail?.readByMe])
+
+  const formSchema = useMemo(() => parseFormSchema(detail?.formSchema), [detail?.formSchema])
+  const formData = useMemo(() => parseFormData(detail?.formData), [detail?.formData])
+  // 通知：从流转记录中筛出抄送 / 催办等通知类事件
+  const notifyItems = useMemo(
+    () => (detail?.timeline ?? []).filter((t) => ["CC", "URGE"].includes(t.action ?? "")),
+    [detail?.timeline],
+  )
+
+  const isInitiator = detail != null && userId != null && detail.initiatorId === userId
+  /** 被驳回到发起人：实例状态为 REJECTED 且我是发起人 → 表单可编辑 + 重新提交 */
+  const resubmitMode = detail?.bizStatus === "REJECTED" && isInitiator
+
+  const statusMeta = detail ? WF_STATUS_META[detail.bizStatus] : undefined
+
+  /* ---------- 操作 ---------- */
+
+  const doCancel = useCallback(async () => {
+    if (!detail) return
+    setActing(true)
+    try {
+      await api(`/api/wf/instances/${detail.id}/cancel`, { method: "POST" })
+      toast.success("流程已撤销")
+      setCanceling(false)
+      void load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "撤销失败")
+    } finally {
+      setActing(false)
+    }
+  }, [detail, load])
+
+  const doResubmit = useCallback(
+    async (data: WfFormData) => {
+      if (!detail) return
+      setActing(true)
+      try {
+        await api(`/api/wf/instances/${detail.id}/resubmit`, {
+          method: "POST",
+          body: JSON.stringify({ formData: data }),
+        })
+        toast.success("已重新提交")
+        void load()
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "提交失败")
+      } finally {
+        setActing(false)
+      }
+    },
+    [detail, load],
+  )
+
+  /* ---------- 渲染 ---------- */
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-24 rounded-xl" />
+        <div className="grid gap-4 lg:grid-cols-5">
+          <Skeleton className="h-96 rounded-xl lg:col-span-2" />
+          <Skeleton className="h-96 rounded-xl lg:col-span-3" />
+        </div>
+      </div>
+    )
+  }
+
+  if (loadError === "network") {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
+          <div className="flex size-12 items-center justify-center rounded-full bg-muted">
+            <CloudOff className="size-5 text-muted-foreground" />
+          </div>
+          <div className="text-sm font-medium">后端服务未启动</div>
+          <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
+            实例详情页已接入真实接口（GET /api/wf/instances/{"{id}"}），启动 server/ 后即可查看表单快照、流程跟踪图与审批记录。
+          </p>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => navigate(-1)}>
+              <ArrowLeft className="size-3.5" /> 返回
+            </Button>
+            <Button size="sm" className="gap-1.5" onClick={() => void load()}>
+              <RotateCw className="size-3.5" /> 重试连接
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (loadError || !detail) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
+          <ShieldAlert className="size-8 text-rose-500/60" />
+          <div className="text-sm">{loadError ?? "实例不存在"}</div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => navigate(-1)}>
+              <ArrowLeft className="size-3.5" /> 返回
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => void load()}>
+              重试
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  const currentNodeNames = (detail.currentNodes ?? [])
+    .map((n) => n.nodeName ?? n.nodeId)
+    .filter(Boolean)
+    .join("、")
+
+  return (
+    <div className="space-y-4">
+      {/* 顶部：标题行 / 元信息行 / 操作栏行 —— 分层避免拥挤 */}
+      <Card className="py-4">
+        <CardContent className="space-y-3 px-4">
+          {/* 标题 + 状态 | 工具（预测/打印/撤销/刷新） */}
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <Button variant="ghost" size="icon" className="size-8 shrink-0" onClick={() => navigate(-1)}>
+                <ArrowLeft className="size-4.5" />
+              </Button>
+              <h1 className="truncate text-base font-semibold">{detail.title}</h1>
+              <Badge variant="outline" className={statusMeta?.className}>
+                {statusMeta?.label ?? detail.bizStatus}
+              </Badge>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <WfP3Bar detail={detail} schema={formSchema} data={formData} onReload={() => void load()} />
+              {detail.canCancel && isInitiator && (
+                <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setCanceling(true)}>
+                  <Undo2 className="size-3.5" /> 撤销
+                </Button>
+              )}
+              <Button variant="ghost" size="icon" className="size-8" title="刷新" onClick={() => void load()}>
+                <RotateCw className="size-4" />
+              </Button>
+            </div>
+          </div>
+          {/* 元信息（与标题对齐） */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pl-10 text-xs text-muted-foreground">
+            <span>流程：{detail.defName}</span>
+            <span>发起人：{detail.initiatorName}</span>
+            <span>发起时间：{wfFormatTime(detail.createdAt)}</span>
+            {detail.bizTime && (
+              <span className="text-amber-600 dark:text-amber-400">业务时间：{wfFormatTime(detail.bizTime)}（穿越时空）</span>
+            )}
+            {detail.endedAt && <span>结束时间：{wfFormatTime(detail.endedAt)}</span>}
+            {currentNodeNames && (
+              <span className="font-medium text-foreground/75">当前节点：{currentNodeNames}</span>
+            )}
+          </div>
+          {/* 操作栏（主决策 + 更多 + 管理，为空时不渲染） */}
+          <div className="pl-10 empty:hidden">
+            <WfOpBar detail={detail} onReload={() => void load()} />
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="space-y-4">
+        {/* 表单信息（全宽） */}
+        <Card>
+          <CardHeader className="pb-0">
+            <CardTitle className="flex items-center justify-between text-sm">
+              <span>表单信息</span>
+              {resubmitMode && (
+                <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-amber-600">
+                  已驳回至发起人，可修改后重新提交
+                </Badge>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {detail.formType === "CUSTOM" ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-2.5 text-sm">
+                  <FileCode2 className="size-4 shrink-0 text-primary" />
+                  <span className="text-muted-foreground">此流程使用自定义表单</span>
+                </div>
+                {detail.formViewPath ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5"
+                    onClick={() => navigate(detail.formViewPath as string)}
+                  >
+                    <ExternalLink className="size-3.5" /> 查看自定义表单
+                  </Button>
+                ) : (
+                  <div className="text-xs text-muted-foreground">未配置查看页路径</div>
+                )}
+                <div className="space-y-1">
+                  <div className="text-xs font-medium text-muted-foreground">表单数据（只读）</div>
+                  <pre className="max-h-72 overflow-auto rounded-lg border bg-muted/40 p-3 text-xs leading-relaxed">
+                    {JSON.stringify(formData, null, 2)}
+                  </pre>
+                </div>
+              </div>
+            ) : formSchema.widgets.length === 0 ? (
+              <div className="flex h-28 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
+                暂无表单快照
+              </div>
+            ) : resubmitMode ? (
+              <FormRenderer
+                widgets={formSchema.widgets}
+                initialValues={formData}
+                submitting={acting}
+                submitLabel={
+                  (
+                    <span className="flex items-center gap-1.5">
+                      <Send className="size-3.5" /> 重新提交
+                    </span>
+                  ) as unknown as string
+                }
+                onSubmit={doResubmit}
+              />
+            ) : (
+              <FormRenderer
+                widgets={formSchema.widgets}
+                initialValues={formData}
+                perms={detail.nodeFormPerms}
+                readOnly
+              />
+            )}
+
+            {/* 电子章展示（按节点盖章记录叠加） */}
+            {detail.seals && detail.seals.length > 0 && (
+              <div className="mt-4 space-y-1.5">
+                <div className="text-xs font-medium text-muted-foreground">电子章</div>
+                <SealStrip seals={detail.seals} />
+              </div>
+            )}
+
+            {/* 子流程入口 */}
+            {detail.subInstances && detail.subInstances.length > 0 && (
+              <div className="mt-4 space-y-1.5">
+                <div className="text-xs font-medium text-muted-foreground">子流程</div>
+                <SubInstanceLinks subInstances={detail.subInstances} />
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* 表单下方：审批记录 / 评论 / 通知 + 流程跟踪按钮（弹侧边栏） */}
+        <Card className="gap-0 py-0">
+          <Tabs defaultValue="timeline">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 pt-3">
+              <TabsList>
+                <TabsTrigger value="timeline" className="gap-1.5">
+                  <History className="size-3.5" /> 审批记录
+                  {detail.timeline?.length ? (
+                    <span className="text-xs text-muted-foreground">({detail.timeline.length})</span>
+                  ) : null}
+                </TabsTrigger>
+                <TabsTrigger value="comments" className="gap-1.5">
+                  <MessagesSquare className="size-3.5" /> 评论
+                  {detail.comments?.length ? (
+                    <span className="text-xs text-muted-foreground">({detail.comments.length})</span>
+                  ) : null}
+                </TabsTrigger>
+                <TabsTrigger value="notify" className="gap-1.5">
+                  <Bell className="size-3.5" /> 通知
+                  {notifyItems.length ? (
+                    <span className="text-xs text-muted-foreground">({notifyItems.length})</span>
+                  ) : null}
+                </TabsTrigger>
+              </TabsList>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mb-2 gap-1.5"
+                disabled={detail.designerType === "DINGTALK" ? !detail.designerJson : !detail.bpmnXml}
+                onClick={() => setTrackOpen(true)}
+              >
+                <GitBranch className="size-3.5" /> 流程跟踪
+              </Button>
+            </div>
+            <TabsContent value="timeline" className="m-0 px-5 py-4">
+              <Timeline items={detail.timeline ?? []} />
+            </TabsContent>
+            <TabsContent value="comments" className="m-0 px-5 py-4">
+              <CommentThread items={detail.comments ?? []} />
+            </TabsContent>
+            <TabsContent value="notify" className="m-0 px-5 py-4">
+              {notifyItems.length === 0 ? (
+                <div className="py-6 text-center text-sm text-muted-foreground">暂无通知记录</div>
+              ) : (
+                <Timeline items={notifyItems} />
+              )}
+            </TabsContent>
+          </Tabs>
+        </Card>
+      </div>
+
+      {/* 流程跟踪侧边栏（点「流程跟踪」按钮弹出，展示 BPMN 跟踪图 + 高亮） */}
+      <Drawer open={trackOpen} onOpenChange={setTrackOpen} title="流程跟踪" width={760}>
+        {detail.designerType === "DINGTALK" && detail.designerJson ? (
+          // 钉钉定义：渲染只读钉钉风格跟踪图（复用 dingtalk 画布布局，按 highlight 高亮节点 id）
+          <DingtalkTrack designerJson={detail.designerJson} highlight={detail.highlight} />
+        ) : detail.bpmnXml ? (
+          <BpmnTrack xml={detail.bpmnXml} highlight={detail.highlight} />
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
+            <GitBranch className="size-8 opacity-30" />
+            <span className="text-sm">暂无流程图</span>
+          </div>
+        )}
+      </Drawer>
+
+      {/* 撤销确认 */}
+      <Modal
+        open={canceling}
+        onOpenChange={(open) => !open && !acting && setCanceling(false)}
+        title="撤销流程"
+        description={detail.title}
+        width={420}
+        resizable={false}
+        fullscreenable={false}
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setCanceling(false)} disabled={acting}>
+              取消
+            </Button>
+            <Button variant="destructive" onClick={() => void doCancel()} disabled={acting}>
+              {acting ? "撤销中…" : "确认撤销"}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-muted-foreground">
+          撤销后流程立即终止，状态记为「已撤销」。确定要撤销这条申请吗？
+        </p>
+      </Modal>
+    </div>
+  )
+}
