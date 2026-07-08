@@ -279,8 +279,31 @@ function NodeConfigPanel({
   element: BpmnElement
   formFields: FormFieldOption[]
 }) {
-  const cfg = readNodeConfig(element.businessObject as unknown as { $type: string })
   const isCc = element.type === "bpmn:Task"
+
+  // 服务 / AI 节点（bpmn:ServiceTask）：无办理人概念，共享面板无对应 nodeType；仅配名称，
+  // 避免误用「审批人规则」面板（模型/提示词/输出映射等详细配置暂在仿钉钉设计器维护）。
+  if (element.type === "bpmn:ServiceTask") {
+    return (
+      <div className="flex h-full flex-col gap-3 p-3.5">
+        <div className="text-sm font-semibold">服务 / AI 节点属性</div>
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">节点名称</Label>
+          <Input
+            value={(element.businessObject.name as string) ?? ""}
+            onChange={(e) => modeling.updateProperties(element, { name: e.target.value })}
+            placeholder="请输入节点名称"
+            className="h-8"
+          />
+        </div>
+        <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+          服务 / AI 节点无办理人；模型 / 提示词 / 输出映射等详细配置暂在仿钉钉设计器维护。
+        </p>
+      </div>
+    )
+  }
+
+  const cfg = readNodeConfig(element.businessObject as unknown as { $type: string })
 
   // 本流程其它 UserTask（供「指定节点办理人」来源选择），排除当前节点自身
   const others = modeler

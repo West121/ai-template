@@ -16,6 +16,7 @@ import type {
   AllowedOp,
   AssigneeRule,
   BranchCondition,
+  ConditionItem,
   ConditionOperator,
   EmptyStrategy,
   HandleOptions,
@@ -296,10 +297,15 @@ const NUMERIC_RE = /^-?\d+(\.\d+)?$/
 /** 合法字段名：与 server ConditionCompiler#FIELD 一致——非法字段跳过，避免产出无效 UEL 并杜绝表达式注入面 */
 const FIELD_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
+/** UEL 字符串字面量：始终单引号包裹并转义反斜杠/单引号 */
+function uelString(value: string): string {
+  return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`
+}
+
 /** UEL 字面量：数值不加引号；否则单引号包裹并转义反斜杠/单引号（镜像 ConditionCompiler#literal） */
 function uelLiteral(value: string): string {
   if (NUMERIC_RE.test(value)) return value
-  return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`
+  return uelString(value)
 }
 
 /**
@@ -317,19 +323,68 @@ function compileUel(cond: BranchCondition): string {
     // 也在未来若放开字段自由输入时封堵 UEL 注入面（与 server ConditionCompiler 的 FIELD 校验一致）
     .filter((it) => FIELD_RE.test(it.field ?? ""))
     .map((it) => {
-      const v = uelLiteral(it.value)
-      if (it.operator === "contains") return `${it.field}.contains(${v})`
-      if (it.operator === "notContains") return `!${it.field}.contains(${v})`
-      return `${it.field} ${OP_UEL[it.operator]} ${v}`
+      // contains/notContains 参数必须是字符串（String.contains 收 CharSequence），即使值是数字也加引号
+      if (it.operator === "contains") return `${it.field}.contains(${uelString(it.value)})`
+      if (it.operator === "notContains") return `!${it.field}.contains(${uelString(it.value)})`
+      return `${it.field} ${OP_UEL[it.operator]} ${uelLiteral(it.value)}`
     })
   if (!parts.length) return ""
   return "${" + parts.join(join) + "}"
 }
 
-/** 读取 SequenceFlow 的结构化条件（`oa:Condition` JSON）；未配置时返回 undefined，由调用方兜底默认值 */
+/** UEL 运算符 → 结构化（compileUel 的反向映射；顺序无关，正则已区分 >= 与 >） */
+const UEL_OP: Record<string, ConditionOperator> = {
+  "==": "eq", "!=": "ne", ">=": "gte", "<=": "lte", ">": "gt", "<": "lt",
+}
+
+/** 去掉 UEL 字符串字面量的单引号并反转义 */
+function unquoteUel(v: string): string {
+  const t = v.trim()
+  if (t.length >= 2 && t.startsWith("'") && t.endsWith("'")) {
+    return t.slice(1, -1).replace(/\\'/g, "'").replace(/\\\\/g, "\\")
+  }
+  return t
+}
+
+/**
+ * UEL 反解为结构化条件（兜底：转换器生成或旧定义只有 conditionExpression、无 oa:condition 时，
+ * 回填结构化编辑器）。仅识别本设计器/转换器产出的简单形态：
+ * `${a op b (&& | || c op d)…}`、`field.contains('v')`、`!field.contains('v')`；
+ * 复杂/无法识别表达式返回 undefined（编辑器留空，不强行猜测）。
+ */
+function parseUel(uel: string): BranchCondition | undefined {
+  const m = uel.trim().match(/^\$\{([\s\S]+)\}$/)
+  if (!m) return undefined
+  const body = m[1].trim()
+  const logic: "AND" | "OR" = body.includes("||") ? "OR" : "AND"
+  const parts = body.split(logic === "OR" ? "||" : "&&").map((p) => p.trim()).filter(Boolean)
+  const items: ConditionItem[] = []
+  for (const p of parts) {
+    const cm = p.match(/^(!)?([A-Za-z_][A-Za-z0-9_]*)\.contains\(([\s\S]+)\)$/)
+    if (cm) {
+      items.push({ field: cm[2], operator: cm[1] ? "notContains" : "contains", value: unquoteUel(cm[3]) })
+      continue
+    }
+    const om = p.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*(==|!=|>=|<=|>|<)\s*([\s\S]+)$/)
+    if (om && UEL_OP[om[2]]) {
+      items.push({ field: om[1], operator: UEL_OP[om[2]], value: unquoteUel(om[3]) })
+      continue
+    }
+    return undefined
+  }
+  return items.length ? { logic, items, isDefault: false } : undefined
+}
+
+/**
+ * 读取 SequenceFlow 的结构化条件：优先 `oa:Condition`（JSON）；无则从原生 `conditionExpression`（UEL）
+ * 反解兜底（转换器生成的定义只写了 conditionExpression）；再无则 undefined 由调用方兜底默认值。
+ */
 export function readFlowCondition(bo: BusinessObjectLike | undefined): BranchCondition | undefined {
   if (!bo) return undefined
-  return jsonOf<BranchCondition>(bo, "oa:Condition")
+  const j = jsonOf<BranchCondition>(bo, "oa:Condition")
+  if (j) return j
+  const uel = (bo as { conditionExpression?: { body?: string } }).conditionExpression?.body
+  return uel ? parseUel(uel) : undefined
 }
 
 /**

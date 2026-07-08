@@ -49,15 +49,24 @@ public final class ConditionCompiler {
             if (field == null || !FIELD.matcher(field).matches()) {
                 throw new BusinessException(400, "条件字段非法: " + field);
             }
-            String uelOp = OPS.get(op);
-            if (uelOp == null) {
-                throw new BusinessException(400, "不支持的条件操作符: " + op);
-            }
             if (!first) {
                 sb.append(joiner);
             }
             first = false;
-            sb.append(field).append(' ').append(uelOp).append(' ').append(literal(value));
+            // contains/notContains 编译为字符串方法调用（与前端 BPMN 设计器 compileUel 一致）；
+            // 其余走白名单比较运算符。
+            if ("contains".equals(op) || "notContains".equals(op)) {
+                if ("notContains".equals(op)) {
+                    sb.append('!');
+                }
+                sb.append(field).append(".contains(").append(stringLiteral(value)).append(')');
+            } else {
+                String uelOp = OPS.get(op);
+                if (uelOp == null) {
+                    throw new BusinessException(400, "不支持的条件操作符: " + op);
+                }
+                sb.append(field).append(' ').append(uelOp).append(' ').append(literal(value));
+            }
         }
         sb.append('}');
         return sb.toString();
@@ -81,8 +90,14 @@ public final class ConditionCompiler {
         return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'";
     }
 
+    /** 字符串字面量：始终单引号包裹并转义（contains/notContains 的参数须为字符串） */
+    private static String stringLiteral(JsonNode value) {
+        String s = value == null || value.isNull() ? "" : value.asString("");
+        return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'";
+    }
+
     /** 白名单校验（供单测/校验用途） */
     public static boolean supported(String op) {
-        return OPS.containsKey(op);
+        return OPS.containsKey(op) || "contains".equals(op) || "notContains".equals(op);
     }
 }
