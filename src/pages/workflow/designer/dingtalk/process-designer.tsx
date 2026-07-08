@@ -10,7 +10,8 @@
  * 流程级 base（名称/说明/图标/分类）映射 ProcessDef 顶层列；flowConfig 序列化进 designerJson.flowConfig。
  */
 import { useCallback, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react"
-import { Bot, CircleCheck, CircleX, Plus, Timer, Trash2, Workflow, Zap } from "lucide-react"
+import { Bot, CircleCheck, CircleX, Plus, Timer, Trash2, UserRound, Workflow, Zap } from "lucide-react"
+import { OrgPicker, OrgPickerField, type OrgRef } from "@/components/org-picker"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
@@ -459,7 +460,11 @@ function AdvancedNodePanel({
 
 /* ---------- 主设计器 ---------- */
 
-type Selection = { kind: "process" } | { kind: "step"; id: string } | { kind: "branch"; id: string }
+type Selection =
+  | { kind: "process" }
+  | { kind: "initiator" }
+  | { kind: "step"; id: string }
+  | { kind: "branch"; id: string }
 
 export interface DingtalkProcessDesignerProps {
   steps: StepNode[]
@@ -520,6 +525,9 @@ export function DingtalkProcessDesigner({
       },
       openBranchConfig: (branchId) => {
         setSelection({ kind: "branch", id: branchId })
+      },
+      openInitiatorConfig: () => {
+        setSelection({ kind: "initiator" })
       },
       deleteStep: (stepId) => {
         const next = removeStep(stepsRef.current, stepId)
@@ -615,6 +623,17 @@ export function DingtalkProcessDesigner({
       )
     }
 
+    if (selection.kind === "initiator") {
+      return (
+        <InitiatorPanel
+          scope={flowConfig.start.scope}
+          onScopeChange={(scope) =>
+            onFlowConfigChange({ ...flowConfig, start: { ...flowConfig.start, scope } })
+          }
+        />
+      )
+    }
+
     if (selection.kind === "step") {
       const step = findStep(steps, selection.id)
       if (!step || isBranchContainer(step)) return processHint()
@@ -672,10 +691,61 @@ export function DingtalkProcessDesigner({
           actions={actions}
           renderStepSummary={renderStepSummary}
           renderBranchSummary={renderBranchSummary}
+          renderStartSummary={() => startScopeLabel(flowConfig.start.scope)}
           onPaneClick={() => setSelection({ kind: "process" })}
         />
       </div>
       <aside className="w-[360px] shrink-0 border-l">{panel}</aside>
+    </div>
+  )
+}
+
+/** 启动权限范围 → 节点标签文案 */
+function startScopeLabel(scope: OrgRef[]): string {
+  if (!scope || scope.length === 0) return "全体成员（不限）"
+  const names = scope.map((r) => r.name).filter(Boolean)
+  const head = names.slice(0, 3).join("、")
+  return names.length > 3 ? `${head} 等 ${names.length} 项` : head || `${scope.length} 项`
+}
+
+/** 发起人属性面板（聚焦：启动权限 / 发起人范围）；与流程属性里的启动权限编辑同一份 flowConfig.start.scope */
+function InitiatorPanel({
+  scope,
+  onScopeChange,
+}: {
+  scope: OrgRef[]
+  onScopeChange: (scope: OrgRef[]) => void
+}): ReactNode {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="flex h-full flex-col bg-card">
+      <div className="flex shrink-0 items-center gap-1.5 border-b px-3.5 py-3 text-sm font-semibold">
+        <UserRound className="size-4 text-slate-500" />
+        发起人
+      </div>
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3.5">
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">发起人范围（启动权限）</Label>
+          <OrgPickerField
+            value={scope}
+            multiple
+            placeholder="不限（全体成员可发起）"
+            onOpen={() => setOpen(true)}
+            onRemove={(ref) => onScopeChange(scope.filter((r) => !(r.type === ref.type && r.id === ref.id)))}
+          />
+          <OrgPicker
+            open={open}
+            onOpenChange={setOpen}
+            title="选择可发起人范围"
+            value={scope}
+            onConfirm={onScopeChange}
+          />
+        </div>
+        <p className="rounded-md border border-slate-500/30 bg-slate-500/5 p-3 text-xs text-muted-foreground">
+          留空 = 全体成员均可发起；配置后仅范围内的成员/部门/角色可发起本流程（后端校验，越权发起返回 403）。
+          该设置与「流程属性 · 流程启动 · 启动权限」为同一项。
+        </p>
+      </div>
     </div>
   )
 }

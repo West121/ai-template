@@ -114,6 +114,9 @@ export default function ApprovalFlowDemoPage() {
           return prev
         })
       },
+      openInitiatorConfig: () => {
+        // demo 无流程级配置，发起人节点点击暂不处理
+      },
       deleteStep: (stepId) => {
         setSteps((prev) => removeStep(prev, stepId))
         toast.success("节点已删除")

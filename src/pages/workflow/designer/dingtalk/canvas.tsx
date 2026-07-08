@@ -78,6 +78,8 @@ export interface FlowActions {
   insert: (listId: string, index: number, kind: StepKind) => void
   openStepConfig: (stepId: string) => void
   openBranchConfig: (branchId: string) => void
+  /** 点击发起人节点 → 打开启动权限（发起人范围）配置 */
+  openInitiatorConfig: () => void
   deleteStep: (stepId: string) => void
   deleteBranch: (conditionId: string, branchId: string) => void
   addBranchTo: (conditionId: string) => void
@@ -98,6 +100,8 @@ export type ContainerKind = "condition" | "inclusive" | "parallel"
 interface FlowRenderers {
   renderStepSummary: (step: LeafStep) => ReactNode
   renderBranchSummary: (branch: Branch, isDefault: boolean, containerKind?: ContainerKind) => ReactNode
+  /** 发起人节点摘要（启动权限范围）；默认「全体员工」 */
+  renderStartSummary: () => ReactNode
 }
 
 /** 默认摘要：与原 demo 一致（人名头像 + 或签/会签 / 条件表达式文本） */
@@ -150,6 +154,7 @@ export function defaultBranchSummary(branch: Branch, isDefault: boolean, contain
 const FlowRenderersContext = createContext<FlowRenderers>({
   renderStepSummary: defaultStepSummary,
   renderBranchSummary: defaultBranchSummary,
+  renderStartSummary: () => "全体员工",
 })
 
 /* ---------- 自定义节点 ---------- */
@@ -164,13 +169,18 @@ function NodeHandles() {
 }
 
 function StartNode() {
+  const actions = useFlowActions()
+  const { renderStartSummary } = useContext(FlowRenderersContext)
   return (
-    <div className="w-64 overflow-hidden rounded-lg border bg-card shadow-sm">
+    <div
+      className="w-64 cursor-pointer overflow-hidden rounded-lg border bg-card shadow-sm transition-shadow hover:shadow-md"
+      onClick={() => actions.openInitiatorConfig()}
+    >
       <div className="flex h-8 items-center gap-1.5 bg-slate-500 px-3 text-xs font-medium text-white">
         <UserRound className="size-3.5" />
         发起人
       </div>
-      <div className="px-3 py-2.5 text-sm text-muted-foreground">全体员工</div>
+      <div className="px-3 py-2.5 text-sm text-muted-foreground">{renderStartSummary()}</div>
       <NodeHandles />
     </div>
   )
@@ -405,6 +415,8 @@ export interface ApprovalFlowCanvasProps {
   actions: FlowActions
   renderStepSummary?: (step: LeafStep) => ReactNode
   renderBranchSummary?: (branch: Branch, isDefault: boolean, containerKind?: ContainerKind) => ReactNode
+  /** 发起人节点摘要（启动权限范围）；默认「全体员工」 */
+  renderStartSummary?: () => ReactNode
   /** 点击画布空白处（用于选中流程级属性） */
   onPaneClick?: () => void
 }
@@ -414,13 +426,14 @@ export function ApprovalFlowCanvas({
   actions,
   renderStepSummary = defaultStepSummary,
   renderBranchSummary = defaultBranchSummary,
+  renderStartSummary = () => "全体员工",
   onPaneClick,
 }: ApprovalFlowCanvasProps) {
   const dark = isDarkMode(useAppStore((s) => s.themeMode))
   const { nodes, edges } = useMemo(() => buildFlow(steps), [steps])
   const renderers = useMemo(
-    () => ({ renderStepSummary, renderBranchSummary }),
-    [renderStepSummary, renderBranchSummary],
+    () => ({ renderStepSummary, renderBranchSummary, renderStartSummary }),
+    [renderStepSummary, renderBranchSummary, renderStartSummary],
   )
 
   return (
