@@ -44,6 +44,7 @@ import { AuthImg } from "@/components/auth-img"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { FileUploader, type UploadedFile } from "@/components/file-uploader"
+import { DatePicker } from "@/components/date-picker"
 import { OrgPicker, OrgPickerField, type OrgRef } from "@/components/org-picker"
 import { RecordPicker, RecordPickerField } from "@/components/record-picker"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -430,12 +431,21 @@ function LeafField({ widget }: { widget: FormWidget }) {
           )}
           {widget.type === "date" && (
             <FormControl>
-              <Input
-                type={widget.props?.mode === "datetime" ? "datetime-local" : "date"}
-                disabled={disabled}
-                value={(field.value as string) ?? ""}
-                onChange={field.onChange}
-              />
+              {widget.props?.mode === "datetime" ? (
+                <Input
+                  type="datetime-local"
+                  disabled={disabled}
+                  value={(field.value as string) ?? ""}
+                  onChange={field.onChange}
+                />
+              ) : (
+                <DatePicker
+                  value={(field.value as string) ?? ""}
+                  onChange={field.onChange}
+                  disabled={disabled}
+                  placeholder={widget.placeholder || "选择日期"}
+                />
+              )}
             </FormControl>
           )}
           {(widget.type === "select" || widget.type === "user") &&
@@ -725,12 +735,11 @@ function SubformCell({
               onChange={field.onChange}
             />
           ) : col.type === "date" ? (
-            <Input
-              type="date"
-              disabled={disabled}
-              className="h-8 text-xs"
+            <DatePicker
               value={(field.value as string) ?? ""}
               onChange={field.onChange}
+              disabled={disabled}
+              className="h-8 text-xs"
             />
           ) : (
             <Input
