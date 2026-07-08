@@ -346,7 +346,11 @@ function ruleFromBackend(rule: BackendAssigneeRule): AssigneeRule {
   }
   // 4) 新形状 or 旧组织实体（ORG/ACCOUNT/ROLE/POST/DEPT/LEADER/INITIATOR）
   const out: AssigneeRule = { kind }
-  out.source = (rule.source as AssigneeSource | undefined) ?? defaultSourceForKind(kind)
+  // 仅接受新契约的 source；旧值（如扁平编辑器存的 "SPECIFIED"）不在集合内 → 回落默认来源
+  out.source =
+    rule.source && KNOWN_SOURCES.has(rule.source as AssigneeSource)
+      ? (rule.source as AssigneeSource)
+      : defaultSourceForKind(kind)
   if (rule.refs) out.refs = rule.refs.map(backendToOrgRef)
   if (rule.postName) out.postName = rule.postName
   if (rule.field) out.field = rule.field
@@ -359,6 +363,17 @@ function ruleFromBackend(rule: BackendAssigneeRule): AssigneeRule {
   else if (kind === "LEADER") out.level = 1
   return out
 }
+
+/** 新契约合法来源集合（反序列化时用于剔除旧无效 source，如扁平编辑器的 "SPECIFIED"） */
+const KNOWN_SOURCES = new Set<AssigneeSource>([
+  "FIXED",
+  "FORM_FIELD",
+  "VARIABLE",
+  "FORMULA",
+  "APPLICANT",
+  "PREV_HANDLER",
+  "NODE_HANDLER",
+])
 
 /** 组织实体类型的默认来源：可选人的走 FIXED，快捷类型无来源 */
 function defaultSourceForKind(kind: AssigneeKind): AssigneeSource | undefined {

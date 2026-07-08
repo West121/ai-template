@@ -179,7 +179,9 @@ export function AssigneeRulesEditor({
     if (kind === "LEADER") return updateRule(i, { kind, level: 1 })
     if (kind === "INITIATOR") return updateRule(i, { kind })
     const source = ASSIGNEE_SOURCE_MATRIX[kind][0] // 默认第一个合法来源
-    updateRule(i, { kind, source, ...(source === "FIXED" ? { refs: [] } : {}) })
+    // FIXED：岗位用 postName，其余（账户/角色/部门）用 OrgPicker refs
+    const seed = source === "FIXED" ? (kind === "POST" ? { postName: "" } : { refs: [] }) : {}
+    updateRule(i, { kind, source, ...seed })
   }
 
   const changeSource = (i: number, rule: AssigneeRule, source: AssigneeSource) => {
