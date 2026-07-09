@@ -1953,6 +1953,234 @@ async function mkProcFull(code, designer, extra = {}) {
   check("B-13 CORS 预检 allow-credentials=true", acac === "true", `acac=${acac}`)
 }
 
+/* ---------- 22. 图直译工作流（N-B-01~04）：新 react-flow 设计器 GraphToBpmnConverter 直译 ---------- */
+// 覆盖：图直译部署+排它网关结构化条件路由 / 并行网关 fork-join / Aviator 高级公式条件+expression/eval /
+//       脚本节点(serviceTask impl:script)+test-run / .bpmn 往返(export→import) / 表单字段清单端点。
+// 沿用 call()/check() 与既有账号（admin 部署、zhangsan 发起）；helper mkProc/startInst/findTodo/bizStatus 复用上方定义。
+
+// 辅助：图直译部署（需 wf:def:edit，用 admin），返回原始响应
+async function graphDeploy(key, name, model, formCode) {
+  return call(admin.token, "POST", "/api/wf/models/graph/deploy", { key, name, ...(formCode ? { formCode } : {}), model })
+}
+// 辅助：取实例 highlight.completed（含已完成节点 + 边 id）
+async function hlCompleted(token, iid) {
+  return (await call(token, "GET", `/api/wf/instances/${iid}`)).body?.data?.highlight?.completed ?? []
+}
+
+// --- N-B-01：图直译部署 + 排它网关结构化条件（days>3 大额 / 默认 terminate end）+ 条件路由 ---
+{
+  const key = `graph_cond_${TS}`
+  const model = {
+    schemaVersion: 1, key, name: "图直译条件路由",
+    nodes: [
+      { id: "start", type: "startEvent", name: "发起", position: { x: 80, y: 100 } },
+      { id: "approve", type: "userTask", name: "审批人", position: { x: 220, y: 90 }, props: { assigneeRules: [{ type: "INITIATOR" }], multiMode: "ANY", emptyStrategy: "TO_ADMIN" } },
+      { id: "gw", type: "exclusiveGateway", name: "天数判断", position: { x: 380, y: 100 } },
+      { id: "endBig", type: "endEvent", name: "大额结束", position: { x: 520, y: 60 } },
+      { id: "endDef", type: "endEvent", name: "默认结束", position: { x: 520, y: 160 }, terminate: true },
+    ],
+    edges: [
+      { id: "e1", source: "start", target: "approve" },
+      { id: "e2", source: "approve", target: "gw" },
+      { id: "eBig", source: "gw", target: "endBig", condition: { logic: "AND", items: [{ field: "days", operator: "gt", value: "3" }] } },
+      { id: "eDef", source: "gw", target: "endDef", isDefault: true },
+    ],
+  }
+  const dep = await graphDeploy(key, "图直译条件路由", model)
+  check("N-B-01 图直译部署→PUBLISHED", dep.body?.code === 0 && dep.body.data?.status === "PUBLISHED", JSON.stringify(dep.body?.data ?? dep.body))
+  check("N-B-01 processDefinitionKey==key(BPMN id==def_code)", dep.body?.data?.processDefinitionKey === key, dep.body?.data?.processDefinitionKey)
+  check("N-B-01 出现在可发起列表", ((await call(zhangsan.token, "GET", "/api/wf/startable")).body?.data ?? []).some((s) => s.defCode === key))
+  // days=5 → 审批通过 → 走大额分支 eBig/endBig
+  const tBig = `图直译大额-${TS}`
+  const iBig = await startInst(key, tBig, { days: 5 })
+  check("N-B-01 days=5 发起→RUNNING 当前节点=审批人", iBig?.bizStatus === "RUNNING" && (iBig?.currentNodes ?? []).some((n) => n.nodeName === "审批人"), JSON.stringify(iBig?.currentNodes))
+  const taskBig = await findTodo(zhangsan.token, tBig)
+  check("N-B-01 发起人(INITIATOR)拿到审批待办", !!taskBig)
+  if (taskBig) await call(zhangsan.token, "POST", `/api/wf/tasks/${taskBig.taskId}/approve`, { comment: "大额通过" })
+  check("N-B-01 days=5 审批后→APPROVED", (await bizStatus(zhangsan.token, iBig.id)) === "APPROVED", await bizStatus(zhangsan.token, iBig.id))
+  const hlBig = await hlCompleted(zhangsan.token, iBig.id)
+  check("N-B-01 days=5 高亮走大额(endBig)不走默认(endDef)", hlBig.includes("endBig") && !hlBig.includes("endDef"), JSON.stringify(hlBig))
+  // days=1 → 审批通过 → 走默认分支 eDef/endDef(terminate)
+  const tDef = `图直译默认-${TS}`
+  const iDef = await startInst(key, tDef, { days: 1 })
+  const taskDef = await findTodo(zhangsan.token, tDef)
+  check("N-B-01 days=1 发起人待办", !!taskDef)
+  if (taskDef) await call(zhangsan.token, "POST", `/api/wf/tasks/${taskDef.taskId}/approve`, { comment: "默认通过" })
+  check("N-B-01 days=1 审批后→APPROVED", (await bizStatus(zhangsan.token, iDef.id)) === "APPROVED", await bizStatus(zhangsan.token, iDef.id))
+  const hlDef = await hlCompleted(zhangsan.token, iDef.id)
+  check("N-B-01 days=1 高亮走默认(endDef)不走大额(endBig)", hlDef.includes("endDef") && !hlDef.includes("endBig"), JSON.stringify(hlDef))
+}
+
+// --- N-B-02：并行网关 fork→两审批→join（并发两当前节点，都审批后→APPROVED） ---
+{
+  const key = `graph_par_${TS}`
+  const model = {
+    schemaVersion: 1, key, name: "并行网关演示",
+    nodes: [
+      { id: "start", type: "startEvent", name: "发起", position: { x: 60, y: 120 } },
+      { id: "fork", type: "parallelGateway", name: "并行分叉", position: { x: 180, y: 120 } },
+      { id: "a", type: "userTask", name: "并行审批A", position: { x: 300, y: 60 }, props: { assigneeRules: [{ type: "INITIATOR" }], multiMode: "ANY", emptyStrategy: "TO_ADMIN" } },
+      { id: "b", type: "userTask", name: "并行审批B", position: { x: 300, y: 180 }, props: { assigneeRules: [{ type: "INITIATOR" }], multiMode: "ANY", emptyStrategy: "TO_ADMIN" } },
+      { id: "join", type: "parallelGateway", name: "并行合流", position: { x: 440, y: 120 } },
+      { id: "end", type: "endEvent", name: "结束", position: { x: 560, y: 120 } },
+    ],
+    edges: [
+      { id: "e1", source: "start", target: "fork" },
+      { id: "e2", source: "fork", target: "a" }, { id: "e3", source: "fork", target: "b" },
+      { id: "e4", source: "a", target: "join" }, { id: "e5", source: "b", target: "join" },
+      { id: "e6", source: "join", target: "end" },
+    ],
+  }
+  const dep = await graphDeploy(key, "并行网关演示", model)
+  check("N-B-02 并行流部署→PUBLISHED", dep.body?.code === 0 && dep.body.data?.status === "PUBLISHED", JSON.stringify(dep.body?.data ?? dep.body))
+  const t = `图直译并行-${TS}`
+  const inst = await startInst(key, t, {})
+  const cur = inst?.currentNodes ?? []
+  check("N-B-02 发起→RUNNING", inst?.bizStatus === "RUNNING", inst?.bizStatus)
+  check("N-B-02 并行产生两个并发当前节点(A,B)", cur.length === 2 && cur.some((n) => n.nodeName === "并行审批A") && cur.some((n) => n.nodeName === "并行审批B"), JSON.stringify(cur.map((n) => n.nodeName)))
+  // 审批两个并发任务
+  for (let round = 0; round < 3; round++) {
+    const list = ((await call(zhangsan.token, "GET", "/api/wf/tasks/todo?pageNum=1&pageSize=100")).body?.data?.list ?? []).filter((tk) => tk.instanceTitle === t)
+    if (!list.length) break
+    for (const tk of list) await call(zhangsan.token, "POST", `/api/wf/tasks/${tk.taskId}/approve`, { comment: "并行通过" })
+  }
+  check("N-B-02 两审批完成后→APPROVED", (await bizStatus(zhangsan.token, inst.id)) === "APPROVED", await bizStatus(zhangsan.token, inst.id))
+  const hl = await hlCompleted(zhangsan.token, inst.id)
+  check("N-B-02 高亮含 fork/join/两审批", ["fork", "join", "a", "b"].every((x) => hl.includes(x)), JSON.stringify(hl))
+}
+
+// --- N-B-03：Aviator 高级公式条件（边 expression:"amount>1000"）+ expression/eval 端点 ---
+{
+  const key = `graph_expr_${TS}`
+  const model = {
+    schemaVersion: 1, key, name: "高级公式演示",
+    nodes: [
+      { id: "start", type: "startEvent", name: "发起", position: { x: 60, y: 100 } },
+      { id: "gw", type: "exclusiveGateway", name: "金额判断", position: { x: 200, y: 100 } },
+      { id: "endBig", type: "endEvent", name: "大额结束", position: { x: 360, y: 60 } },
+      { id: "endDef", type: "endEvent", name: "默认结束", position: { x: 360, y: 160 } },
+    ],
+    edges: [
+      { id: "e1", source: "start", target: "gw" },
+      { id: "eBig", source: "gw", target: "endBig", expression: "amount>1000" },
+      { id: "eDef", source: "gw", target: "endDef", isDefault: true },
+    ],
+  }
+  const dep = await graphDeploy(key, "高级公式演示", model)
+  check("N-B-03 高级条件流部署→PUBLISHED", dep.body?.code === 0 && dep.body.data?.status === "PUBLISHED", JSON.stringify(dep.body?.data ?? dep.body))
+  // amount=2000 → Aviator 命中 expression 走 eBig
+  const i1 = await startInst(key, `高级大额-${TS}`, { amount: 2000 })
+  const c1 = await hlCompleted(zhangsan.token, i1.id)
+  check("N-B-03 amount=2000→Aviator 命中走 eBig/endBig", c1.includes("eBig") && c1.includes("endBig") && !c1.includes("eDef"), JSON.stringify(c1))
+  // amount=500 → 走默认 eDef
+  const i2 = await startInst(key, `高级小额-${TS}`, { amount: 500 })
+  const c2 = await hlCompleted(zhangsan.token, i2.id)
+  check("N-B-03 amount=500→走默认 eDef/endDef", c2.includes("eDef") && c2.includes("endDef") && !c2.includes("eBig"), JSON.stringify(c2))
+  // expression/eval：内置算术 + 自定义函数 workDays + 沙箱拒 new
+  const fArith = await call(admin.token, "POST", "/api/wf/expression/eval", { expr: "2 * (3 + 4)" })
+  check("N-B-03 eval 内置算术 2*(3+4)→14", fArith.body?.code === 0 && Number(fArith.body?.data) === 14, JSON.stringify(fArith.body))
+  const fWork = await call(admin.token, "POST", "/api/wf/expression/eval", { expr: "workDays('2026-07-06','2026-07-10')" })
+  check("N-B-03 eval 自定义函数 workDays(周一~周五)→5", fWork.body?.code === 0 && Number(fWork.body?.data) === 5, JSON.stringify(fWork.body))
+  const fCtx = await call(admin.token, "POST", "/api/wf/expression/eval", { expr: "amount > 1000", context: { amount: 2000 }, asBoolean: true })
+  check("N-B-03 eval 带上下文布尔求值 amount>1000→true", fCtx.body?.code === 0 && fCtx.body?.data === true, JSON.stringify(fCtx.body))
+  const fNew = await call(admin.token, "POST", "/api/wf/expression/eval", { expr: "new java.io.File('x')" })
+  check("N-B-03 eval 沙箱拒 new(非法表达式→失败)", fNew.body?.code !== 0, JSON.stringify(fNew.body))
+}
+
+// --- N-B-04：脚本节点 serviceTask{impl:script} groovy 写 vars → 下游网关路由 + test-run ---
+{
+  const key = `graph_script_${TS}`
+  const GROOVY = "vars.put('total', (vars.get('price') as int) * (vars.get('qty') as int)); log.info('script total=' + vars.get('total')); return vars.get('total')"
+  const model = {
+    schemaVersion: 1, key, name: "脚本节点演示",
+    nodes: [
+      { id: "start", type: "startEvent", name: "发起", position: { x: 40, y: 100 } },
+      { id: "script", type: "serviceTask", name: "计算金额", position: { x: 160, y: 90 }, service: { impl: "script" }, script: { lang: "groovy", code: GROOVY } },
+      { id: "gw", type: "exclusiveGateway", name: "金额判断", position: { x: 320, y: 100 } },
+      { id: "endBig", type: "endEvent", name: "大额", position: { x: 460, y: 60 } },
+      { id: "endDef", type: "endEvent", name: "默认", position: { x: 460, y: 160 } },
+    ],
+    edges: [
+      { id: "e1", source: "start", target: "script" },
+      { id: "e2", source: "script", target: "gw" },
+      { id: "eBig", source: "gw", target: "endBig", expression: "total>1000" },
+      { id: "eDef", source: "gw", target: "endDef", isDefault: true },
+    ],
+  }
+  const dep = await graphDeploy(key, "脚本节点演示", model)
+  check("N-B-04 脚本流部署→PUBLISHED", dep.body?.code === 0 && dep.body.data?.status === "PUBLISHED", JSON.stringify(dep.body?.data ?? dep.body))
+  // price*qty=2000 → 脚本写 total=2000 → 网关 total>1000 → endBig
+  const i1 = await startInst(key, `脚本大额-${TS}`, { price: 200, qty: 10 })
+  const c1 = await hlCompleted(zhangsan.token, i1.id)
+  check("N-B-04 脚本执行写 vars→total=2000→走 endBig", c1.includes("script") && c1.includes("eBig") && c1.includes("endBig"), JSON.stringify(c1))
+  // price*qty=50 → total=50 → 默认
+  const i2 = await startInst(key, `脚本小额-${TS}`, { price: 5, qty: 10 })
+  const c2 = await hlCompleted(zhangsan.token, i2.id)
+  check("N-B-04 脚本 total=50→走默认 endDef", c2.includes("script") && c2.includes("eDef") && c2.includes("endDef"), JSON.stringify(c2))
+  // test-run 端点：groovy / js 成功 + 非管理员 403
+  const trG = await call(admin.token, "POST", "/api/wf/script/test-run", { lang: "groovy", code: "vars.put('x', 6*7); return spring.has('wfScriptDelegate')", sampleVars: {} })
+  check("N-B-04 test-run groovy 成功+vars 回传 x=42", trG.body?.code === 0 && trG.body.data?.success === true && trG.body.data?.vars?.x === 42, JSON.stringify(trG.body?.data))
+  const trJ = await call(admin.token, "POST", "/api/wf/script/test-run", { lang: "js", code: "vars.put('y', 3+4); vars.get('y')", sampleVars: {} })
+  check("N-B-04 test-run js(GraalJS) 成功", trJ.body?.code === 0 && trJ.body.data?.success === true, JSON.stringify(trJ.body?.data))
+  const trDeny = await call(zhangsan.token, "POST", "/api/wf/script/test-run", { lang: "groovy", code: "return 1", sampleVars: {} })
+  check("N-B-04 非管理员(zhangsan) test-run→403", trDeny.status === 403, `status=${trDeny.status}`)
+}
+
+// --- N-B-05：.bpmn 往返（deploy→GET bpmn 非空 XML→POST import 结构还原、warnings 空） ---
+{
+  const key = `graph_rt_${TS}`
+  const model = {
+    schemaVersion: 1, key, name: "往返演示",
+    nodes: [
+      { id: "start", type: "startEvent", name: "发起", position: { x: 60, y: 100 } },
+      { id: "ap", type: "userTask", name: "审批", position: { x: 200, y: 90 }, props: { assigneeRules: [{ type: "INITIATOR" }], multiMode: "ANY", emptyStrategy: "TO_ADMIN" } },
+      { id: "gw", type: "exclusiveGateway", name: "判断", position: { x: 360, y: 100 } },
+      { id: "endBig", type: "endEvent", name: "大", position: { x: 500, y: 60 } },
+      { id: "endDef", type: "endEvent", name: "默认", position: { x: 500, y: 160 }, terminate: true },
+    ],
+    edges: [
+      { id: "e1", source: "start", target: "ap" },
+      { id: "e2", source: "ap", target: "gw" },
+      { id: "e3", source: "gw", target: "endBig", condition: { logic: "AND", items: [{ field: "days", operator: "gt", value: "3" }] } },
+      { id: "e4", source: "gw", target: "endDef", isDefault: true },
+    ],
+  }
+  const dep = await graphDeploy(key, "往返演示", model)
+  const mid = dep.body?.data?.id
+  check("N-B-05 往返流部署→PUBLISHED", dep.body?.code === 0 && dep.body.data?.status === "PUBLISHED", `id=${mid}`)
+  // GET bpmn → 非空 XML
+  const exp = await call(admin.token, "GET", `/api/wf/models/${mid}/bpmn`)
+  const xml = exp.body?.data
+  check("N-B-05 导出 .bpmn 非空 XML", exp.body?.code === 0 && typeof xml === "string" && xml.includes("<") && xml.length > 100, `len=${xml?.length ?? 0}`)
+  check("N-B-05 导出含 BPMNDiagram+oa:扩展+conditionExpression", !!xml && xml.includes("BPMNDiagram") && xml.includes("oa:") && xml.includes("conditionExpression"))
+  // POST import（原始 xml）→ ProcessModel 结构还原
+  const impRes = await fetch(`${BASE}/api/wf/models/import`, { method: "POST", headers: { "Content-Type": "application/xml", Authorization: `Bearer ${admin.token}` }, body: xml ?? "" })
+  const imp = await impRes.json().catch(() => null)
+  const m = imp?.data?.model
+  check("N-B-05 导入→ProcessModel(nodes/edges)", imp?.code === 0 && Array.isArray(m?.nodes) && Array.isArray(m?.edges), `code=${imp?.code}`)
+  check("N-B-05 节点数还原=5 边数=4", m?.nodes?.length === 5 && m?.edges?.length === 4, `nodes=${m?.nodes?.length} edges=${m?.edges?.length}`)
+  const types = (m?.nodes ?? []).map((n) => n.type).sort()
+  check("N-B-05 节点类型还原", JSON.stringify(types) === JSON.stringify(["endEvent", "endEvent", "exclusiveGateway", "startEvent", "userTask"]), JSON.stringify(types))
+  check("N-B-05 terminate end 还原", (m?.nodes ?? []).some((n) => n.type === "endEvent" && n.terminate))
+  const e3 = (m?.edges ?? []).find((e) => e.condition)
+  check("N-B-05 结构化条件还原(operator 名形 gt)", e3?.condition?.items?.[0]?.operator === "gt", JSON.stringify(e3?.condition))
+  check("N-B-05 默认分支还原(isDefault)", (m?.edges ?? []).some((e) => e.isDefault))
+  check("N-B-05 坐标从 DI 还原(position.x)", (m?.nodes ?? []).every((n) => n.position && typeof n.position.x === "number"))
+  check("N-B-05 warnings 为空", Array.isArray(imp?.data?.warnings) && imp.data.warnings.length === 0, JSON.stringify(imp?.data?.warnings))
+}
+
+// --- N-B-06：表单字段清单（GET /forms/leave/fields ONLINE 5 字段 / 不存在→404 / 未登录→401） ---
+{
+  const ff = await call(admin.token, "GET", "/api/wf/forms/leave/fields")
+  const mf = ff.body?.data
+  check("N-B-06 leave 字段清单 code=0 formType=ONLINE", ff.body?.code === 0 && mf?.formType === "ONLINE" && mf?.formKey === "leave", JSON.stringify({ code: ff.body?.code, formType: mf?.formType, formKey: mf?.formKey }))
+  check("N-B-06 leave ONLINE 解析出 5 个字段", Array.isArray(mf?.fields) && mf.fields.length === 5, JSON.stringify((mf?.fields ?? []).map((f) => f.key)))
+  const ffMiss = await call(admin.token, "GET", `/api/wf/forms/nonexistent_${TS}/fields`)
+  check("N-B-06 不存在 formKey→404", ffMiss.body?.code === 404, JSON.stringify(ffMiss.body))
+  const ffAnon = await call(null, "GET", "/api/wf/forms/leave/fields")
+  check("N-B-06 未登录→401", ffAnon.status === 401, `status=${ffAnon.status}`)
+}
+
 /* ---------- 汇总 ---------- */
 cleanupTestData() // 跑完自动清理测试数据，避免污染流程定义/待办列表
 console.log(`\n==> 通过 ${passed} 项，失败 ${failed} 项`)
