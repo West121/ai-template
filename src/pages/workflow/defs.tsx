@@ -1,6 +1,8 @@
 /**
  * 流程定义管理 /workflow/defs
- * 列表 + 新建（选设计器类型：仿钉钉/BPMN + 绑定已发布表单）+ 全屏设计器 + 发布 + 版本历史。
+ * 列表 + 新建（选设计器类型：仿钉钉/流程图 + 绑定已发布表单）+ 全屏设计器 + 发布 + 版本历史。
+ * GRAPH（流程图）走新 react-flow 设计器，部署经 POST /api/wf/models/graph/deploy（图直译）；
+ * 仿钉钉（DINGTALK）并存保留；存量 BPMN 定义编辑时经 /api/wf/models/import 迁移为 GRAPH。
  * 接口：GET /api/wf/process-defs、POST /api/wf/process-defs、PUT /{id}、
  *       POST /{id}/publish（后端转换/部署，展示报错）、GET /{code}/versions
  * 后端未就绪时优雅空态（不造假数据）。
@@ -36,11 +38,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  BpmnDesigner,
-  DEFAULT_PROCESS_XML,
-  type BpmnDesignerHandle,
-} from "@/pages/workflow/designer/bpmn/editor"
+import { FlowDesigner, type FlowDesignerHandle } from "@/pages/workflow/designer/flow/flow-designer"
+import type { ProcessModel } from "@/pages/workflow/designer/flow/model"
+import type { ValidationIssue as FlowValidationIssue } from "@/pages/workflow/designer/flow/validate"
 import { DingtalkProcessDesigner } from "@/pages/workflow/designer/dingtalk/process-designer"
 import { ensureNodeIdSeq, type StepNode } from "@/pages/workflow/designer/dingtalk/model"
 import {
@@ -65,12 +65,79 @@ import {
 
 const DESIGNER_META: Record<DesignerType, { label: string; description: string; icon: typeof Workflow }> = {
   DINGTALK: { label: "仿钉钉（简易）", description: "线性步骤 + 条件分支，适合审批场景，零门槛配置", icon: GitBranch },
-  BPMN: { label: "BPMN（专业）", description: "标准 BPMN 2.0 建模，支持网关/子流程等复杂结构", icon: Workflow },
+  GRAPH: { label: "流程图（专业）", description: "react-flow 图设计器，支持网关/子流程/定时/脚本等复杂结构", icon: Workflow },
+  // 旧 bpmn-js 设计器已下线；存量 BPMN 定义编辑时经 /api/wf/models/import 迁移为 GRAPH。
+  BPMN: { label: "BPMN（旧）", description: "旧版设计器已下线，编辑时自动迁移为流程图", icon: Workflow },
+}
+
+/** 新建时可选的设计器类型（BPMN 旧设计器已下线，不再提供入口） */
+const CREATE_DESIGNER_TYPES: DesignerType[] = ["DINGTALK", "GRAPH"]
+
+/** .bpmn XML → 归一化 ProcessModel（POST /api/wf/models/import 返回结构） */
+interface BpmnImportResult {
+  model: ProcessModel
+  warnings?: string[]
 }
 
 /** 仿钉钉初始节点树（一条主管审批） */
 function initialSteps(): StepNode[] {
   return [{ id: "n_root_1", kind: "approval", name: "审批人", assignees: [], mode: "any" }]
+}
+
+/** GRAPH 空白模型：开始 → 审批 → 结束（前端画布坐标已就绪，后端据此生成 BPMN DI） */
+function blankGraphModel(key: string, name: string, formKey?: string): ProcessModel {
+  const model: ProcessModel = {
+    schemaVersion: 1,
+    key: key || "process",
+    name: name || "未命名流程",
+    flowConfig: defaultFlowConfig(),
+    nodes: [
+      { id: "start", type: "startEvent", name: "开始", position: { x: 260, y: 40 } },
+      {
+        id: "approve",
+        type: "userTask",
+        name: "审批",
+        position: { x: 210, y: 150 },
+        props: { assigneeRules: [], multiMode: "ANY" },
+      },
+      { id: "end", type: "endEvent", name: "结束", position: { x: 260, y: 300 } },
+    ],
+    edges: [
+      { id: "e_start_approve", source: "start", target: "approve" },
+      { id: "e_approve_end", source: "approve", target: "end" },
+    ],
+  }
+  if (formKey) model.formKey = formKey
+  return model
+}
+
+/** 解析存储的 designerJson（字符串或对象）为 ProcessModel；非法/空返回 null */
+function parseGraphModel(raw: unknown): ProcessModel | null {
+  if (raw == null) return null
+  try {
+    const obj = typeof raw === "string" ? JSON.parse(raw) : raw
+    if (obj && typeof obj === "object" && Array.isArray((obj as { nodes?: unknown }).nodes)) {
+      return obj as ProcessModel
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** flow 校验问题（level: error|warning）→ 共享发布校验清单（level: error|warn） */
+function mapFlowIssues(issues: FlowValidationIssue[]): ValidationIssue[] {
+  return issues.map((i) => ({
+    nodeId: i.nodeId ?? i.edgeId,
+    level: i.level === "warning" ? "warn" : "error",
+    message: i.message,
+  }))
+}
+
+/** 组合 formKey（formCode:version）供 GRAPH 各 userTask 继承 */
+function composeFormKey(formCode?: string | null, formVersion?: number | null): string | undefined {
+  if (!formCode) return undefined
+  return formVersion != null ? `${formCode}:${formVersion}` : formCode
 }
 
 interface EditorState {
@@ -90,7 +157,8 @@ interface EditorState {
   nodeProps: NodePropsMap
   flowConfig: FlowConfig
   formFields: FormFieldOption[]
-  bpmnXml: string
+  /** GRAPH 设计器的归一化模型（DINGTALK 时忽略） */
+  graphModel: ProcessModel
 }
 
 function emptyEditor(): EditorState {
@@ -111,7 +179,7 @@ function emptyEditor(): EditorState {
     nodeProps: {},
     flowConfig: defaultFlowConfig(),
     formFields: [],
-    bpmnXml: DEFAULT_PROCESS_XML,
+    graphModel: blankGraphModel("", ""),
   }
 }
 
@@ -160,7 +228,7 @@ export default function WorkflowDefsPage() {
   const [editorOpen, setEditorOpen] = useState(false)
   const [editor, setEditor] = useState<EditorState>(emptyEditor)
   const [saving, setSaving] = useState(false)
-  const bpmnRef = useRef<BpmnDesignerHandle>(null)
+  const flowRef = useRef<FlowDesignerHandle>(null)
 
   const [publishTarget, setPublishTarget] = useState<ProcessDefItem | null>(null)
   const [publishError, setPublishError] = useState<string | null>(null)
@@ -321,8 +389,31 @@ export default function WorkflowDefsPage() {
       } catch {
         next.steps = initialSteps()
       }
+    } else if (row.designerType === "GRAPH") {
+      // GRAPH：designerJson 存归一化 ProcessModel，直接载入 flow 设计器
+      next.designerType = "GRAPH"
+      next.graphModel =
+        parseGraphModel(detail?.designerJson) ??
+        blankGraphModel(row.defCode, row.name, composeFormKey(row.formCode, row.formVersion))
     } else {
-      next.bpmnXml = detail?.bpmnXml || DEFAULT_PROCESS_XML
+      // 存量 BPMN（旧 bpmn-js 定义，已下线）：经 /api/wf/models/import 迁移为 ProcessModel，改用 flow 设计器编辑
+      next.designerType = "GRAPH"
+      const xml = detail?.bpmnXml
+      let migrated: ProcessModel | null = null
+      if (xml) {
+        try {
+          const res = await api<BpmnImportResult>("/api/wf/models/import", {
+            method: "POST",
+            headers: { "Content-Type": "text/plain" },
+            body: xml,
+          })
+          migrated = res.model
+        } catch {
+          migrated = null
+        }
+      }
+      next.graphModel =
+        migrated ?? blankGraphModel(row.defCode, row.name, composeFormKey(row.formCode, row.formVersion))
     }
     const { fields, version } = await resolveFormFields(row.formCode ?? "")
     next.formFields = fields
@@ -351,7 +442,11 @@ export default function WorkflowDefsPage() {
       // 后端 designerJson 字段为 JSON 字符串，需 stringify
       base.designerJson = JSON.stringify(serializeDingtalk(editor.steps, editor.nodeProps, editor.flowConfig))
     } else {
-      base.bpmnXml = (await bpmnRef.current?.getXml()) ?? editor.bpmnXml
+      // GRAPH：designerJson 存归一化 ProcessModel（flow 设计器 getModel 产出，含坐标）。
+      // 存量 BPMN 编辑时已在 openEdit 迁移为 GRAPH，故此处统一走 GRAPH 分支。
+      base.designerType = "GRAPH"
+      const model = flowRef.current?.getModel() ?? editor.graphModel
+      base.designerJson = JSON.stringify(model)
     }
     try {
       const saved = editor.id
@@ -372,23 +467,13 @@ export default function WorkflowDefsPage() {
     }
   }
 
-  /** 打开发布确认：仿钉钉流程先跑发布校验，error 阻止发布 */
-  const openPublish = (
-    target: ProcessDefItem,
-    model?: { steps: StepNode[]; nodeProps: NodePropsMap; designerType: DesignerType },
-  ) => {
-    let issues: ValidationIssue[] = []
-    if (model?.designerType === "DINGTALK") {
-      issues = validateFlow(model.steps, model.nodeProps)
-    } else if (model?.designerType === "BPMN" && bpmnRef.current) {
-      // BPMN 编辑器内发布：调 bpmn 设计器的校验（唯一开始/可达/单出口/UserTask 必配处理人等），
-      // 适配 elementId→nodeId 复用同一发布校验清单弹窗
-      issues = bpmnRef.current.validate().map((i) => ({
-        nodeId: i.elementId,
-        level: i.level,
-        message: i.message,
-      }))
-    } else if (target.designerType === "DINGTALK" && target.designerJson) {
+  /**
+   * 打开发布确认：可传入编辑器现场校验的 issues（DINGTALK/GRAPH 设计器内发布）；
+   * 未传时按 target.designerJson 现解析跑校验（列表「发布」按钮，仅 DINGTALK 有前端校验）。
+   */
+  const openPublish = (target: ProcessDefItem, precomputed?: ValidationIssue[]) => {
+    let issues: ValidationIssue[] = precomputed ?? []
+    if (!precomputed && target.designerType === "DINGTALK" && target.designerJson) {
       try {
         const parsed = typeof target.designerJson === "string" ? JSON.parse(target.designerJson) : target.designerJson
         if (isBackendDesignerJson(parsed)) {
@@ -413,7 +498,26 @@ export default function WorkflowDefsPage() {
     setPublishing(true)
     setPublishError(null)
     try {
-      await api(`/api/wf/process-defs/${publishTarget.id}/publish`, { method: "POST" })
+      if (publishTarget.designerType === "GRAPH") {
+        // GRAPH：走图直译一站式部署端点（ProcessModel → BpmnModel → Flowable 部署 + wf_process_ext 落库）
+        const model = parseGraphModel(publishTarget.designerJson)
+        if (!model) {
+          setPublishError("流程模型解析失败（designerJson 为空或非法），请重新保存草稿")
+          return
+        }
+        const body: Record<string, unknown> = {
+          key: publishTarget.defCode,
+          name: publishTarget.name,
+          category: publishTarget.category || undefined,
+          icon: publishTarget.icon || undefined,
+          formCode: publishTarget.formCode || undefined,
+          formVersion: publishTarget.formVersion ?? undefined,
+          model,
+        }
+        await api("/api/wf/models/graph/deploy", { method: "POST", body: JSON.stringify(body) })
+      } else {
+        await api(`/api/wf/process-defs/${publishTarget.id}/publish`, { method: "POST" })
+      }
       toast.success(`流程「${publishTarget.name}」已发布，可到发起中心发起`)
       setPublishTarget(null)
       reload()
@@ -516,11 +620,13 @@ export default function WorkflowDefsPage() {
         meta: { title: "设计器" },
         header: () => <span>设计器</span>,
         cell: ({ row }) => {
-          const meta = DESIGNER_META[row.original.designerType] ?? DESIGNER_META.DINGTALK
+          const type = row.original.designerType
+          const meta = DESIGNER_META[type] ?? DESIGNER_META.DINGTALK
+          const label = type === "GRAPH" ? "流程图" : type === "BPMN" ? "BPMN(旧)" : "仿钉钉"
           return (
             <Badge variant="secondary" className="gap-1">
               <meta.icon className="size-3" />
-              {row.original.designerType === "BPMN" ? "BPMN" : "仿钉钉"}
+              {label}
             </Badge>
           )
         },
@@ -589,7 +695,7 @@ export default function WorkflowDefsPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader title="流程定义" description="设计审批流程：仿钉钉或 BPMN 两种设计器，绑定表单后发布即可发起" />
+      <PageHeader title="流程定义" description="设计审批流程：仿钉钉或流程图两种设计器，绑定表单后发布即可发起" />
 
       {loadError ? (
         <Card>
@@ -763,7 +869,7 @@ export default function WorkflowDefsPage() {
             <div className="space-y-2">
               <Label>设计器类型</Label>
               <div className="grid grid-cols-2 gap-2.5">
-                {(Object.keys(DESIGNER_META) as DesignerType[]).map((type) => {
+                {CREATE_DESIGNER_TYPES.map((type) => {
                   const meta = DESIGNER_META[type]
                   const active = createForm.designerType === type
                   return (
@@ -805,7 +911,7 @@ export default function WorkflowDefsPage() {
             <Workflow className="size-4 text-primary" />
             {editor.id ? "编辑流程" : "设计流程"} · {editor.name}
             <Badge variant="secondary" className="ml-1 gap-1">
-              {editor.designerType === "BPMN" ? "BPMN" : "仿钉钉"}
+              {editor.designerType === "DINGTALK" ? "仿钉钉" : "流程图"}
             </Badge>
           </span>
         }
@@ -832,11 +938,12 @@ export default function WorkflowDefsPage() {
               onClick={async () => {
                 const saved = await doSave()
                 if (saved?.id) {
-                  openPublish(saved, {
-                    steps: editor.steps,
-                    nodeProps: editor.nodeProps,
-                    designerType: editor.designerType,
-                  })
+                  // 设计器内发布：用编辑器现场校验（DINGTALK 走 validateFlow；GRAPH 走 flow 设计器 validate）
+                  const issues =
+                    editor.designerType === "DINGTALK"
+                      ? validateFlow(editor.steps, editor.nodeProps)
+                      : mapFlowIssues(flowRef.current?.validate() ?? [])
+                  openPublish(saved, issues)
                 }
               }}
             >
@@ -888,29 +995,32 @@ export default function WorkflowDefsPage() {
             />
           </div>
         ) : (
-          <BpmnDesigner
-            ref={bpmnRef}
-            initialXml={editor.bpmnXml}
-            heightClass="h-full"
-            hideFileTools
-            className="h-full rounded-none border-0"
-            base={{
-              name: editor.name,
-              description: editor.description,
-              icon: editor.icon,
-              category: editor.category,
-            }}
-            onBaseChange={(next: ProcessBase) =>
-              setEditor((e) => ({
-                ...e,
-                name: next.name,
-                description: next.description,
-                icon: next.icon,
-                category: next.category,
-              }))
-            }
-            formFields={editor.formFields}
-          />
+          <div className="h-full overflow-auto bg-muted/20 p-3">
+            <FlowDesigner
+              key={editor.id ?? editor.defCode}
+              ref={flowRef}
+              embedded
+              initialModel={editor.graphModel}
+              processKey={editor.defCode}
+              formKey={composeFormKey(editor.formCode, editor.formVersion)}
+              base={{
+                name: editor.name,
+                description: editor.description,
+                icon: editor.icon,
+                category: editor.category,
+              }}
+              onBaseChange={(next: ProcessBase) =>
+                setEditor((e) => ({
+                  ...e,
+                  name: next.name,
+                  description: next.description,
+                  icon: next.icon,
+                  category: next.category,
+                }))
+              }
+              formFields={editor.formFields}
+            />
+          </div>
         )}
       </Modal>
 

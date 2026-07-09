@@ -19,7 +19,7 @@ export function EndEventNode({ id, data, selected }: NodeProps<WfRfNode>) {
           terminate
             ? "border-rose-600 bg-rose-500/10 text-rose-600 dark:text-rose-400"
             : "border-slate-500 bg-slate-500/10 text-slate-600 dark:text-slate-300",
-          nodeRing(selected, data.validation),
+          nodeRing(selected, data.validation, data.highlight),
         )}
       >
         {terminate ? <Square className="size-3.5 fill-current" /> : <Circle className="size-3.5 fill-current" />}

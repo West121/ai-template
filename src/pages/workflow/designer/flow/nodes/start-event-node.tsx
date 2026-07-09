@@ -14,7 +14,7 @@ export function StartEventNode({ id, data, selected }: NodeProps<WfRfNode>) {
       <div
         className={cn(
           "flex size-12 items-center justify-center rounded-full border-2 border-emerald-500 bg-emerald-500/10 text-emerald-600 shadow-sm dark:text-emerald-400",
-          nodeRing(selected, data.validation),
+          nodeRing(selected, data.validation, data.highlight),
         )}
       >
         <Play className="size-4 fill-current" />

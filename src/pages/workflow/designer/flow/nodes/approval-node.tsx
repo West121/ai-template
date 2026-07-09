@@ -13,7 +13,7 @@ export function ApprovalNode({ id, data, selected }: NodeProps<WfRfNode>) {
     <div
       className={cn(
         "w-52 overflow-hidden rounded-lg border bg-card shadow-sm transition-shadow hover:shadow-md",
-        nodeRing(selected, data.validation),
+        nodeRing(selected, data.validation, data.highlight),
       )}
     >
       <NodeToolbarActions id={id} />

@@ -17,6 +17,7 @@ export function WebhookNode({ id, data, selected }: NodeProps<WfRfNode>) {
       handleColor="!bg-teal-600"
       selected={selected}
       validation={data.validation}
+      highlight={data.highlight}
     >
       {summarizeWebhook(data.webhook)}
     </ActivityCard>

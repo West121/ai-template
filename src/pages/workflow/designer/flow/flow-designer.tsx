@@ -15,7 +15,7 @@
  * 节点专属 config（ai/webhook/timer/service…）的深度编辑面板、elkjs 自动布局、
  * 旧 designerJson 迁移、只读运行时高亮、表单字段清单接入 —— 推迟到后续切片。
  */
-import { useCallback, useMemo, useRef, useState } from "react"
+import { useCallback, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react"
 import { addEdge, useEdgesState, useNodesState, type Connection, type Edge } from "@xyflow/react"
 import { AlertTriangle, CircleCheck, Info } from "lucide-react"
 import { toast } from "sonner"
@@ -28,7 +28,7 @@ import { ScriptEditor } from "@/components/script-editor"
 import { FieldPermsEditor } from "@/components/field-perms-editor"
 import "@/pages/workflow/forms" // 触发 CODE 表单登记（registerForm 副作用）
 import { PropertyPanel } from "../shared/property-panel"
-import { defaultFlowConfig, type FormFieldOption, type ProcessConfig } from "../shared/config"
+import { defaultFlowConfig, type FormFieldOption, type ProcessBase, type ProcessConfig } from "../shared/config"
 import type { BranchCondition, WfNodeProps } from "../types"
 import type { FlowNodeType, Point, ProcessModel, ScriptConfig, ServiceTaskConfig } from "./model"
 import { FlowCanvas, type FlowCanvasApi } from "./canvas"
@@ -93,8 +93,6 @@ const SEED_MODEL: ProcessModel = {
   ],
 }
 
-const SEED = fromProcessModel(SEED_MODEL)
-
 /* ---------- 供属性面板选择的示例表单字段（后续切片改由 FormFieldManifest 拉取） ---------- */
 
 const SAMPLE_FIELDS: FormFieldOption[] = [
@@ -115,14 +113,61 @@ function panelNodeType(type: string | undefined): string {
   return type ?? "node"
 }
 
-export default function FlowDesignerPage() {
-  const [nodes, setNodes, onNodesChange] = useNodesState<WfRfNode>(SEED.nodes)
-  const [edges, setEdges, onEdgesChange] = useEdgesState<WfRfEdge>(SEED.edges)
+/** 命令式句柄：供嵌入方（流程定义页）在保存/发布时取当前 ProcessModel 与跑校验 */
+export interface FlowDesignerHandle {
+  /** 取当前画布的归一化 ProcessModel（含坐标，供 GRAPH 部署 / 保存 designerJson） */
+  getModel: () => ProcessModel
+  /** 保存前全量校验，返回问题清单（error 应阻止保存/发布） */
+  validate: () => ValidationIssue[]
+}
+
+export interface FlowDesignerProps {
+  /** 初始模型；缺省用内置示例（demo 页）。嵌入时由定义 designerJson 载入 */
+  initialModel?: ProcessModel
+  /** BPMN process id / defCode（写入 ProcessModel.key）；缺省取 initialModel.key */
+  processKey?: string
+  /** 绑定表单 formKey（formCode:version）；缺省取 initialModel.formKey */
+  formKey?: string
+  /** 流程级基础信息（受控）；嵌入 /workflow/defs 时与 ProcessDef 同步 */
+  base?: ProcessBase
+  onBaseChange?: (base: ProcessBase) => void
+  /** 绑定表单字段，供条件/字段权限/办理人来源选择；缺省用内置示例字段 */
+  formFields?: FormFieldOption[]
+  /** 嵌入模式：隐藏页面级 PageHeader 与开发自检脚手架 */
+  embedded?: boolean
+  ref?: Ref<FlowDesignerHandle>
+}
+
+export function FlowDesigner({
+  initialModel = SEED_MODEL,
+  processKey,
+  formKey,
+  base,
+  onBaseChange,
+  formFields,
+  embedded = false,
+  ref,
+}: FlowDesignerProps) {
+  const fields = formFields ?? SAMPLE_FIELDS
+  const effKey = processKey ?? initialModel.key
+  const effFormKey = formKey ?? initialModel.formKey
+  // 初始画布状态由 initialModel 派生一次（后续开合不同定义时由外层 key 强制重挂）
+  const [seed] = useState(() => fromProcessModel(initialModel))
+  const [nodes, setNodes, onNodesChange] = useNodesState<WfRfNode>(seed.nodes)
+  const [edges, setEdges, onEdgesChange] = useEdgesState<WfRfEdge>(seed.edges)
   const [selection, setSelection] = useState<Selection>({ kind: "process" })
   const [processConfig, setProcessConfig] = useState<ProcessConfig>({
-    base: { name: SEED_MODEL.name, description: "", icon: "📝", category: "人事" },
-    flow: SEED_MODEL.flowConfig ?? defaultFlowConfig(),
+    base: base ?? { name: initialModel.name, description: "", icon: "📝", category: "人事" },
+    flow: initialModel.flowConfig ?? defaultFlowConfig(),
   })
+  // 流程级配置变更：更新本地态并把基础信息回传给嵌入方（与 ProcessDef 同步）
+  const handleProcessConfigChange = useCallback(
+    (next: ProcessConfig) => {
+      setProcessConfig(next)
+      onBaseChange?.(next.base)
+    },
+    [onBaseChange],
+  )
   const [serialized, setSerialized] = useState<string>("")
   const [roundTripOk, setRoundTripOk] = useState<boolean | null>(null)
   const [issues, setIssues] = useState<ValidationIssue[] | null>(null)
@@ -275,12 +320,16 @@ export default function FlowDesignerPage() {
   const buildModel = useCallback(
     () =>
       toProcessModel(nodes, edges, {
-        key: SEED_MODEL.key,
+        key: effKey,
         name: processConfig.base.name,
+        formKey: effFormKey,
         flowConfig: processConfig.flow,
       }),
-    [nodes, edges, processConfig],
+    [nodes, edges, processConfig, effKey, effFormKey],
   )
+
+  // 命令式句柄：嵌入方（流程定义页）保存/发布时取模型 + 跑校验
+  useImperativeHandle(ref, () => ({ getModel: buildModel, validate: () => validateProcessModel(buildModel()) }), [buildModel])
 
   const handleValidate = useCallback(() => {
     const found = validateProcessModel(buildModel())
@@ -362,18 +411,22 @@ export default function FlowDesignerPage() {
     canvasApiRef.current = api
   }, [])
 
+  const showScaffold = DEV_SCAFFOLD && !embedded
+
   return (
     <div className="space-y-3">
-      <PageHeader
-        title="流程设计器"
-        description="从左侧拖拽或点击新增节点，连线编排审批流程；连线即时校验，保存前可一键全量校验。"
-      />
+      {!embedded && (
+        <PageHeader
+          title="流程设计器"
+          description="从左侧拖拽或点击新增节点，连线编排审批流程；连线即时校验，保存前可一键全量校验。"
+        />
+      )}
 
       {/* 工具栏 */}
       <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
         <span className="text-xs text-muted-foreground">从左侧调色板拖拽或点击新增节点</span>
         <div className="ml-auto flex items-center gap-2">
-          {DEV_SCAFFOLD && roundTripOk !== null && (
+          {showScaffold && roundTripOk !== null && (
             <span className={roundTripOk ? "text-xs text-emerald-600" : "text-xs text-destructive"}>
               {roundTripOk ? "往返一致 ✓" : "往返不一致 ✗"}
             </span>
@@ -381,7 +434,7 @@ export default function FlowDesignerPage() {
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleValidate}>
             校验
           </Button>
-          {DEV_SCAFFOLD && (
+          {showScaffold && (
             <Button size="sm" className="h-7 text-xs" onClick={handleSerialize}>
               序列化 ProcessModel
             </Button>
@@ -436,7 +489,7 @@ export default function FlowDesignerPage() {
 
       {/* 调色板 + 画布 + 属性面板 */}
       <NodeActionsContext.Provider value={nodeActions}>
-        <FormFieldsContext.Provider value={SAMPLE_FIELDS}>
+        <FormFieldsContext.Provider value={fields}>
           <div className="flex h-[68vh] overflow-hidden rounded-lg border">
             <FlowPalette onPick={pickFromPalette} />
 
@@ -463,7 +516,7 @@ export default function FlowDesignerPage() {
                 target={{ nodeId: selectedNode.id, nodeType: panelNodeType(selectedNode.type) }}
                 config={selectedNode.data.props ?? {}}
                 onChange={(next: WfNodeProps) => updateNodeProps(selectedNode.id, next)}
-                formFields={SAMPLE_FIELDS}
+                formFields={fields}
                 nodeName={selectedNode.data.name}
                 onNodeNameChange={(name) => updateNodeName(selectedNode.id, name)}
                 nodeOptions={nodeOptions.filter((n) => n.id !== selectedNode.id)}
@@ -493,14 +546,14 @@ export default function FlowDesignerPage() {
               )}
               {/* 节点字段权限（N-F-07）：审批类节点 + 流程有 formKey 时，按清单渲染 可见/可编辑/必填 矩阵。
                   不改共享 PropertyPanel——在设计器侧配置区渲染（同 scriptTask / 边级高级公式条件的做法）。 */}
-              {selectedNode.type === "userTask" && SEED_MODEL.formKey && (
+              {selectedNode.type === "userTask" && effFormKey && (
                 <div className="space-y-2 border-t px-3.5 py-3">
                   <div className="text-xs font-medium">节点字段权限</div>
                   <p className="text-[11px] text-muted-foreground">
-                    按表单「{SEED_MODEL.formKey}」字段清单配置本节点的字段显隐 / 可编辑；运行时由 <code className="font-mono">HostedForm</code> 套用。
+                    按表单「{effFormKey}」字段清单配置本节点的字段显隐 / 可编辑；运行时由 <code className="font-mono">HostedForm</code> 套用。
                   </p>
                   <FieldPermsEditor
-                    formKey={SEED_MODEL.formKey}
+                    formKey={effFormKey}
                     value={selectedNode.data.props?.formPerms ?? {}}
                     onChange={(formPerms) =>
                       updateNodeProps(selectedNode.id, { ...(selectedNode.data.props ?? {}), formPerms })
@@ -529,7 +582,7 @@ export default function FlowDesignerPage() {
                   target={{ nodeId: selectedEdge.id, nodeType: "condition" }}
                   config={{ condition: selectedEdge.data?.condition }}
                   onChange={(next: WfNodeProps) => updateEdgeCondition(selectedEdge.id, next.condition)}
-                  formFields={SAMPLE_FIELDS}
+                  formFields={fields}
                   branchMeta={{ isDefault: selectedEdge.data?.isDefault ?? false, priority: 1 }}
                 />
                 {/* 高级公式条件（Tier 1）：与上方结构化条件二选一，非空时优先（见 model.ts 边条件三态） */}
@@ -541,13 +594,13 @@ export default function FlowDesignerPage() {
                   <FormulaDesigner
                     value={selectedEdge.data?.expression ?? ""}
                     onChange={(expr) => updateEdgeExpression(selectedEdge.id, expr)}
-                    fields={SAMPLE_FIELDS}
+                    fields={fields}
                   />
                 </div>
               </div>
             </>
               ) : (
-                <PropertyPanel target="process" config={processConfig} onChange={setProcessConfig} formFields={SAMPLE_FIELDS} />
+                <PropertyPanel target="process" config={processConfig} onChange={handleProcessConfigChange} formFields={fields} />
               )}
             </aside>
           </div>
@@ -555,7 +608,7 @@ export default function FlowDesignerPage() {
       </NodeActionsContext.Provider>
 
       {/* 序列化结果（开发自检脚手架，W-19 正式设计器隐藏） */}
-      {DEV_SCAFFOLD && serialized && (
+      {showScaffold && serialized && (
         <details open className="rounded-lg border bg-card">
           <summary className="cursor-pointer px-3.5 py-2 text-xs font-medium text-muted-foreground">
             序列化 ProcessModel（JSON，已做 pm→rf→pm 往返自检）
@@ -565,4 +618,9 @@ export default function FlowDesignerPage() {
       )}
     </div>
   )
+}
+
+/** 独立预览页（/demo/flow-designer 路由）：内置示例模型 + 页面头，薄封装 FlowDesigner */
+export default function FlowDesignerPage() {
+  return <FlowDesigner />
 }

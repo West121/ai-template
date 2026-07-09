@@ -48,14 +48,23 @@ export function SequenceFlowEdge({
   const d = data as WfEdgeData | undefined
   const isDefault = d?.isDefault ?? false
   const isError = d?.validation === "error"
+  const highlight = d?.highlight
   const summary = d?.expression?.trim()
     ? d.expression.trim()
     : summarizeCondition(d?.condition, isDefault, fieldLabel)
   const label = isDefault ? "默认" : summary
 
-  // 描边优先级：校验错误(destructive) > 选中(primary) > 常态
-  const stroke = isError ? "var(--destructive)" : selected ? "var(--primary)" : undefined
-  const strokeWidth = isError ? 2.5 : selected ? 2.5 : 1.5
+  // 描边优先级：校验错误(destructive) > 运行时跟踪高亮(completed 绿 / active 主题色) > 选中(primary) > 常态
+  const stroke = isError
+    ? "var(--destructive)"
+    : highlight === "active"
+      ? "var(--primary)"
+      : highlight === "completed"
+        ? "#10b981"
+        : selected
+          ? "var(--primary)"
+          : undefined
+  const strokeWidth = isError || highlight || selected ? 2.5 : 1.5
 
   return (
     <>

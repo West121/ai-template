@@ -36,6 +36,7 @@ export function ServiceTaskNode({ id, data, selected }: NodeProps<WfRfNode>) {
       handleColor={meta.handleColor}
       selected={selected}
       validation={data.validation}
+      highlight={data.highlight}
     >
       {summarizeService(data.service)}
     </ActivityCard>

@@ -17,6 +17,7 @@ export function AiNode({ id, data, selected }: NodeProps<WfRfNode>) {
       handleColor="!bg-teal-500"
       selected={selected}
       validation={data.validation}
+      highlight={data.highlight}
     >
       {summarizeAi(data.ai)}
     </ActivityCard>

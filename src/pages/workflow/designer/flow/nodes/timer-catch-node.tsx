@@ -16,7 +16,7 @@ export function TimerCatchNode({ id, data, selected }: NodeProps<WfRfNode>) {
       <div
         className={cn(
           "flex size-12 items-center justify-center rounded-full border-2 border-indigo-500 bg-indigo-500/10 shadow-sm",
-          nodeRing(selected, data.validation),
+          nodeRing(selected, data.validation, data.highlight),
         )}
       >
         {/* 内圈：中间事件双圈语义 */}

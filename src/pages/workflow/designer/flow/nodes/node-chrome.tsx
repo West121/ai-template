@@ -17,6 +17,12 @@ export const FormFieldsContext = createContext<FormFieldOption[]>([])
 /** 节点校验态（W-14 画布锚定）：error → destructive 环，warning → amber 环 */
 export type ValidationRingState = "error" | "warning"
 
+/**
+ * 运行时跟踪高亮态（只读 FlowViewer 用）：completed → 绿描边，active → 主题色脉冲。
+ * 与设计器编辑态解耦：设计器节点 data.highlight 恒为 undefined，仅实例详情跟踪图注入。
+ */
+export type NodeHighlightState = "completed" | "active"
+
 /** 连线锚点基础样式（各节点按主题色再叠加 bg） */
 export const handleClass = (extra?: string) =>
   cn("!size-2.5 !rounded-full !border-2 !border-background", extra)
@@ -27,12 +33,19 @@ export function selectedRing(selected?: boolean): string | false {
 }
 
 /**
- * 统一高亮环：校验错误/警告优先于选中态（错误比选中更需要被看见），
- * 错误走 `--destructive` token（亮/暗自适应），无校验态时回落到选中环。
+ * 统一高亮环，优先级：校验错误/警告 > 运行时跟踪高亮 > 选中态。
+ * 校验错误走 `--destructive` token（亮/暗自适应）；运行时 completed 绿描边、active 主题色脉冲
+ *（`wf-hl-active` 的脉冲动画在 FlowViewer 的 `<style>` 内定义，设计器态不触发）；皆无时回落到选中环。
  */
-export function nodeRing(selected?: boolean, validation?: ValidationRingState): string | false {
+export function nodeRing(
+  selected?: boolean,
+  validation?: ValidationRingState,
+  highlight?: NodeHighlightState,
+): string | false {
   if (validation === "error") return "ring-2 ring-destructive ring-offset-2 ring-offset-background"
   if (validation === "warning") return "ring-2 ring-amber-500 ring-offset-2 ring-offset-background"
+  if (highlight === "active") return "ring-2 ring-primary wf-hl-active"
+  if (highlight === "completed") return "ring-2 ring-emerald-500"
   return selectedRing(selected)
 }
 
@@ -110,6 +123,7 @@ export function ActivityCard({
   handleColor,
   selected,
   validation,
+  highlight,
   children,
   className,
 }: {
@@ -121,6 +135,7 @@ export function ActivityCard({
   handleColor: string
   selected?: boolean
   validation?: ValidationRingState
+  highlight?: NodeHighlightState
   children?: ReactNode
   className?: string
 }) {
@@ -128,7 +143,7 @@ export function ActivityCard({
     <div
       className={cn(
         "w-52 overflow-hidden rounded-lg border bg-card shadow-sm transition-shadow hover:shadow-md",
-        nodeRing(selected, validation),
+        nodeRing(selected, validation, highlight),
         className,
       )}
     >
@@ -157,6 +172,7 @@ export function GatewayShell({
   handleColor,
   selected,
   validation,
+  highlight,
 }: {
   /** 节点 id（用于悬浮操作条）；缺省则不渲染操作条 */
   id?: string
@@ -170,6 +186,7 @@ export function GatewayShell({
   handleColor: string
   selected?: boolean
   validation?: ValidationRingState
+  highlight?: NodeHighlightState
 }) {
   return (
     <div className="relative size-12">
@@ -178,7 +195,7 @@ export function GatewayShell({
         className={cn(
           "flex size-12 rotate-45 items-center justify-center rounded-md border-2 shadow-sm",
           colorClass,
-          nodeRing(selected, validation),
+          nodeRing(selected, validation, highlight),
         )}
       >
         <Icon className={cn("size-4 -rotate-45", iconClass)} />

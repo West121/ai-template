@@ -1,9 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
-import Viewer from "bpmn-js/lib/NavigatedViewer"
-import "bpmn-js/dist/assets/diagram-js.css"
-import "bpmn-js/dist/assets/bpmn-js.css"
-import "bpmn-js/dist/assets/bpmn-font/css/bpmn.css"
 import {
   ArrowLeft,
   Bell,
@@ -17,16 +13,11 @@ import {
   Send,
   ShieldAlert,
   Undo2,
-  ZoomIn,
-  ZoomOut,
-  Scan,
   Maximize2,
   Minimize2,
 } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
-import { isDarkMode } from "@/lib/theme"
-import { useAppStore } from "@/stores/app-store"
 import { useAuthStore } from "@/stores/auth-store"
 import { api, NetworkError } from "@/lib/api"
 import { FormRenderer } from "@/components/form-renderer"
@@ -52,118 +43,62 @@ import type { WfInstanceDetailP3 } from "@/types/workflow-p3"
 import { SubInstanceLinks, WfP3Bar } from "./wf-p3"
 import { SealStrip } from "./wf-print"
 import { DingtalkTrack } from "./wf-dingtalk-track"
+import { FlowViewer } from "./designer/flow/flow-viewer"
+import type { ProcessModel } from "./designer/flow/model"
 
-/* ================= 跟踪图：bpmn-js Viewer + 高亮 ================= */
+/* ================= 跟踪图：react-flow 只读 FlowViewer + 高亮 ================= */
 
-interface ViewerCanvas {
-  zoom(scale?: number | "fit-viewport", center?: unknown): number
-  addMarker(elementId: string, marker: string): void
-}
-
-type ViewerInstance = InstanceType<typeof Viewer> & {
-  get(name: "canvas"): ViewerCanvas
+/** POST /api/wf/models/import 结果：bpmnXml → 归一化 ProcessModel（+ 未完全还原提示） */
+interface BpmnImportResult {
+  model: ProcessModel
+  warnings?: string[]
 }
 
-/** 高亮标记样式：completed 绿色描边、active 主题色脉冲 */
-const TRACK_CSS = `
-.wf-track .wf-node-completed .djs-visual > :first-child {
-  stroke: #10b981 !important;
-  stroke-width: 2px !important;
-}
-.wf-track .wf-node-completed .djs-visual > :first-child:not(path) {
-  fill: color-mix(in srgb, #10b981 8%, transparent) !important;
-}
-.wf-track .wf-node-active .djs-visual > :first-child {
-  stroke: var(--primary) !important;
-  stroke-width: 2.5px !important;
-  animation: wf-track-pulse 1.6s ease-in-out infinite;
-}
-.wf-track .wf-node-active .djs-visual > :first-child:not(path) {
-  fill: color-mix(in srgb, var(--primary) 10%, transparent) !important;
-}
-@keyframes wf-track-pulse {
-  0%, 100% { stroke-opacity: 1; }
-  50% { stroke-opacity: 0.35; }
-}
-`
+/**
+ * bpmnXml → ProcessModel 缓存（按 xml 串键）：同一实例多次开合流程跟踪侧栏、切换全屏时避免重复调
+ * /api/wf/models/import。模块级 Map，跨组件实例复用；xml 变化（新版本/重新加载）自然产生新键。
+ */
+const modelCache = new Map<string, ProcessModel>()
 
-function BpmnTrack({ xml, highlight }: { xml: string; highlight?: WfHighlight }) {
-  const containerRef = useRef<HTMLDivElement | null>(null)
-  const viewerRef = useRef<ViewerInstance | null>(null)
-  const [renderError, setRenderError] = useState(false)
+/**
+ * 流程跟踪图（BPMN / GRAPH 定义）：把后端 bpmnXml 经 POST /api/wf/models/import 转成归一化
+ * ProcessModel，喂只读 FlowViewer 渲染 + 高亮当前节点/已完成路径。
+ * 高亮 id（highlight.completed/active）与 ProcessModel 节点/边 id 对齐（== BPMN 元素 id）。
+ */
+function FlowTrack({ xml, highlight }: { xml: string; highlight?: WfHighlight }) {
+  const [model, setModel] = useState<ProcessModel | null>(() => modelCache.get(xml) ?? null)
+  const [loadError, setLoadError] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
-  const dark = isDarkMode(useAppStore((s) => s.themeMode))
 
   useEffect(() => {
-    if (!containerRef.current) return
-    const viewer = new Viewer({
-      container: containerRef.current,
-      bpmnRenderer: dark
-        ? { defaultFillColor: "#232a3b", defaultStrokeColor: "#c3cbdc", defaultLabelColor: "#c3cbdc" }
-        : { defaultFillColor: "#ffffff", defaultStrokeColor: "#22242a", defaultLabelColor: "#22242a" },
-    }) as ViewerInstance
-    viewerRef.current = viewer
-
+    const cached = modelCache.get(xml)
+    if (cached) {
+      setModel(cached)
+      setLoadError(false)
+      return
+    }
     let disposed = false
-    void viewer
-      .importXML(xml)
-      .then(() => {
+    setModel(null)
+    setLoadError(false)
+    void api<BpmnImportResult>("/api/wf/models/import", {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: xml,
+    })
+      .then((res) => {
         if (disposed) return
-        const canvas = viewer.get("canvas")
-        canvas.zoom("fit-viewport")
-        for (const id of highlight?.completed ?? []) {
-          try {
-            canvas.addMarker(id, "wf-node-completed")
-          } catch {
-            /* 高亮的节点可能不在图上（如子流程），忽略 */
-          }
-        }
-        for (const id of highlight?.active ?? []) {
-          try {
-            canvas.addMarker(id, "wf-node-active")
-          } catch {
-            /* ignore */
-          }
-        }
+        modelCache.set(xml, res.model)
+        setModel(res.model)
       })
       .catch(() => {
-        if (!disposed) setRenderError(true)
+        if (!disposed) setLoadError(true)
       })
-
     return () => {
       disposed = true
-      viewerRef.current = null
-      viewer.destroy()
     }
-  }, [xml, highlight, dark])
+  }, [xml])
 
-  // 全屏切换后视图尺寸变化，重新适配
-  useEffect(() => {
-    const viewer = viewerRef.current
-    if (!viewer) return
-    const t = setTimeout(() => {
-      try {
-        viewer.get("canvas").zoom("fit-viewport")
-      } catch {
-        /* ignore */
-      }
-    }, 60)
-    return () => clearTimeout(t)
-  }, [fullscreen])
-
-  const zoomBy = useCallback((factor: number) => {
-    const viewer = viewerRef.current
-    if (!viewer) return
-    const canvas = viewer.get("canvas")
-    const cur = canvas.zoom()
-    canvas.zoom(Math.min(4, Math.max(0.2, cur * factor)))
-  }, [])
-
-  const fit = useCallback(() => {
-    viewerRef.current?.get("canvas").zoom("fit-viewport")
-  }, [])
-
-  if (renderError) {
+  if (loadError) {
     return (
       <div className="flex h-105 flex-col items-center justify-center gap-2 text-muted-foreground">
         <ShieldAlert className="size-8 opacity-40" />
@@ -172,59 +107,28 @@ function BpmnTrack({ xml, highlight }: { xml: string; highlight?: WfHighlight })
     )
   }
 
-  const toolbar = (
-    <div className="absolute top-3 right-3 z-10 flex items-center gap-1 rounded-md border bg-card/90 p-1 shadow-sm backdrop-blur">
-      <Button variant="ghost" size="icon" className="size-7" title="放大" onClick={() => zoomBy(1.2)}>
-        <ZoomIn className="size-4" />
-      </Button>
-      <Button variant="ghost" size="icon" className="size-7" title="缩小" onClick={() => zoomBy(1 / 1.2)}>
-        <ZoomOut className="size-4" />
-      </Button>
-      <Button variant="ghost" size="icon" className="size-7" title="适应画布" onClick={fit}>
-        <Scan className="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="size-7"
-        title={fullscreen ? "退出全屏" : "全屏查看"}
-        onClick={() => setFullscreen((v) => !v)}
-      >
-        {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-      </Button>
-    </div>
-  )
-
-  const legend = (
-    <div className="pointer-events-none absolute bottom-3 right-3 flex items-center gap-4 rounded-md border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur">
-      <span className="flex items-center gap-1.5">
-        <span className="size-2.5 rounded-sm border-2 border-emerald-500" /> 已完成
-      </span>
-      <span className="flex items-center gap-1.5">
-        <span className="size-2.5 animate-pulse rounded-sm border-2 border-primary" /> 进行中
-      </span>
-      <span className="hidden sm:inline opacity-70">· 滚轮缩放 · 拖拽平移</span>
-    </div>
-  )
+  if (!model) {
+    return <Skeleton className="h-105 w-full rounded-md" />
+  }
 
   return (
-    <div
-      className={cn(
-        "wf-track relative",
-        fullscreen && "fixed inset-0 z-50 flex flex-col bg-background p-4",
-      )}
-    >
-      <style>{TRACK_CSS}</style>
-      <div
-        key={dark ? "dark" : "light"}
-        ref={containerRef}
-        className={cn(
-          "w-full rounded-md border bg-white dark:bg-background",
-          fullscreen ? "flex-1" : "h-105",
-        )}
+    <div className={cn("relative", fullscreen && "fixed inset-0 z-50 flex flex-col bg-background p-4")}>
+      <FlowViewer
+        model={model}
+        highlight={highlight}
+        heightClass={fullscreen ? "min-h-0 flex-1" : "h-105"}
       />
-      {toolbar}
-      {legend}
+      <div className="absolute top-3 right-3 z-10">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7 border bg-card/90 shadow-sm backdrop-blur"
+          title={fullscreen ? "退出全屏" : "全屏查看"}
+          onClick={() => setFullscreen((v) => !v)}
+        >
+          {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+        </Button>
+      </div>
     </div>
   )
 }
@@ -653,7 +557,7 @@ export default function WorkflowInstanceDetailPage() {
           // 钉钉定义：渲染只读钉钉风格跟踪图（复用 dingtalk 画布布局，按 highlight 高亮节点 id）
           <DingtalkTrack designerJson={detail.designerJson} highlight={detail.highlight} />
         ) : detail.bpmnXml ? (
-          <BpmnTrack xml={detail.bpmnXml} highlight={detail.highlight} />
+          <FlowTrack xml={detail.bpmnXml} highlight={detail.highlight} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
             <GitBranch className="size-8 opacity-30" />

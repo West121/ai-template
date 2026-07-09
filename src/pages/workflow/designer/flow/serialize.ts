@@ -19,6 +19,7 @@
 import type { Edge, Node } from "@xyflow/react"
 import type { BranchCondition, WfNodeProps } from "../types"
 import type { FlowConfig } from "../shared/config"
+import type { NodeHighlightState } from "./nodes/node-chrome"
 import type {
   AiConfig,
   CallActivityConfig,
@@ -57,6 +58,11 @@ export interface WfNodeData extends Record<string, unknown> {
    * 故此字段永不进入序列化结果（跨端无污染）。
    */
   validation?: WfValidationState
+  /**
+   * 运行时跟踪高亮态（**瞬态、仅渲染用**）：由只读 FlowViewer 据 WfHighlight 注入，
+   * completed=已完成路径、active=当前节点。同 validation，toProcessModel 不拷贝，永不序列化。
+   */
+  highlight?: NodeHighlightState
   /** 审批域属性，共享 PropertyPanel 原样消费（对应 FlowNode.props） */
   props?: WfNodeProps
   /** 尺寸；省略时后端按类型给默认（对应 FlowNode.size） */
@@ -94,6 +100,8 @@ export interface WfEdgeData extends Record<string, unknown> {
   expression?: string
   /** 校验高亮态（瞬态、仅渲染用，不序列化；同 WfNodeData.validation） */
   validation?: WfValidationState
+  /** 运行时跟踪高亮态（瞬态、仅渲染用，不序列化；只读 FlowViewer 注入，同 WfNodeData.highlight） */
+  highlight?: NodeHighlightState
 }
 
 export type WfRfNode = Node<WfNodeData>

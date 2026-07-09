@@ -20,7 +20,7 @@ export function TimerBoundaryNode({ id, data, selected }: NodeProps<WfRfNode>) {
         className={cn(
           "flex size-12 items-center justify-center rounded-full border-2 bg-background shadow-sm",
           interrupting ? "border-indigo-500" : "border-indigo-500 border-dashed",
-          nodeRing(selected, data.validation),
+          nodeRing(selected, data.validation, data.highlight),
         )}
       >
         <div

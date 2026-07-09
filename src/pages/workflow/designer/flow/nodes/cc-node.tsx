@@ -17,6 +17,7 @@ export function CcNode({ id, data, selected }: NodeProps<WfRfNode>) {
       handleColor="!bg-teal-600"
       selected={selected}
       validation={data.validation}
+      highlight={data.highlight}
     >
       {summarizeCc(data.props)}
     </ActivityCard>

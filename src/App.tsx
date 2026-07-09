@@ -43,7 +43,6 @@ const EditTableDemoPage = lazy(() => import("@/pages/demo/edit-table"))
 const FormDesignerDemoPage = lazy(() => import("@/pages/demo/form-designer"))
 const RecordPickerDemoPage = lazy(() => import("@/pages/demo/record-picker"))
 const AdvancedFormDemoPage = lazy(() => import("@/pages/demo/form"))
-const BpmnDemoPage = lazy(() => import("@/pages/demo/bpmn"))
 const ApprovalFlowDemoPage = lazy(() => import("@/pages/demo/approval-flow"))
 const FlowDesignerDemoPage = lazy(() => import("@/pages/workflow/designer/flow/flow-designer"))
 const NotFoundPage = lazy(() => import("@/pages/not-found"))
@@ -163,7 +162,6 @@ export default function App() {
               <Route path="form-designer" element={<FormDesignerDemoPage />} />
               <Route path="record-picker" element={<RecordPickerDemoPage />} />
               <Route path="form" element={<AdvancedFormDemoPage />} />
-              <Route path="bpmn" element={<BpmnDemoPage />} />
               <Route path="approval-flow" element={<ApprovalFlowDemoPage />} />
               <Route path="flow-designer" element={<FlowDesignerDemoPage />} />
             </Route>

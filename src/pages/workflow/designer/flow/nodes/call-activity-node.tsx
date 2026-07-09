@@ -18,6 +18,7 @@ export function CallActivityNode({ id, data, selected }: NodeProps<WfRfNode>) {
       handleColor="!bg-indigo-500"
       selected={selected}
       validation={data.validation}
+      highlight={data.highlight}
       className="border-x-4 border-x-indigo-400/60"
     >
       {summarizeCallActivity(data.callActivity)}

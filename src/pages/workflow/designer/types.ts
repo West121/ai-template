@@ -32,7 +32,13 @@ export interface FormDefItem {
 
 /* ---------------- 流程定义 ---------------- */
 
-export type DesignerType = "DINGTALK" | "BPMN"
+/**
+ * 流程设计器类型：
+ *  - DINGTALK：仿钉钉线性设计器（并存保留）。
+ *  - GRAPH：新一代 react-flow 图设计器（归一化 ProcessModel，后端 GraphToBpmnConverter 直译）。
+ *  - BPMN：旧 bpmn-js 设计器（已下线，仅存量定义识别用；编辑时经 /api/wf/models/import 迁移为 GRAPH）。
+ */
+export type DesignerType = "DINGTALK" | "GRAPH" | "BPMN"
 
 /** 表单绑定类型：动态表单（表单定义） / 自定义表单（React 路由页面） */
 export type FormType = "DYNAMIC" | "CUSTOM"
