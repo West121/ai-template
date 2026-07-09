@@ -36,6 +36,9 @@
         <lombok.version>1.18.42</lombok.version>
         <!-- Aviator：Tier 1 公式安全表达式引擎（可注册自定义函数、可禁反射/禁任意对象访问） -->
         <aviator.version>5.4.3</aviator.version>
+        <!-- LiteFlow：Tier 2 多语言脚本执行器（N-B-00 spike 已验证 SB4/Java21；
+             SB4 必须用专门坐标 liteflow-spring-boot4-starter，普通 starter 仅 SB2/3） -->
+        <liteflow.version>2.16.0</liteflow.version>
     </properties>
 
     <dependencyManagement>
@@ -77,6 +80,28 @@
                 <groupId>com.googlecode.aviator</groupId>
                 <artifactId>aviator</artifactId>
                 <version>${aviator.version}</version>
+            </dependency>
+            <!-- LiteFlow（Tier 2 脚本引擎）：SB4 专用 starter + Groovy/GraalJS/Jython 三脚本插件。
+                 我们只用其脚本执行 SPI（ScriptExecutorFactory），不用链路编排（liteflow.enable=false）。 -->
+            <dependency>
+                <groupId>com.yomahub</groupId>
+                <artifactId>liteflow-spring-boot4-starter</artifactId>
+                <version>${liteflow.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.yomahub</groupId>
+                <artifactId>liteflow-script-groovy</artifactId>
+                <version>${liteflow.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.yomahub</groupId>
+                <artifactId>liteflow-script-graaljs</artifactId>
+                <version>${liteflow.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.yomahub</groupId>
+                <artifactId>liteflow-script-python</artifactId>
+                <version>${liteflow.version}</version>
             </dependency>
             <!-- jjwt -->
             <dependency>

@@ -41,6 +41,8 @@ public class FlowNodeDto {
 
     /** serviceTask 专属：{@code {impl, triggerType, handler, webhookUrl, timer, config, delegateExpression}} */
     public JsonNode service;
+    /** serviceTask{impl:"script"} 专属（Tier 2 脚本节点）：{@code {lang:groovy|js|python, code}} */
+    public JsonNode script;
     /** ai 节点专属：{@code {model, systemPrompt, formContext[], outputMap}} */
     public JsonNode ai;
     /** webhook 节点专属：{@code {url}} */

@@ -31,6 +31,13 @@ spring:
       max-file-size: 200MB
       max-request-size: 220MB
 
+# LiteFlow（Tier 2 脚本引擎，N-B-05/06/07）：仅使用其多语言脚本执行 SPI（ScriptService 直接调
+# ScriptExecutorFactory，静态 ServiceLoader，不依赖 Spring 装配），不使用其链路编排。
+# enable=false 关闭 LiteflowMainAutoConfiguration（不建 FlowExecutor / ComponentScanner / 不解析 rule-source），
+# 避免"无 chain 规则源"导致的装配报错，对现有启动零影响。脚本引擎（Groovy/GraalJS/Jython）仍随 jar 上 SPI 可用。
+liteflow:
+  enable: false
+
 # Flowable 8 内嵌流程引擎（复用平台 DataSource / 事务；ACT_* 表由引擎自建，不进 Flyway）
 flowable:
   database-schema-update: true       # 引擎自建/升级 ACT_* 表

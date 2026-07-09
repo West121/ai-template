@@ -295,8 +295,28 @@ public class GraphToBpmnConverter {
                 case "autoReject" -> autoDecide(c, node, "REJECT", "自动拒绝");
                 case "trigger" -> trigger(c, node, svc);
                 case "delegate" -> genericDelegate(c, node, svc);
-                default -> throw new BusinessException(400, "未知 serviceTask.impl(需 autoApprove/autoReject/trigger/delegate): " + impl);
+                case "script" -> scriptTask(c, node);
+                default -> throw new BusinessException(400, "未知 serviceTask.impl(需 autoApprove/autoReject/trigger/delegate/script): " + impl);
             }
+        }
+
+        /**
+         * 脚本节点（Tier 2）：serviceTask delegateExpression {@code ${wfScriptDelegate}}，
+         * 语言/脚本体取自 {@code node.script}（{@code {lang, code}}）→ 存 oa: 扩展元素 scriptLang/scriptCode，
+         * 运行时由 {@code wfScriptDelegate} 读出交 {@code ScriptService} 执行。
+         * <b>脚本是部署态工件</b>：随流程定义版本化落 BPMN，运行时不接受用户注入（治理见 §3.3）。
+         */
+        private void scriptTask(FlowElementsContainer c, FlowNodeDto node) {
+            JsonNode s = node.script == null ? NullNode.getInstance() : node.script;
+            String lang = s.path("lang").asString("");
+            String code = s.path("code").asString("");
+            if (!StringUtils.hasText(lang) || !StringUtils.hasText(code)) {
+                throw new BusinessException(400, "serviceTask{script} 缺少 script.lang/script.code: " + node.id);
+            }
+            ServiceTask st = newDelegateTask(node, "脚本", "${wfScriptDelegate}");
+            addExtText(st, "scriptLang", lang);
+            addExtText(st, "scriptCode", code);
+            c.addFlowElement(st);
         }
 
         /** 自动决策：serviceTask delegateExpression {@code ${wfAutoDecide}}，autoDecision=APPROVE|REJECT。 */

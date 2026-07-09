@@ -311,6 +311,15 @@ NotifyItem = {id,type,title,content,procInstId,readFlag,createdAt}
 - AI 审批 `{type:"ai",name,model?,systemPrompt?,formContext?:[字段],outputMap?:{approve/reject/route→变量}}` → serviceTask delegateExpression `wfAiApprovalDelegate`：组装表单上下文交 `AiApprovalProvider` 决策 → 写 wf_operation(actor=AI,action=AI_APPROVE,意见) + 按 outputMap 设流程变量(供后续排它网关路由)。**AI SPI**：默认实现 enabled 且有 key 走 OpenAI 兼容 chat completions；无 key 降级规则模拟并在意见明示「AI模拟」。配置 `oa.ai.{enabled,base-url,api-key,model,timeout-seconds}`(默认 enabled=false)
 - 节点表单字段权限 `approval` 节点 `formPerms:{field:"HIDDEN"|"READ"|"EDIT"}` → 存扩展元素，详情/待办按当前节点返回 nodeFormPerms，前端 FormRenderer 按此显隐/只读
 
+### Tier 2 脚本引擎（LiteFlow，N-B-05/06/07；GRAPH 设计器 scriptTask）
+后端脚本 = 完整应用权限、可有副作用，**非沙箱**（诚实标注）。治理：作者权限收口 `wf:script:write`（仅管理员）+ 脚本是部署态工件（不接受运行时用户注入）+ 每次执行落审计 `wf_script_exec_log`（V18）+ 执行超时看护。
+- **引擎**：LiteFlow 2.16.0（`liteflow-spring-boot4-starter` + groovy/graaljs/python 插件），`liteflow.enable=false`（只用其多语言脚本执行 SPI + `@ScriptBean` 门面，不用链路编排，对现有启动零影响）。语言 `lang∈groovy|js|python`（js=GraalJS；python=Jython/Py2，无 C 扩展）。脚本超时 `oa.wf.script.timeout-ms`（默认 5000ms）。
+- **脚本上下文变量**（注入脚本绑定）：`vars`(流程变量读写 Map，脚本增改由 wfScriptDelegate 回写为流程变量)、`form`(表单数据 Map)、`execution`(Flowable DelegateExecution，测试运行时为 null)、`spring`(门面：`spring.bean("名")`/`spring.bean(类.class)`/`spring.has("名")` 取任意 Spring Bean)、`log`(`log.info/warn/error`)。**JS 用最后语句值/表达式返回，不支持顶层 return**；Groovy/Python 支持 `return`。
+- **scriptTask 序列化约定（GRAPH ProcessModel，`GraphToBpmnConverter` 生成）**：脚本节点 = `serviceTask` 节点 + 顶层 `script`：`{type:"serviceTask", service:{impl:"script"}, script:{lang:"groovy|js|python", code:"..."}}` → serviceTask delegateExpression `${wfScriptDelegate}`，`lang`/`code` 存节点扩展元素 `oa:scriptLang`/`oa:scriptCode`；缺 lang/code → 400。运行时 `wfScriptDelegate` 读出交 `ScriptService` 执行。
+  - **前端需补（N-F-09，model.ts）**：`ServiceTaskConfig` 联合当前无 `script` 分支——需增 `{ impl:"script" }`，并在 `ServiceTaskNode` 增可选 `script?: { lang:"groovy"|"js"|"python"; code:string }`（脚本节点=serviceTask 且 service.impl="script" + 节点级 script 承载 lang/code；与后端 `FlowNodeDto.script` 对齐）。
+- **测试运行端点**：POST `/api/wf/script/test-run` {lang,code,sampleVars?:{}}【P:wf:script:write】→ `ScriptTestRunResult{success,result?,resultType?,vars,costMs,error?}`（编译/运行/超时错误以 success=false + error 承载于 R.ok，供编辑器展示；同权限、同审计）。
+- **种子（V18）**：权限码 `wf:script:write`（流程脚本编写，BUTTON，授 ADMIN）；审计表 `wf_script_exec_log`(who/script_ref/lang/source[TASK|TEST_RUN]/success/cost_ms/error_msg/created_at)。
+
 ### 种子（V7 + WorkflowInitializer 启动部署）
 - 表单定义「请假申请单」(code=leave,v1,PUBLISHED)：请假类型 select / 开始日期 / 结束日期 / 天数 number / 事由 textarea
 - 流程定义「请假审批」(defCode=leave_approval,DINGTALK)：发起 → 部门经理(LEADER level1,ANY) → 条件(天数>3 → 总经理 admin，否则跳过) → 抄送 hr(zhangsan) → 结束

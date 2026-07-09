@@ -306,6 +306,38 @@ class GraphToBpmnConverterTest {
         assertEquals("${myBean}", custom.getImplementation(), "通用 delegate 直配 delegateExpression");
     }
 
+    /** serviceTask{impl:"script"}：→ wfScriptDelegate，lang/code 存 oa 扩展 scriptLang/scriptCode。 */
+    @Test
+    void scriptTaskToWfScriptDelegate() {
+        JsonNode root = json("""
+                {"key": "p", "name": "脚本节点", "nodes": [
+                   {"id": "start", "type": "startEvent", "name": "开始", "position": {"x": 0, "y": 0}},
+                   {"id": "sc", "type": "serviceTask", "name": "计算总额", "position": {"x": 100, "y": 0},
+                    "service": {"impl": "script"},
+                    "script": {"lang": "groovy", "code": "vars.put('total', vars.get('price') * vars.get('qty'))"}}],
+                 "edges": [{"id": "e1", "source": "start", "target": "sc"}]}
+                """);
+        ServiceTask sc = (ServiceTask) process(converter.graphToBpmn(root)).getFlowElement("sc");
+        assertEquals("${wfScriptDelegate}", sc.getImplementation(), "脚本节点走 wfScriptDelegate");
+        assertEquals("groovy", sc.getExtensionElements().get("scriptLang").get(0).getElementText());
+        assertTrue(sc.getExtensionElements().get("scriptCode").get(0).getElementText().contains("vars.put('total'"),
+                "脚本体存 oa:scriptCode");
+    }
+
+    /** serviceTask{impl:"script"} 缺 script.lang/code → 清晰异常。 */
+    @Test
+    void scriptTaskMissingLangOrCodeThrows() {
+        JsonNode root = json("""
+                {"key": "p", "name": "p", "nodes": [
+                   {"id": "start", "type": "startEvent", "name": "开始", "position": {"x": 0, "y": 0}},
+                   {"id": "sc", "type": "serviceTask", "name": "脚本", "position": {"x": 100, "y": 0},
+                    "service": {"impl": "script"}, "script": {"lang": "groovy"}}],
+                 "edges": [{"id": "e1", "source": "start", "target": "sc"}]}
+                """);
+        BusinessException ex = assertThrows(BusinessException.class, () -> converter.graphToBpmn(root));
+        assertTrue(ex.getMessage().contains("script.lang/script.code"));
+    }
+
     /** serviceTask{delegate} 缺 delegateExpression → 清晰异常。 */
     @Test
     void serviceTaskDelegateMissingExpressionThrows() {
