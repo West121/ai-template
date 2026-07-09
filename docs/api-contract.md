@@ -151,7 +151,18 @@ ProcessDef = {id,defCode,name,category,icon,formCode,formVersion,designerType:DI
   - **defCode 须为 BPMN 合法 id（字母数字下划线，首字符非数字）**；含 `-` 等特殊字符会被转换器 sanitize 成下划线，导致 startProcessInstanceByKey 找不到 key。
 - PUT `/api/wf/process-defs/{id}` 同上【P:wf:def:edit】
 - POST `/api/wf/process-defs/{id}/publish`【P:wf:def:edit】 发布=DINGTALK JSON→BPMN 转换 / BPMN 校验 → repositoryService 部署（引擎 parse 失败即回滚报错）
-  - DINGTALK designerJson 结构：`{"nodes":[StepNode...]}`，StepNode：
+
+### 图直译模型部署（N-B-01 切片 2a，新 react-flow 设计器专用；与旧 process-defs 路径并存）
+前缀 `/api/wf/models`；走 `GraphToBpmnConverter` 图直译（前端归一化 `ProcessModel` JSON → BpmnModel → 同一 Flowable 部署与 wf_process_ext 落库）。`designerType=GRAPH` 存 `designer_json`。
+- POST `/api/wf/models/graph/deploy` {key,name,category?,icon?,formCode?,formVersion?,model:ProcessModel}【P:wf:def:edit】 一步完成 upsert(by key=defCode) + 转换 + 部署 + 回填
+  → GraphDeployResponse {id, processDefinitionId, processDefinitionKey(==key), version, deploymentId, status(=PUBLISHED)}
+  - **key 须为 BPMN 合法 id**（字母数字下划线、首字符非数字）；顶层 key/name 归一化写回 model.key/name，保证 BPMN process id==def_code（否则 startProcessInstanceByKey 找不到 key）
+  - **ProcessModel 结构**（`ProcessModel = {schemaVersion:1,key,name,version?,formKey?,flowConfig?,nodes:FlowNode[],edges:SequenceFlow[]}`，显式图非嵌套树，详见 `docs/design/next-gen-workflow-and-formula.md` 附录 A/B）：
+    - FlowNode = `{id,type,name,position:{x,y},size?:{w,h},props?:WfNodeProps,terminate?,formKey?}`
+    - 切片 2a 已支持 type：`startEvent` / `endEvent`（terminate:true 加终止事件）/ `userTask`（props=WfNodeProps）/ `exclusiveGateway` / `parallelGateway`（单网关直译，fork/join 前端显式成对，出边无条件）/ `inclusiveGateway`（默认分支同 exclusive）
+    - 其余（serviceTask/callActivity/subProcess/timerCatch/timerBoundary/cc/ai/webhook）切片 2 后续补齐，遇到抛 400「暂不支持」
+    - SequenceFlow = `{id,source,target,name?,waypoints?:[{x,y}],isDefault?,condition?:BranchCondition,expression?}`；condition 结构化经 `ConditionCompiler`→UEL（跨端字节兼容红线不变），expression 高级公式原样下发，二者互斥；isDefault 设网关 default
+- DINGTALK designerJson 结构：`{"nodes":[StepNode...]}`，StepNode：
     - approval：`{id,type:"approval",name,assigneeRules:[{kind:...,...}],multiMode:ANY|ALL|SEQUENCE|VOTE,emptyStrategy:AUTO_PASS|TO_ADMIN|BLOCK}`
       - **emptyStrategy 语义**：`AUTO_PASS`=审批人空则节点自动通过；`TO_ADMIN`=空则静默转管理员(admin)；`BLOCK`=**真阻塞**，审批人空即抛业务异常中断流转(发起/流转失败)，与 TO_ADMIN 明确区分
       （refs:[{kind:USER|DEPT|ROLE|POST,id}]，**前端 OrgPicker 统一用 id 制**（引擎亦兼容 username 回退，但设计器产出请用 id））

@@ -2,7 +2,10 @@ package com.xingchen.oa.workflow.service;
 
 import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.exception.BusinessException;
+import com.xingchen.oa.workflow.convert.GraphToBpmnConverter;
 import com.xingchen.oa.workflow.convert.JsonToBpmnConverter;
+import com.xingchen.oa.workflow.dto.GraphDeployRequest;
+import com.xingchen.oa.workflow.dto.GraphDeployResponse;
 import com.xingchen.oa.workflow.dto.ProcessDefRequest;
 import com.xingchen.oa.workflow.dto.ProcessDefResponse;
 import com.xingchen.oa.workflow.entity.WfProcessExt;
@@ -22,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.nio.charset.StandardCharsets;
 
@@ -35,6 +39,7 @@ public class ProcessDefService {
 
     private final WfProcessExtRepository repository;
     private final JsonToBpmnConverter converter;
+    private final GraphToBpmnConverter graphConverter;
     private final RepositoryService repositoryService;
     private final ObjectMapper objectMapper;
 
@@ -120,7 +125,21 @@ public class ProcessDefService {
                 : null;
         Deployment deployment;
         try {
-            if (WfProcessExt.TYPE_BPMN.equals(e.getDesignerType())) {
+            if (WfProcessExt.TYPE_GRAPH.equals(e.getDesignerType())) {
+                // 图直译路径（切片 2a）：designer_json 存归一化 ProcessModel，经 GraphToBpmnConverter 直译。
+                if (!StringUtils.hasText(e.getDesignerJson())) {
+                    throw new BusinessException(400, "图流程缺少 ProcessModel(designerJson)");
+                }
+                JsonNode root = objectMapper.readTree(e.getDesignerJson());
+                BpmnModel model = graphConverter.graphToBpmn(root);
+                byte[] xml = new BpmnXMLConverter().convertToXML(model);
+                e.setBpmnXml(new String(xml, StandardCharsets.UTF_8));
+                deployment = repositoryService.createDeployment()
+                        .name(e.getName())
+                        .key(e.getDefCode())
+                        .addBpmnModel(e.getDefCode() + ".bpmn20.xml", model)
+                        .deploy();
+            } else if (WfProcessExt.TYPE_BPMN.equals(e.getDesignerType())) {
                 if (!StringUtils.hasText(e.getBpmnXml())) {
                     throw new BusinessException(400, "BPMN 流程缺少 bpmnXml");
                 }
@@ -151,6 +170,67 @@ public class ProcessDefService {
         e.setLatestDeploymentId(deployment.getId());
         e.setProcessDefinitionId(pd != null ? pd.getId() : null);
         e.setStatus(WfProcessExt.STATUS_PUBLISHED);
+    }
+
+    /**
+     * 图直译一站式部署（切片 2a）：接受前端归一化 {@link com.xingchen.oa.workflow.convert.graph.ProcessModel} JSON，
+     * 经 {@link GraphToBpmnConverter} 转 {@link BpmnModel}，走与旧路径完全相同的 Flowable 部署与 wf_process_ext 落库。
+     *
+     * <p>与旧「先建档 → 再发布」两步流程并存：本端点一步完成 upsert(by defCode) + 转换 + 部署 + 回填。
+     * defCode 取请求 {@code key}，并归一化写入 model.key/name 保证 BPMN process id == defCode
+     *（否则 startProcessInstanceByKey 找不到 key）。
+     */
+    @Transactional
+    public GraphDeployResponse deployGraph(GraphDeployRequest req) {
+        if (!StringUtils.hasText(req.key())) {
+            throw new BusinessException(400, "缺少流程 key");
+        }
+        if (req.model() == null || req.model().isMissingNode() || req.model().isNull()) {
+            throw new BusinessException(400, "缺少 ProcessModel(model)");
+        }
+        // 归一化：以顶层 key/name 为准写回 model，保证 process id == defCode
+        JsonNode model = req.model();
+        if (model instanceof ObjectNode obj) {
+            obj.put("key", req.key());
+            if (StringUtils.hasText(req.name())) {
+                obj.put("name", req.name());
+            }
+        }
+
+        WfProcessExt e = repository.findByDefCode(req.key()).orElseGet(() -> {
+            WfProcessExt ne = new WfProcessExt();
+            ne.setDefCode(req.key());
+            ne.setCreatedBy(WfSupport.currentUser().getUserId());
+            return ne;
+        });
+        e.setName(StringUtils.hasText(req.name()) ? req.name() : req.key());
+        e.setDesignerType(WfProcessExt.TYPE_GRAPH);
+        e.setDesignerJson(model.toString());
+        if (StringUtils.hasText(req.formCode())) {
+            e.setFormCode(req.formCode());
+        }
+        if (req.formVersion() != null) {
+            e.setFormVersion(req.formVersion());
+        }
+        if (StringUtils.hasText(req.category())) {
+            e.setCategory(req.category());
+        }
+        if (StringUtils.hasText(req.icon())) {
+            e.setIcon(req.icon());
+        }
+
+        deploy(e);
+        repository.save(e);
+
+        ProcessDefinition pd = repositoryService.createProcessDefinitionQuery()
+                .processDefinitionId(e.getProcessDefinitionId()).singleResult();
+        return new GraphDeployResponse(
+                e.getId(),
+                e.getProcessDefinitionId(),
+                pd != null ? pd.getKey() : e.getDefCode(),
+                pd != null ? pd.getVersion() : null,
+                e.getLatestDeploymentId(),
+                e.getStatus());
     }
 
     private WfProcessExt find(Long id) {

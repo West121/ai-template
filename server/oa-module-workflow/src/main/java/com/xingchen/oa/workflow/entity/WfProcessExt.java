@@ -24,6 +24,8 @@ public class WfProcessExt {
 
     public static final String TYPE_DINGTALK = "DINGTALK";
     public static final String TYPE_BPMN = "BPMN";
+    /** 图直译：前端归一化 ProcessModel JSON（存 designer_json），发布时经 GraphToBpmnConverter 转 BpmnModel。 */
+    public static final String TYPE_GRAPH = "GRAPH";
 
     /** 表单类型：动态表单（可视化设计器）/ 自定义表单（React 路由页面）。 */
     public static final String FORM_DYNAMIC = "DYNAMIC";

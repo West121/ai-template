@@ -175,11 +175,71 @@ class GraphToBpmnConverterTest {
         JsonNode root = json("""
                 {"key": "p", "name": "p", "nodes": [
                    {"id": "start", "type": "startEvent", "name": "开始", "position": {"x": 0, "y": 0}},
-                   {"id": "pg", "type": "parallelGateway", "name": "并行", "position": {"x": 100, "y": 0}}],
+                   {"id": "sp", "type": "subProcess", "name": "子流程", "position": {"x": 100, "y": 0}}],
                  "edges": []}
                 """);
         BusinessException ex = assertThrows(BusinessException.class, () -> converter.graphToBpmn(root));
-        assertTrue(ex.getMessage().contains("暂不支持"), "切片 2 类型抛清晰暂不支持异常");
+        assertTrue(ex.getMessage().contains("暂不支持"), "切片 2 剩余类型抛清晰暂不支持异常");
+    }
+
+    /** 并行网关（切片 2a）：单网关直译 fork/join（前端显式成对）+ 无条件出边全激活/汇聚。 */
+    @Test
+    void parallelGatewayForkJoin() {
+        JsonNode root = json("""
+                {"key": "p", "name": "并行会签", "nodes": [
+                   {"id": "start", "type": "startEvent", "name": "开始", "position": {"x": 0, "y": 60}},
+                   {"id": "fork", "type": "parallelGateway", "name": "并行开始", "position": {"x": 100, "y": 60}},
+                   {"id": "t1", "type": "userTask", "name": "财务", "position": {"x": 200, "y": 0},
+                    "props": {"assigneeRules": [{"type": "ROLE", "id": 1}], "multiMode": "ANY"}},
+                   {"id": "t2", "type": "userTask", "name": "法务", "position": {"x": 200, "y": 120},
+                    "props": {"assigneeRules": [{"type": "ROLE", "id": 2}], "multiMode": "ANY"}},
+                   {"id": "join", "type": "parallelGateway", "name": "并行汇聚", "position": {"x": 320, "y": 60}},
+                   {"id": "end", "type": "endEvent", "name": "结束", "position": {"x": 420, "y": 60}}],
+                 "edges": [
+                   {"id": "e1", "source": "start", "target": "fork"},
+                   {"id": "e2", "source": "fork", "target": "t1"},
+                   {"id": "e3", "source": "fork", "target": "t2"},
+                   {"id": "e4", "source": "t1", "target": "join"},
+                   {"id": "e5", "source": "t2", "target": "join"},
+                   {"id": "e6", "source": "join", "target": "end"}]}
+                """);
+        Process p = process(converter.graphToBpmn(root));
+        assertEquals(2, count(p, org.flowable.bpmn.model.ParallelGateway.class), "两个 parallelGateway(fork/join)");
+        assertEquals(2, count(p, UserTask.class), "两个并行审批任务");
+        // 并行 fork 出边无条件
+        assertNull(((SequenceFlow) p.getFlowElement("e2")).getConditionExpression(), "并行出边无条件");
+        assertNull(((SequenceFlow) p.getFlowElement("e3")).getConditionExpression(), "并行出边无条件");
+        org.flowable.bpmn.model.ParallelGateway fork =
+                (org.flowable.bpmn.model.ParallelGateway) p.getFlowElement("fork");
+        assertNull(fork.getDefaultFlow(), "并行网关不设默认分支");
+    }
+
+    /** 包容网关（切片 2a）：单网关直译，满足的多分支都走 + 默认分支同 exclusive。 */
+    @Test
+    void inclusiveGatewayWithDefault() {
+        JsonNode root = json("""
+                {"key": "p", "name": "包容分支", "nodes": [
+                   {"id": "start", "type": "startEvent", "name": "开始", "position": {"x": 0, "y": 60}},
+                   {"id": "ig", "type": "inclusiveGateway", "name": "包容判断", "position": {"x": 100, "y": 60}},
+                   {"id": "end", "type": "endEvent", "name": "结束", "position": {"x": 300, "y": 60}}],
+                 "edges": [
+                   {"id": "e1", "source": "start", "target": "ig"},
+                   {"id": "e2", "source": "ig", "target": "end",
+                    "condition": {"logic": "AND", "items": [{"field": "amount", "operator": "gt", "value": "1000"}]}},
+                   {"id": "e3", "source": "ig", "target": "end",
+                    "condition": {"logic": "AND", "items": [{"field": "urgent", "operator": "eq", "value": "true"}]}},
+                   {"id": "e4", "source": "ig", "target": "end", "isDefault": true}]}
+                """);
+        Process p = process(converter.graphToBpmn(root));
+        assertEquals(1, count(p, org.flowable.bpmn.model.InclusiveGateway.class), "1 个 inclusiveGateway");
+        // 结构化条件仍编译 UEL（跨端字节兼容）
+        assertEquals("${amount > 1000}", ((SequenceFlow) p.getFlowElement("e2")).getConditionExpression());
+        assertEquals("${urgent == 'true'}", ((SequenceFlow) p.getFlowElement("e3")).getConditionExpression());
+        assertNull(((SequenceFlow) p.getFlowElement("e4")).getConditionExpression(), "默认分支不带条件");
+        // 默认分支同 exclusive 处理：设为网关 default
+        org.flowable.bpmn.model.InclusiveGateway ig =
+                (org.flowable.bpmn.model.InclusiveGateway) p.getFlowElement("ig");
+        assertEquals("e4", ig.getDefaultFlow(), "inclusive 默认分支设为网关 default");
     }
 
     private long count(Process p, Class<? extends FlowElement> type) {

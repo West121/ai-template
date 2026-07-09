@@ -16,7 +16,9 @@ import org.flowable.bpmn.model.FlowableListener;
 import org.flowable.bpmn.model.Gateway;
 import org.flowable.bpmn.model.GraphicInfo;
 import org.flowable.bpmn.model.ImplementationType;
+import org.flowable.bpmn.model.InclusiveGateway;
 import org.flowable.bpmn.model.MultiInstanceLoopCharacteristics;
+import org.flowable.bpmn.model.ParallelGateway;
 import org.flowable.bpmn.model.Process;
 import org.flowable.bpmn.model.SequenceFlow;
 import org.flowable.bpmn.model.StartEvent;
@@ -47,13 +49,14 @@ import java.util.Set;
  *   <li>{@code startEvent} / {@code endEvent}（含 {@code terminate:true} 终止型，加 TerminateEventDefinition）</li>
  *   <li>{@code userTask}（审批，消费 {@code props: WfNodeProps} → oa: 扩展元素 + {@code ${assignee}} 多实例，
  *       逻辑照搬旧转换器 approval 节点，仅取值来源改为 props）</li>
- *   <li>{@code exclusiveGateway}</li>
+ *   <li>{@code exclusiveGateway} / {@code parallelGateway} / {@code inclusiveGateway}（切片 2a 补齐后两种，
+ *       单网关直译；parallel 无条件出边，inclusive 默认分支同 exclusive）</li>
  *   <li>{@code sequenceFlow}：{@code condition} 结构化走 {@link ConditionCompiler}→UEL（红线不变）；
  *       {@code isDefault} 默认分支；{@code expression} 高级公式原样写入（与 condition 互斥，附录 C.4）</li>
  * </ul>
  * 并<b>消费前端坐标</b>（position/size/waypoints）生成 BPMN DI，替代旧 {@code autoLayout()}。
  *
- * <p>切片 2 待办（本类遇到时抛清晰「暂不支持」异常）：parallelGateway / inclusiveGateway / subProcess /
+ * <p>切片 2 剩余待办（本类遇到时抛清晰「暂不支持」异常）：subProcess /
  * timerCatch / timerBoundary / callActivity / 通用 serviceTask / cc / ai / webhook / .bpmn 导入导出端点。
  */
 @Component
@@ -137,7 +140,9 @@ public class GraphToBpmnConverter {
                 case "endEvent" -> endEvent(node);
                 case "userTask" -> userTask(node);
                 case "exclusiveGateway" -> exclusiveGateway(node);
-                case "serviceTask", "parallelGateway", "inclusiveGateway", "callActivity",
+                case "parallelGateway" -> parallelGateway(node);
+                case "inclusiveGateway" -> inclusiveGateway(node);
+                case "serviceTask", "callActivity",
                      "subProcess", "timerCatch", "timerBoundary", "cc", "ai", "webhook" ->
                         throw new BusinessException(400, "图直译暂不支持节点类型(切片 2 补齐): " + type);
                 default -> throw new BusinessException(400, "未知流程节点类型: " + type);
@@ -165,6 +170,28 @@ public class GraphToBpmnConverter {
             ExclusiveGateway gw = new ExclusiveGateway();
             gw.setId(nid(node));
             gw.setName(name(node, "网关"));
+            process.addFlowElement(gw);
+        }
+
+        /**
+         * 并行网关：单网关直译（fork/join 由前端显式建两个节点，各自成对）。无条件出边——
+         * fork 全激活各分支、join 全部到达才继续；default/condition 对并行无意义，转换器不为其出边设条件。
+         */
+        private void parallelGateway(FlowNodeDto node) {
+            ParallelGateway gw = new ParallelGateway();
+            gw.setId(nid(node));
+            gw.setName(name(node, "并行网关"));
+            process.addFlowElement(gw);
+        }
+
+        /**
+         * 包容网关：单网关直译。满足条件的多分支都走并汇聚，全不满足走默认分支——
+         * 默认分支同 exclusive 处理（{@code edge.isDefault} 设 gateway.default），出边条件走结构化/公式二源。
+         */
+        private void inclusiveGateway(FlowNodeDto node) {
+            InclusiveGateway gw = new InclusiveGateway();
+            gw.setId(nid(node));
+            gw.setName(name(node, "包容网关"));
             process.addFlowElement(gw);
         }
 
