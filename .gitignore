@@ -31,3 +31,6 @@ server/logs/
 
 # Superpowers SDD scratch (git-ignored progress ledger)
 .superpowers/
+
+# WorkBuddy local config
+.workbuddy/
