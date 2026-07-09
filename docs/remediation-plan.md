@@ -127,7 +127,7 @@
 ### 后端（磐石）
 
 - ✅ **N-B-00**（spike）**通过 2026-07-09**：LiteFlow **2.16.0** 在 SB4.0.1/Java21 可用，四项实测全绿，无需回退。**坐标修正：SB4 用 `liteflow-spring-boot4-starter:2.16.0`（非普通 starter）**；`@ScriptBean` 门面访问 Spring Bean 验证成功（Groovy/GraalJS/Jython 均通过）；Jython 2.7.4 在 Java21 跑通。依赖 +~118MB（Jython 49 / GraalJS 63 / 其余 ~9）。
-- ⬜ **N-B-01** 扩展 `JsonToBpmnConverter` 接受统一 `ProcessModel`（并行/包容网关、定时边界、子流程），据 `position/waypoints` 生成 BPMN DI。
+- 🔵 **N-B-01（切片1 ✅）** 新增 `GraphToBpmnConverter`（图直译，与旧路径并存）：start/end(含terminate)/审批userTask/排它网关/条件边(结构化→UEL+expression逃生口)/坐标生成DI，5 单测（共75全过）。**切片2 待办**：parallel/inclusive 网关、subProcess、timerCatch/Boundary/cycle、callActivity、OA行为节点(cc/ai/webhook/serviceTask)、.bpmn 导入导出端点、**接控制器端点做真端到端部署**、模型级校验器(附录C.3/C.4拦截)。
 - ⬜ **N-B-02** .bpmn 导入/导出端点（Flowable `BpmnXMLConverter`）：`POST /api/wf/models/import`、`GET /api/wf/models/{id}/bpmn`。
 - ⬜ **N-B-03** 表单字段清单端点 `GET /api/wf/forms/{formKey}/fields`；`wf_form_def` 增 `form_type` + CODE 仅存清单。
 - ⬜ **N-B-04** `ExpressionService`（Tier 1）：选定引擎（推荐 Aviator）+ `@FormulaFunction` 注册表；统一表单计算/高级流程条件/处理人公式；简单条件保持 UEL。
@@ -137,9 +137,9 @@
 
 ### 前端（疾风）
 
-- ⬜ **N-F-01** 新建 `designer/flow`：react-flow 画布 + 每种 BPMN 元素节点组件 + `SequenceFlow` 边（条件标签/默认分支）。
+- 🔵 **N-F-01（切片1 ✅）** 新建 `designer/flow`：`FlowCanvas`(@xyflow/react) + start/end/审批/排它网关 4 类节点 + 条件边 + `serialize.ts` 双向往返(实测一致) + 复用共享 PropertyPanel(零改动) + 预览页 `/demo/flow-designer`。**切片2 待办**：其余 10 类节点、调色板拖拽、BPMN 连接规则校验、自动布局、旧 designerJson 迁移适配、只读运行时高亮、删 bpmn-js、接 FormFieldManifest。
 - ⬜ **N-F-02** 调色板拖拽 + BPMN 连接规则校验 + `elkjs`/`dagre` 自动布局（导入用）。
-- ⬜ **N-F-03** `ProcessModel` 序列化 react-flow ⇄ JSON；**复用** `WfNodeProps` + 共享 `PropertyPanel`（不动）。
+- ✅ **N-F-03** `ProcessModel` 契约定义 + `serialize.ts` 双向往返 + 复用共享 PropertyPanel（随 N-F-01 切片1 完成，往返实测一致）。
 - ⬜ **N-F-04** 合并 `bpmn/oa/validate.ts` + `dingtalk/validate.ts` 为模型级校验器。
 - ⬜ **N-F-05** 实例详情用新节点组件渲染 + 运行时高亮（替换 bpmn-js 高亮）。
 - ⬜ **N-F-06** 删除 `bpmn-js`/`diagram-js-grid` 依赖与 `designer/bpmn`。
