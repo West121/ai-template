@@ -143,7 +143,7 @@
 - ⬜ **N-F-04** 合并 `bpmn/oa/validate.ts` + `dingtalk/validate.ts` 为模型级校验器。
 - ⬜ **N-F-05** 实例详情用新节点组件渲染 + 运行时高亮（替换 bpmn-js 高亮）。
 - ⬜ **N-F-06** 删除 `bpmn-js`/`diagram-js-grid` 依赖与 `designer/bpmn`。
-- ⬜ **N-F-07** 表单字段契约 `FormFieldManifest`/`FieldPolicy` + `formRegistry`；手写 react-hook-form 表单导出 `formMeta` 注册；`HostedForm` 包裹层消费 `fieldPolicy` 做显隐/只读/必填。
+- ✅ **N-F-07** 表单字段前端系统（疾风完成，40 vitest）：`form-manifest` 契约 + `formRegistry`（CODE）+ `getFormManifest`（ONLINE 走端点/CODE 走 registry）+ `HostedForm`（fieldPolicy 显隐/只读/必填）+ 节点字段权限矩阵编辑器（写 formPerms，零改共享面板/在线运行时）+ 示范 leave 表单 + 接入设计器。E2E：GET forms/leave/fields ONLINE 5 字段正确。CODE 运行时 nodeFormPerms→FieldPolicy 接线为小后续。
 - ✅ **N-F-08 / F-01** 安全 AST 解释器 `formula-eval.ts`（自写词法+Pratt，零 new Function，屏蔽原型链，23 vitest 含安全组）+ `formula-designer` 组件（接入 flow 边高级条件）+ form-runtime 迁移。**F-01 假沙箱消灭**：高频公式路径真隔离；Tier2 事件脚本保留 new Function 但诚实标注非沙箱、受信管理员专用。引入 vitest。
 - ✅ **N-F-09** 脚本编辑器（疾风完成）：Groovy/JS/Python tab + 上下文速查 + 诚实"非沙箱"警示 + `wf:script:write` 权限 gate + 测试运行接 test-run 端点；model.ts/serialize 补 script 字段、接入设计器 scriptTask 模式。vitest 25（含脚本节点往返）。
 
