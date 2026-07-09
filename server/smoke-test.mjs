@@ -32,10 +32,19 @@ function cleanupTestData() {
   const pg = process.env.OA_PG_CONTAINER ?? "oa-postgres"
   try {
     // execFile + 参数数组：不经 shell，sql/容器名作为独立参数传递，无注入风险
-    execFileSync("docker", ["exec", pg, "psql", "-U", "oa", "-d", "oa_platform", "-c", sql], { stdio: "ignore" })
+    // stderr 保留（非 ignore），失败时把 psql/docker 的真实报错抛进 catch，不再静默吞掉
+    execFileSync("docker", ["exec", pg, "psql", "-U", "oa", "-d", "oa_platform", "-c", sql], {
+      stdio: ["ignore", "ignore", "pipe"],
+    })
     console.log(`🧹 测试数据已清理（保留：${KEEP_DEF_CODES.join(", ")}）`)
-  } catch {
-    console.log("⚠️  测试数据清理跳过（docker/psql 不可用，可手动清理或设 OA_PG_CONTAINER）")
+  } catch (e) {
+    // 从静默跳过改为醒目 WARNING：明确告知「数据未清理」及原因，避免误以为清理成功（Q-03）
+    const detail = (e?.stderr?.toString().trim() || e?.message || "docker/psql 不可用").split("\n").slice(-3).join(" ")
+    console.warn("\n" + "!".repeat(64))
+    console.warn(`⚠️  WARNING: 测试数据未清理（清理命令失败）—— 容器=${pg}`)
+    console.warn(`⚠️  原因：${detail}`)
+    console.warn(`⚠️  请手动清理 wf_*/act_* 表，或设置 OA_PG_CONTAINER 指向正确的 pg 容器；OA_SMOKE_KEEP=1 可跳过清理。`)
+    console.warn("!".repeat(64) + "\n")
   }
 }
 
@@ -168,21 +177,25 @@ const delDenied = await call(zhangsan.token, "DELETE", `/api/office/documents/${
 check("zhangsan 删公文 → 403", delDenied.status === 403)
 
 /* ---------- 5. 会议（含冲突 409） ---------- */
-const rooms = await call(manager.token, "GET", "/api/office/meeting-rooms?date=2026-07-07")
+// 时间脆弱性修复（Q-03）：会议日期取「明天」（本地日历日），任何时刻跑都必然是 UPCOMING，
+// 避免写死 2026-07-09 15-18 点在当天该时段过后变 FINISHED，导致「我的会议含新预订(HOST)」误判。
+const _tomorrow = new Date(Date.now() + 24 * 3600 * 1000)
+const meetDate = `${_tomorrow.getFullYear()}-${String(_tomorrow.getMonth() + 1).padStart(2, "0")}-${String(_tomorrow.getDate()).padStart(2, "0")}`
+const rooms = await call(manager.token, "GET", `/api/office/meeting-rooms?date=${meetDate}`)
 check("会议室 6 间", (rooms.body?.data ?? []).length === 6)
 const freeRoom = (rooms.body?.data ?? []).find((r) => r.status !== "MAINTAIN")
-// 从 15 点起找一个空闲时段预订（避免多次运行的时段残留）
+// 明天 9~20 点间找一个空闲时段预订（避免多次运行的时段残留）
 let bk = null
-let usedStart = 15
-for (let h = 15; h < 18 && !(bk?.body?.code === 0); h++) {
+let usedStart = 9
+for (let h = 9; h < 20 && !(bk?.body?.code === 0); h++) {
   usedStart = h
   bk = await call(manager.token, "POST", "/api/office/meetings", {
-    roomId: freeRoom.id, subject: `冒烟测试会议-${Date.now()}`, date: "2026-07-09", startHour: h, endHour: h + 1,
+    roomId: freeRoom.id, subject: `冒烟测试会议-${Date.now()}`, date: meetDate, startHour: h, endHour: h + 1,
   })
 }
 check("预订会议", bk.body?.code === 0, JSON.stringify(bk.body))
 const conflict = await call(admin.token, "POST", "/api/office/meetings", {
-  roomId: freeRoom.id, subject: "冲突会议", date: "2026-07-09", startHour: usedStart, endHour: usedStart + 1,
+  roomId: freeRoom.id, subject: "冲突会议", date: meetDate, startHour: usedStart, endHour: usedStart + 1,
 })
 check("时段冲突 → 409", conflict.body?.code === 409, JSON.stringify(conflict.body))
 const myMeetings = await call(manager.token, "GET", "/api/office/meetings/my?pageNum=1&pageSize=100")
@@ -1880,6 +1893,64 @@ async function mkProcFull(code, designer, extra = {}) {
   check("bpmn2e admin 名下未出现该待办(反证兜底未被误触发)", !(await findTodo(admin.token, t)))
   if (taskWangwu) await call(wangwu.token, "POST", `/api/wf/tasks/${taskWangwu.taskId}/approve`, { comment: "王五通过" })
   check("bpmn2e 全流程通过", (await bizStatus(zhangsan.token, inst.id)) === "APPROVED")
+}
+
+/* ---------- 21. 工程化批次断言（Q-03）：B-11 唤醒权限 / B-12 随机重置密码 / B-13 CORS ---------- */
+
+// --- B-11：唤醒操作补权限 —— zhangsan 对已结束实例唤醒→403，admin 调→成功 ---
+{
+  const P = await mkProc(`b11res_${TS}`, [approvalNode("rap", "B11审批", MANAGER)])
+  const t = `B11唤醒权限-${TS}`
+  const inst = await startInst(P, t)
+  const mt = await findTodo(manager.token, t)
+  if (mt) await call(manager.token, "POST", `/api/wf/tasks/${mt.taskId}/approve`, {})
+  check("B-11 前置:实例已结束APPROVED", (await bizStatus(zhangsan.token, inst.id)) === "APPROVED")
+  const deny = await call(zhangsan.token, "POST", `/api/wf/instances/${inst.id}/resurrect`, { nodeId: "rap", comment: "越权唤醒" })
+  check("B-11 zhangsan 唤醒已结束实例→403", deny.status === 403, JSON.stringify(deny.body))
+  const ok = await call(admin.token, "POST", `/api/wf/instances/${inst.id}/resurrect`, { nodeId: "rap", comment: "管理员唤醒" })
+  check("B-11 admin 唤醒→成功(RUNNING)", ok.body?.code === 0 && ok.body.data?.bizStatus === "RUNNING", JSON.stringify(ok.body))
+  const mt2 = await findTodo(manager.token, t)
+  if (mt2) await call(manager.token, "POST", `/api/wf/tasks/${mt2.taskId}/approve`, {})
+}
+
+// --- B-12：密码重置去掉固定 admin123，返回 12 位随机明文；新旧密码登录行为正确 ---
+{
+  const uname = `b12user_${TS}`
+  const nu = await call(admin.token, "POST", "/api/system/users", {
+    username: uname, name: "B12用户", phone: "13800000001", password: "admin123", deptId, postId, roleIds: [roleId],
+  })
+  check("B-12 创建目标用户", nu.body?.code === 0, JSON.stringify(nu.body))
+  const uid = nu.body?.data?.id ?? nu.body?.data
+  const rp = await call(admin.token, "POST", `/api/system/users/${uid}/reset-password`)
+  const newPwd = rp.body?.data
+  check(
+    "B-12 重置密码返回新明文(非空/≠admin123/长度12)",
+    rp.body?.code === 0 && typeof newPwd === "string" && newPwd.length === 12 && newPwd !== "admin123",
+    JSON.stringify(rp.body),
+  )
+  const loginNew = await call(null, "POST", "/api/auth/login", { username: uname, password: newPwd })
+  check("B-12 用返回的新密码登录成功", loginNew.body?.code === 0 && !!loginNew.body?.data?.token, JSON.stringify(loginNew.body))
+  const loginOld = await call(null, "POST", "/api/auth/login", { username: uname, password: "admin123" })
+  check("B-12 用旧密码 admin123 登录失败", loginOld.body?.code !== 0, JSON.stringify(loginOld.body))
+  const adminSelf = await call(null, "POST", "/api/auth/login", { username: "admin", password: "admin123" })
+  check("B-12 admin 本人仍能用 admin123 登录(重置仅作用于目标用户)", adminSelf.body?.code === 0 && !!adminSelf.body?.data?.token)
+  await call(admin.token, "DELETE", `/api/system/users/${uid}`)
+}
+
+// --- B-13：CORS 可配置化 —— 带 Origin 的 OPTIONS 预检返回 allow-origin + allow-credentials:true ---
+{
+  const preflight = await fetch(`${BASE}/api/auth/login`, {
+    method: "OPTIONS",
+    headers: {
+      Origin: "http://localhost:5173",
+      "Access-Control-Request-Method": "POST",
+      "Access-Control-Request-Headers": "authorization,content-type",
+    },
+  })
+  const acao = preflight.headers.get("access-control-allow-origin")
+  const acac = preflight.headers.get("access-control-allow-credentials")
+  check("B-13 CORS 预检回显 allow-origin=localhost:5173", acao === "http://localhost:5173", `acao=${acao} status=${preflight.status}`)
+  check("B-13 CORS 预检 allow-credentials=true", acac === "true", `acac=${acac}`)
 }
 
 /* ---------- 汇总 ---------- */
