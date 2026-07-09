@@ -22,6 +22,18 @@
 - CI 流水线 `.github/workflows/ci.yml`：前端 lint/tsc/build + 后端 compile 门禁 + 集成冒烟 (Q-01)
 - `CLAUDE.md` 项目指南；`docs/remediation-plan.md` 修复计划；`docs/design/next-gen-workflow-and-formula.md` 下一代设计器/公式/脚本设计
 
+### 下一代工作流设计器（路径三，全 E2E 验证）
+- **react-flow 自研 BPMN 设计器**替换 bpmn-js：归一化 `ProcessModel` 契约（前端产出 JSON，后端 `GraphToBpmnConverter` 直译为 Flowable BpmnModel + 据坐标生成 BPMN DI）；全 14 类节点（事件/审批/排它·并行·包容网关/子流程/定时/callActivity/cc·ai·webhook·脚本 serviceTask）；调色板、连接规则校验、UI 打磨。E2E：排它条件路由 8/8、并行 fork/join 6/6。
+- **删除 bpmn-js / diagram-js-grid**；FlowViewer 只读渲染器（实例详情运行时高亮）；新设计器接入生产流程定义页（GRAPH 类型 + `/api/wf/models/graph/deploy`）；钉钉设计器并存。
+- **Aviator 安全表达式引擎（Tier1 公式）**：禁反射/new/静态/循环沙箱 + `@FormulaFunction` 自定义函数（deptLeader/dictLabel/workDays）+ 网关高级条件 `exprEval`。E2E 7/7。
+- **LiteFlow 脚本引擎（Tier2）**：LiteFlow 2.16.0（Groovy/GraalJS/Jython）+ `@ScriptBean("spring")` 门面调任意 Bean + 治理（`wf:script:write`、`wf_script_exec_log` 审计、诚实标注非沙箱）+ scriptTask + test-run 端点。E2E 7/7。
+- **F-01 假沙箱消灭**：前端公式改安全 AST 解释器（零 `new Function`）。
+- **.bpmn 导入导出**（Flowable `BpmnXMLConverter` + `BpmnToGraphConverter` 全类型逆向）。往返 E2E 12/12。
+- **表单字段清单系统**：`GET /api/wf/forms/{formKey}/fields`（ONLINE 从 schemaJson 派生）+ 前端 `formRegistry`/`HostedForm`/节点字段权限矩阵编辑器（写 `WfNodeProps.formPerms`）。
+- smoke-test 新增 43 条断言覆盖上述全部场景，**smoke 总计 433/433**。
+
 ### Notes
 - 破坏性：后端启动现在必须设置环境变量 `OA_JWT_SECRET`。
-- 数据库新增迁移 V15（文件查看权限种子）、V16（会议排他约束）、V17（乐观锁 version 列）。
+- 数据库新增迁移 V15（文件查看权限种子）、V16（会议排他约束）、V17（乐观锁 version 列）、V18（脚本引擎权限+审计表）、V19（表单字段清单 form_type）。
+- 前端新增依赖 vitest；后端新增依赖 Aviator、LiteFlow（脚本插件 groovy/graaljs/python，约 +118MB jar）。
+- 路径三推迟小尾（不影响主功能）：钉钉 designerJson→ProcessModel 迁移适配、elk/dagre 自动布局、CODE 表单运行时 nodeFormPerms→FieldPolicy 接线。
