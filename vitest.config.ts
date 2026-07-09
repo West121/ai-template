@@ -9,8 +9,10 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  // 组件单测用 react-dom/server 的 renderToStaticMarkup（node 环境即可，无需 jsdom）。
+  // .tsx 的 JSX 由 vitest 内建转换按 tsconfig(jsx: react-jsx) 处理。
   test: {
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
     environment: "node",
   },
 })

@@ -25,6 +25,8 @@ import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { FormulaDesigner } from "@/components/formula-designer"
 import { ScriptEditor } from "@/components/script-editor"
+import { FieldPermsEditor } from "@/components/field-perms-editor"
+import "@/pages/workflow/forms" // 触发 CODE 表单登记（registerForm 副作用）
 import { PropertyPanel } from "../shared/property-panel"
 import { defaultFlowConfig, type FormFieldOption, type ProcessConfig } from "../shared/config"
 import type { BranchCondition, WfNodeProps } from "../types"
@@ -55,6 +57,8 @@ const SEED_MODEL: ProcessModel = {
   schemaVersion: 1,
   key: "demo_leave",
   name: "请假审批（示例）",
+  // 绑定 CODE 示范表单（registry 已登记 'leave'）：审批节点即可拉字段清单配字段权限
+  formKey: "leave",
   flowConfig: defaultFlowConfig(),
   nodes: [
     { id: "start", type: "startEvent", name: "开始", position: { x: 260, y: 20 } },
@@ -485,6 +489,23 @@ export default function FlowDesignerPage() {
                       开启后该服务任务改为脚本任务，序列化为 <code className="font-mono">service.impl=&quot;script&quot;</code> + <code className="font-mono">script</code>，由后端脚本引擎执行。
                     </p>
                   )}
+                </div>
+              )}
+              {/* 节点字段权限（N-F-07）：审批类节点 + 流程有 formKey 时，按清单渲染 可见/可编辑/必填 矩阵。
+                  不改共享 PropertyPanel——在设计器侧配置区渲染（同 scriptTask / 边级高级公式条件的做法）。 */}
+              {selectedNode.type === "userTask" && SEED_MODEL.formKey && (
+                <div className="space-y-2 border-t px-3.5 py-3">
+                  <div className="text-xs font-medium">节点字段权限</div>
+                  <p className="text-[11px] text-muted-foreground">
+                    按表单「{SEED_MODEL.formKey}」字段清单配置本节点的字段显隐 / 可编辑；运行时由 <code className="font-mono">HostedForm</code> 套用。
+                  </p>
+                  <FieldPermsEditor
+                    formKey={SEED_MODEL.formKey}
+                    value={selectedNode.data.props?.formPerms ?? {}}
+                    onChange={(formPerms) =>
+                      updateNodeProps(selectedNode.id, { ...(selectedNode.data.props ?? {}), formPerms })
+                    }
+                  />
                 </div>
               )}
               {/* W-20：深度配置尚未开放的节点类型给占位说明，避免面板空白像坏了 */}
