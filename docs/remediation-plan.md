@@ -131,9 +131,9 @@
 - ⬜ **N-B-02** .bpmn 导入/导出端点（Flowable `BpmnXMLConverter`）：`POST /api/wf/models/import`、`GET /api/wf/models/{id}/bpmn`。
 - ⬜ **N-B-03** 表单字段清单端点 `GET /api/wf/forms/{formKey}/fields`；`wf_form_def` 增 `form_type` + CODE 仅存清单。
 - ✅ **N-B-04** `ExpressionService`（Aviator 5.4.3，强沙箱：解释模式+禁 new/反射/静态/循环+空 ALLOWED_CLASS_SET）+ `@FormulaFunction` 注册器 + 示例函数（deptLeader/dictLabel/workDays）+ exprEval 网关门面；GraphToBpmnConverter 边 expression 走 `${exprEval.evalBoolean}`。98 单测 + E2E 7/7（高级条件运行时 Aviator 路由、自定义函数、沙箱拒 new）。
-- ⬜ **N-B-05** `ScriptService`（Tier 2）：封装 **LiteFlow 2.16.0**（坐标 `liteflow-spring-boot4-starter`）多语言脚本（Groovy 默认 / GraalJS / QLExpress / Aviator / Lua；Python = Jython/Py2）；`@ScriptBean` 门面暴露 `spring`/`vars`/`form`/`execution`/helper + 超时/资源限额。Flowable 节点/监听器传入上下文调用。
-- ⬜ **N-B-06** 脚本治理：`wf:script:write` 权限、脚本为部署态工件（版本化）、执行审计（`wf_script_exec_log`）、测试运行端点同权限同审计。
-- ⬜ **N-B-07** 工作流接入：`scriptTask` 节点 + execution/task 监听器钩子 + 高级条件/处理人接 Expression/Script。
+- ✅ **N-B-05/06/07** LiteFlow 脚本引擎 Tier2（磐石完成，E2E 7/7）：LiteFlow 2.16.0（spring-boot4-starter + groovy/graaljs/python，`enable=false` 仅用脚本 SPI，全应用装配 15s 启动）+ `ScriptService`（三语言 + `@ScriptBean("spring")` 门面调任意 Bean + 执行超时）+ 治理（`wf:script:write` V18、`wf_script_exec_log` 审计、诚实标注非沙箱）+ scriptTask→`wfScriptDelegate` + `POST /api/wf/script/test-run`。E2E：脚本节点运行时经门面调 Bean + 写 vars → 下游 Aviator 网关路由；test-run groovy/GraalJS 均成功。ScriptServiceTest 6/6。前端编辑器 = N-F-09。
+- ✅ **N-B-06** 脚本治理（随 N-B-05/06/07 完成）。
+- ✅ **N-B-07** scriptTask 接入（随 N-B-05/06/07 完成；execution/task 监听器钩子可后续按需扩展）。
 
 ### 前端（疾风）
 
