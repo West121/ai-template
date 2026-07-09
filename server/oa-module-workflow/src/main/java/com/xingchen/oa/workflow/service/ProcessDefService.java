@@ -2,8 +2,10 @@ package com.xingchen.oa.workflow.service;
 
 import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.exception.BusinessException;
+import com.xingchen.oa.workflow.convert.BpmnToGraphConverter;
 import com.xingchen.oa.workflow.convert.GraphToBpmnConverter;
 import com.xingchen.oa.workflow.convert.JsonToBpmnConverter;
+import com.xingchen.oa.workflow.dto.BpmnImportResult;
 import com.xingchen.oa.workflow.dto.GraphDeployRequest;
 import com.xingchen.oa.workflow.dto.GraphDeployResponse;
 import com.xingchen.oa.workflow.dto.ProcessDefRequest;
@@ -28,6 +30,8 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 流程定义档案 CRUD + 发布。发布时：
@@ -40,6 +44,7 @@ public class ProcessDefService {
     private final WfProcessExtRepository repository;
     private final JsonToBpmnConverter converter;
     private final GraphToBpmnConverter graphConverter;
+    private final BpmnToGraphConverter bpmnToGraphConverter;
     private final RepositoryService repositoryService;
     private final ObjectMapper objectMapper;
 
@@ -231,6 +236,52 @@ public class ProcessDefService {
                 pd != null ? pd.getVersion() : null,
                 e.getLatestDeploymentId(),
                 e.getStatus());
+    }
+
+    /**
+     * 导出流程定义存档的 {@code .bpmn} XML（{@code GET /api/wf/models/{id}/bpmn}，N-B-02 附录 B「.bpmn 往返」）。
+     *
+     * <p>优先返回已存 {@code bpmn_xml}；若为 GRAPH 老数据只存 designer_json（归一化 ProcessModel）而无 xml，
+     * 则现转：designerJson → {@link GraphToBpmnConverter} → {@link BpmnModel} → {@link BpmnXMLConverter} 出 XML
+     *（只读，不落库）。DINGTALK 老数据无 xml 时同理经 {@link JsonToBpmnConverter} 现转。
+     */
+    public String exportBpmn(Long id) {
+        WfProcessExt e = find(id);
+        if (StringUtils.hasText(e.getBpmnXml())) {
+            return e.getBpmnXml();
+        }
+        BpmnModel model;
+        try {
+            if (WfProcessExt.TYPE_GRAPH.equals(e.getDesignerType())) {
+                if (!StringUtils.hasText(e.getDesignerJson())) {
+                    throw new BusinessException(400, "图流程缺少 ProcessModel(designerJson)，无法导出 .bpmn");
+                }
+                model = graphConverter.graphToBpmn(objectMapper.readTree(e.getDesignerJson()));
+            } else if (WfProcessExt.TYPE_DINGTALK.equals(e.getDesignerType()) && StringUtils.hasText(e.getDesignerJson())) {
+                String formKey = StringUtils.hasText(e.getFormCode())
+                        ? e.getFormCode() + ":" + (e.getFormVersion() == null ? 1 : e.getFormVersion())
+                        : null;
+                model = converter.convert(e.getDefCode(), e.getName(), formKey, objectMapper.readTree(e.getDesignerJson()));
+            } else {
+                throw new BusinessException(400, "该流程定义无 bpmn_xml，且无可现转的 designerJson");
+            }
+        } catch (BusinessException be) {
+            throw be;
+        } catch (Exception ex) {
+            throw new BusinessException(400, ".bpmn 导出转换失败：" + ex.getMessage());
+        }
+        return new String(new BpmnXMLConverter().convertToXML(model), StandardCharsets.UTF_8);
+    }
+
+    /**
+     * 导入 {@code .bpmn} XML（{@code POST /api/wf/models/import}，N-B-02）：Flowable
+     * {@code BpmnXMLConverter.convertToBpmnModel} → {@link BpmnToGraphConverter} 逆向还原为
+     * {@link com.xingchen.oa.workflow.convert.graph.ProcessModel}，供前端 react-flow 载入。<b>不落库、不部署</b>——
+     * 仅返回模型供前端编辑后再走 {@code /graph/deploy}。warnings 承载未完全还原/缺 DI 提示。
+     */
+    public BpmnImportResult importBpmn(String xml) {
+        List<String> warnings = new ArrayList<>();
+        return new BpmnImportResult(bpmnToGraphConverter.importXml(xml, warnings), warnings);
     }
 
     private WfProcessExt find(Long id) {

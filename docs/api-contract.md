@@ -162,6 +162,14 @@ ProcessDef = {id,defCode,name,category,icon,formCode,formVersion,designerType:DI
     - 切片 2a 已支持 type：`startEvent` / `endEvent`（terminate:true 加终止事件）/ `userTask`（props=WfNodeProps）/ `exclusiveGateway` / `parallelGateway`（单网关直译，fork/join 前端显式成对，出边无条件）/ `inclusiveGateway`（默认分支同 exclusive）
     - 其余（serviceTask/callActivity/subProcess/timerCatch/timerBoundary/cc/ai/webhook）切片 2 后续补齐，遇到抛 400「暂不支持」
     - SequenceFlow = `{id,source,target,name?,waypoints?:[{x,y}],isDefault?,condition?:BranchCondition,expression?}`；condition 结构化经 `ConditionCompiler`→UEL（跨端字节兼容红线不变），expression 高级公式原样下发，二者互斥；isDefault 设网关 default
+
+#### .bpmn 导入导出（N-B-02，附录 B「.bpmn 往返」；与 GraphToBpmnConverter 往返自洽）
+- GET `/api/wf/models/{id}/bpmn`【登录即可，与现有 `process-defs/{code}/diagram` 定义查看一致】→ `R<String>`：返回该流程定义存档的 `bpmn_xml`（text 包在 R 里）。若 GRAPH 老数据仅存 `designer_json`（归一化 ProcessModel）而无 xml，则现转（designerJson→BpmnModel→`BpmnXMLConverter` 出 XML，只读不落库）；DINGTALK 老数据无 xml 时经 `JsonToBpmnConverter` 现转；无 xml 且无可转 designerJson → 400
+- POST `/api/wf/models/import`【P:wf:def:edit】请求体=原始 `.bpmn` XML（`Content-Type: application/xml | text/xml | text/plain`）→ Flowable `BpmnXMLConverter.convertToBpmnModel` → **`BpmnToGraphConverter`（BpmnModel→ProcessModel，GraphToBpmnConverter 的逆）** → `R<BpmnImportResult>`
+  - BpmnImportResult = `{model:ProcessModel, warnings:string[]}`；**仅还原供前端 react-flow（fromProcessModel）载入编辑，不落库、不部署**（前端编辑后再走 `/graph/deploy`）
+  - **import 覆盖类型**（往返自洽核心）：startEvent / endEvent（含 terminate）/ userTask（读 `oa:` 扩展回 props：assigneeRules/emptyStrategy/multiMode/voteConfig/allowedOps/handleOptions/timeout/formPerms/auditMenu/commentRequired/events + formKey）/ exclusive·parallel·inclusiveGateway / serviceTask（按 delegateExpression 反查：`wfAutoDecide`→autoApprove·autoReject、`wfTriggerDelegate`→trigger、`wfScriptDelegate`→script、其余→delegate；`wfCcDelegate`→cc、`wfAiApprovalDelegate`→ai、`wfWebhookDelegate`→webhook 一等节点）/ callActivity / 嵌入式 subProcess（递归 children）/ timerCatch / timerBoundary
+  - **条件逆向**：`oa:condition` 扩展存在 → 回结构化 `condition`（正向「供回编辑」存的原始 BranchCondition，operator 名形 eq/ne/gt… 无损保留，**不反解 UEL 符号**）；`${exprEval.evalBoolean(...)}` 包裹 → 解包回 `expression`；其余手写原始 UEL → 原样进 `expression`；网关 default 出边 → `isDefault`
+  - **坐标从 DI 还原**：BPMNShape→position/size、BPMNEdge→waypoints；某节点无 DI → 兜底坐标 + warnings 标注「需前端自动布局(elk/dagre)」。未建模的其它 BPMN 元素类型 → 记 warning 跳过，不中断整体导入
 - DINGTALK designerJson 结构：`{"nodes":[StepNode...]}`，StepNode：
     - approval：`{id,type:"approval",name,assigneeRules:[{kind:...,...}],multiMode:ANY|ALL|SEQUENCE|VOTE,emptyStrategy:AUTO_PASS|TO_ADMIN|BLOCK}`
       - **emptyStrategy 语义**：`AUTO_PASS`=审批人空则节点自动通过；`TO_ADMIN`=空则静默转管理员(admin)；`BLOCK`=**真阻塞**，审批人空即抛业务异常中断流转(发起/流转失败)，与 TO_ADMIN 明确区分
