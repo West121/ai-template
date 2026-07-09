@@ -34,7 +34,7 @@ export function summarizeCc(props?: WfNodeProps): string {
   return n > 0 ? `抄送 ${n} 个对象` : "未设置抄送人"
 }
 
-/** 服务任务实现摘要（autoApprove/autoReject/trigger/delegate） */
+/** 服务任务实现摘要（autoApprove/autoReject/trigger/delegate/script） */
 export function summarizeService(service?: ServiceTaskConfig): string {
   if (!service) return "未配置"
   switch (service.impl) {
@@ -46,6 +46,8 @@ export function summarizeService(service?: ServiceTaskConfig): string {
       return service.triggerType === "TIMER" ? "定时触发器" : "即时触发器"
     case "delegate":
       return service.delegateExpression ? service.delegateExpression : "未配置委托"
+    case "script":
+      return "脚本任务"
   }
 }
 

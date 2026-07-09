@@ -7,7 +7,7 @@
  *  - delegate   ：通用委托（石板灰）
  */
 import type { NodeProps } from "@xyflow/react"
-import { Ban, CheckCheck, Cog, Zap, type LucideProps } from "lucide-react"
+import { Ban, CheckCheck, Cog, FileCode, Zap, type LucideProps } from "lucide-react"
 import type { ComponentType } from "react"
 import type { ServiceTaskConfig } from "../model"
 import type { WfRfNode } from "../serialize"
@@ -21,6 +21,7 @@ const SERVICE_META: Record<Impl, { icon: ComponentType<LucideProps>; headerClass
   autoReject: { icon: Ban, headerClass: "bg-rose-600", handleColor: "!bg-rose-600" },
   trigger: { icon: Zap, headerClass: "bg-amber-600", handleColor: "!bg-amber-600" },
   delegate: { icon: Cog, headerClass: "bg-slate-600", handleColor: "!bg-slate-600" },
+  script: { icon: FileCode, headerClass: "bg-fuchsia-600", handleColor: "!bg-fuchsia-600" },
 }
 
 export function ServiceTaskNode({ data, selected }: NodeProps<WfRfNode>) {

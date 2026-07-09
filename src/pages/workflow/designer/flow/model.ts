@@ -125,11 +125,20 @@ export interface UserTaskNode extends FlowNodeBase {
 
 /**
  * 服务任务（BPMN serviceTask，delegateExpression）。OA 语义由 service.impl 判别，
- * 覆盖旧钉钉 autoApprove / autoReject / trigger 三类 + 通用 delegate。
+ * 覆盖旧钉钉 autoApprove / autoReject / trigger 三类 + 通用 delegate + 脚本任务 script。
+ *
+ * scriptTask 序列化约定（与后端脚本引擎 N-B-05 / `FlowNodeDto.script` 对齐）：
+ *   `{ type:"serviceTask", service:{ impl:"script" }, script:{ lang, code } }`。
+ *   —— `service.impl==="script"` 是判别键，脚本体挂 `script`（与 service 平级，非嵌 service 内）。
  */
 export interface ServiceTaskNode extends FlowNodeBase {
   type: "serviceTask"
   service: ServiceTaskConfig
+  /**
+   * 脚本任务体（仅 service.impl==="script" 时有意义）；与后端 `FlowNodeDto.script` 字节对齐。
+   * Tier 2 脚本 = 应用完整权限、非沙箱、仅 `wf:script:write` 可写（治理见设计文档 §3.3）。
+   */
+  script?: ScriptConfig
 }
 
 /** 排它网关（BPMN exclusiveGateway）：命中优先级最高的一条出边；默认出边由 edge.isDefault 标记 */
@@ -258,7 +267,8 @@ export interface SequenceFlow {
  *  - autoApprove：${wfAutoDecide} autoDecision=APPROVE，到达自动通过并放行（非终止）。
  *  - autoReject ：${wfAutoDecide} autoDecision=REJECT，自动驳回（通常尾接 terminate endEvent 终止实例）。
  *  - trigger    ：${wfTriggerDelegate}，执行注册触发器或 WEBHOOK；triggerType=TIMER 时前置定时。
- *  - delegate   ：通用 delegateExpression（受信 bean 名 / 未来脚本任务 scriptTask 的过渡承载）。
+ *  - delegate   ：通用 delegateExpression（受信 bean 名）。
+ *  - script     ：脚本任务，脚本体挂节点 `script`（见 ServiceTaskNode.script）；后端经脚本引擎执行。
  */
 export type ServiceTaskConfig =
   | { impl: "autoApprove" }
@@ -278,6 +288,21 @@ export type ServiceTaskConfig =
       /** delegateExpression，如 ${someBean} */
       delegateExpression: string
     }
+  | { impl: "script" }
+
+/** 脚本语言（与后端脚本引擎对齐）：groovy=LiteFlow Groovy / js=GraalJS / python=Jython(Py2) */
+export type ScriptLang = "groovy" | "js" | "python"
+
+/**
+ * 脚本任务体（scriptTask）：与后端 `FlowNodeDto.script` 对齐。
+ * 上下文（后端注入）：`vars`（流程变量读写）、`form`（表单数据）、`execution`（可空）、
+ * `spring.bean(...)`/`spring.has(...)`、`log.info/warn/error`。返回值语义按语言不同：
+ * Groovy/Python 支持 return；JS(GraalJS) 用最后表达式/语句值、不支持顶层 return。
+ */
+export interface ScriptConfig {
+  lang: ScriptLang
+  code: string
+}
 
 /** 调用活动配置：子流程 defCode + 同异步 + 参数映射（子变量 ← 父字段） */
 export interface CallActivityConfig {

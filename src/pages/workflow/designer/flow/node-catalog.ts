@@ -15,6 +15,7 @@ import {
   Cog,
   Layers,
   PhoneOutgoing,
+  FileCode,
   Play,
   Plus,
   Send,
@@ -89,6 +90,7 @@ export const PALETTE_GROUPS: PaletteGroup[] = [
       { key: "autoReject", type: "serviceTask", label: "自动拒绝", icon: Ban, colorClass: "text-rose-600", defaultName: "自动拒绝", makeData: () => ({ name: "自动拒绝", service: { impl: "autoReject" } }) },
       { key: "trigger", type: "serviceTask", label: "触发器", icon: Zap, colorClass: "text-amber-600", defaultName: "触发器", makeData: () => ({ name: "触发器", service: { impl: "trigger", triggerType: "IMMEDIATE" } }) },
       { key: "serviceTask", type: "serviceTask", label: "服务任务", icon: Cog, colorClass: "text-slate-600", defaultName: "服务任务", makeData: () => ({ name: "服务任务", service: { impl: "delegate", delegateExpression: "" } }) },
+      { key: "scriptTask", type: "serviceTask", label: "脚本任务", icon: FileCode, colorClass: "text-fuchsia-600", defaultName: "脚本任务", makeData: () => ({ name: "脚本任务", service: { impl: "script" }, script: { lang: "groovy", code: "" } }) },
     ],
   },
   {

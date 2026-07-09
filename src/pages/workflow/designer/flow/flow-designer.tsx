@@ -24,10 +24,11 @@ import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { FormulaDesigner } from "@/components/formula-designer"
+import { ScriptEditor } from "@/components/script-editor"
 import { PropertyPanel } from "../shared/property-panel"
 import { defaultFlowConfig, type FormFieldOption, type ProcessConfig } from "../shared/config"
 import type { BranchCondition, WfNodeProps } from "../types"
-import type { FlowNodeType, Point, ProcessModel } from "./model"
+import type { FlowNodeType, Point, ProcessModel, ScriptConfig, ServiceTaskConfig } from "./model"
 import { FlowCanvas } from "./canvas"
 import { FlowPalette } from "./flow-palette"
 import { PALETTE_INDEX } from "./node-catalog"
@@ -160,6 +161,33 @@ export default function FlowDesignerPage() {
   const updateNodeName = useCallback(
     (id: string, name: string) =>
       setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, name } } : n))),
+    [setNodes],
+  )
+  // serviceTask 脚本体读写（仅脚本模式有意义）
+  const updateNodeScript = useCallback(
+    (id: string, script: ScriptConfig) =>
+      setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, script } } : n))),
+    [setNodes],
+  )
+  // serviceTask 脚本模式开关：开 → service.impl=script + 初始化 script；关 → 退回 delegate 并清除 script
+  const setScriptMode = useCallback(
+    (id: string, on: boolean) =>
+      setNodes((ns) =>
+        ns.map((n) => {
+          if (n.id !== id) return n
+          if (on) {
+            const service: ServiceTaskConfig = { impl: "script" }
+            return {
+              ...n,
+              data: { ...n.data, service, script: n.data.script ?? { lang: "groovy", code: "" } },
+            }
+          }
+          const service: ServiceTaskConfig = { impl: "delegate", delegateExpression: "" }
+          const nextData = { ...n.data, service }
+          delete nextData.script
+          return { ...n, data: nextData }
+        }),
+      ),
     [setNodes],
   )
   const updateEdgeCondition = useCallback(
@@ -303,16 +331,40 @@ export default function FlowDesignerPage() {
 
         <aside className="flex w-80 shrink-0 flex-col overflow-hidden border-l">
           {selectedNode ? (
-            <PropertyPanel
-              target={{ nodeId: selectedNode.id, nodeType: panelNodeType(selectedNode.type) }}
-              config={selectedNode.data.props ?? {}}
-              onChange={(next: WfNodeProps) => updateNodeProps(selectedNode.id, next)}
-              formFields={SAMPLE_FIELDS}
-              nodeName={selectedNode.data.name}
-              onNodeNameChange={(name) => updateNodeName(selectedNode.id, name)}
-              nodeOptions={nodeOptions.filter((n) => n.id !== selectedNode.id)}
-              flowConfig={processConfig.flow}
-            />
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <PropertyPanel
+                target={{ nodeId: selectedNode.id, nodeType: panelNodeType(selectedNode.type) }}
+                config={selectedNode.data.props ?? {}}
+                onChange={(next: WfNodeProps) => updateNodeProps(selectedNode.id, next)}
+                formFields={SAMPLE_FIELDS}
+                nodeName={selectedNode.data.name}
+                onNodeNameChange={(name) => updateNodeName(selectedNode.id, name)}
+                nodeOptions={nodeOptions.filter((n) => n.id !== selectedNode.id)}
+                flowConfig={processConfig.flow}
+              />
+              {/* 服务任务：脚本模式（scriptTask）——不改共享 PropertyPanel，在设计器侧配置区渲染脚本编辑器（参照边级高级公式条件的做法） */}
+              {selectedNode.type === "serviceTask" && (
+                <div className="space-y-2 border-t px-3.5 py-3">
+                  <label className="flex items-center justify-between gap-3">
+                    <span className="text-xs font-medium">脚本模式（scriptTask）</span>
+                    <Switch
+                      checked={selectedNode.data.service?.impl === "script"}
+                      onCheckedChange={(v) => setScriptMode(selectedNode.id, v)}
+                    />
+                  </label>
+                  {selectedNode.data.service?.impl === "script" ? (
+                    <ScriptEditor
+                      value={selectedNode.data.script ?? { lang: "groovy", code: "" }}
+                      onChange={(next) => updateNodeScript(selectedNode.id, next)}
+                    />
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground">
+                      开启后该服务任务改为脚本任务，序列化为 <code className="font-mono">service.impl=&quot;script&quot;</code> + <code className="font-mono">script</code>，由后端脚本引擎执行。
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
           ) : selectedEdge ? (
             <>
               <label className="flex items-center justify-between gap-3 border-b px-3.5 py-2.5">

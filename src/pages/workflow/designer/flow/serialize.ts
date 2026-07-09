@@ -26,6 +26,7 @@ import type {
   FlowNodeType,
   Point,
   ProcessModel,
+  ScriptConfig,
   SequenceFlow,
   ServiceTaskConfig,
   Size,
@@ -55,8 +56,10 @@ export interface WfNodeData extends Record<string, unknown> {
   terminate?: boolean
   /** userTask 专属：覆盖流程级 formKey */
   formKey?: string
-  /** serviceTask 专属：实现判别（autoApprove/autoReject/trigger/delegate） */
+  /** serviceTask 专属：实现判别（autoApprove/autoReject/trigger/delegate/script） */
   service?: ServiceTaskConfig
+  /** serviceTask 专属：脚本任务体（仅 service.impl==="script" 有意义，对齐后端 FlowNodeDto.script） */
+  script?: ScriptConfig
   /** callActivity 专属：子流程调用配置 */
   callActivity?: CallActivityConfig
   /** subProcess 专属：内联子图 */
@@ -164,8 +167,12 @@ function rfNodeToFlowNode(node: WfRfNode): FlowNode {
       if (d.formKey !== undefined) task.formKey = d.formKey
       return task
     }
-    case "serviceTask":
-      return { ...base, ...common, type: "serviceTask", service: d.service ?? DEFAULT_SERVICE }
+    case "serviceTask": {
+      const svc: FlowNode = { ...base, ...common, type: "serviceTask", service: d.service ?? DEFAULT_SERVICE }
+      // 脚本体仅在脚本任务模式携带，避免非 script 任务残留 script 字段（跨端字节一致）
+      if (svc.service.impl === "script" && d.script) svc.script = d.script
+      return svc
+    }
     case "exclusiveGateway":
       return { ...base, ...common, type: "exclusiveGateway" }
     case "parallelGateway":
@@ -237,6 +244,7 @@ function flowNodeToRfNode(node: FlowNode): WfRfNode {
       break
     case "serviceTask":
       data.service = node.service
+      if (node.script) data.script = node.script
       break
     case "callActivity":
       data.callActivity = node.callActivity
