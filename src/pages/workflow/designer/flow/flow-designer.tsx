@@ -15,8 +15,8 @@
  * 节点专属 config（ai/webhook/timer/service…）的深度编辑面板、elkjs 自动布局、
  * 旧 designerJson 迁移、只读运行时高亮、表单字段清单接入 —— 推迟到后续切片。
  */
-import { useCallback, useMemo, useState } from "react"
-import { addEdge, useEdgesState, useNodesState, type Connection } from "@xyflow/react"
+import { useCallback, useMemo, useRef, useState } from "react"
+import { addEdge, useEdgesState, useNodesState, type Connection, type Edge } from "@xyflow/react"
 import { AlertTriangle, CircleCheck, Info } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/page-header"
@@ -29,17 +29,25 @@ import { PropertyPanel } from "../shared/property-panel"
 import { defaultFlowConfig, type FormFieldOption, type ProcessConfig } from "../shared/config"
 import type { BranchCondition, WfNodeProps } from "../types"
 import type { FlowNodeType, Point, ProcessModel, ScriptConfig, ServiceTaskConfig } from "./model"
-import { FlowCanvas } from "./canvas"
+import { FlowCanvas, type FlowCanvasApi } from "./canvas"
 import { FlowPalette } from "./flow-palette"
 import { PALETTE_INDEX } from "./node-catalog"
+import { FormFieldsContext, NodeActionsContext, type NodeActions } from "./nodes/node-chrome"
 import {
   SEQUENCE_FLOW_EDGE_TYPE,
   fromProcessModel,
   toProcessModel,
   type WfRfEdge,
   type WfRfNode,
+  type WfValidationState,
 } from "./serialize"
 import { validateConnection, validateProcessModel, type ValidationIssue } from "./validate"
+
+/** 是否为开发自检脚手架（序列化/往返自检 UI）——正式设计器隐藏（W-19） */
+const DEV_SCAFFOLD = import.meta.env.DEV
+
+/** 属性面板深度配置尚未开放的节点类型（W-20：给占位说明而非空白死胡同） */
+const CONFIG_PENDING_TYPES = new Set(["ai", "webhook", "timerCatch", "timerBoundary", "callActivity", "subProcess"])
 
 /* ---------- 演示种子（以 ProcessModel 契约撰写，经 fromProcessModel 载入，天然演示一次往返） ---------- */
 
@@ -114,6 +122,7 @@ export default function FlowDesignerPage() {
   const [serialized, setSerialized] = useState<string>("")
   const [roundTripOk, setRoundTripOk] = useState<boolean | null>(null)
   const [issues, setIssues] = useState<ValidationIssue[] | null>(null)
+  const canvasApiRef = useRef<FlowCanvasApi | null>(null)
 
   /* ---- 连线（即时 BPMN 连接规则校验） ---- */
   const onConnect = useCallback(
@@ -135,7 +144,22 @@ export default function FlowDesignerPage() {
     [nodes, edges, setEdges],
   )
 
-  /* ---- 调色板新增节点（点击默认位置 / 拖拽落点） ---- */
+  /* ---- 拖拽连线过程即时合法性反馈（W-11）：复用 validateConnection ---- */
+  const isValidConnection = useCallback(
+    (c: Connection | Edge) => {
+      const src = nodes.find((n) => n.id === c.source)
+      const tgt = nodes.find((n) => n.id === c.target)
+      if (!src?.type || !tgt?.type) return false
+      return validateConnection(
+        { id: src.id, type: src.type as FlowNodeType },
+        { id: tgt.id, type: tgt.type as FlowNodeType },
+        edges.map((e) => ({ source: e.source, target: e.target })),
+      ).ok
+    },
+    [nodes, edges],
+  )
+
+  /* ---- 调色板新增节点（点击视口中心 / 拖拽落点，W-17） ---- */
   const addNodeFromPalette = useCallback(
     (paletteKey: string, position: Point) => {
       const item = PALETTE_INDEX[paletteKey]
@@ -148,8 +172,38 @@ export default function FlowDesignerPage() {
   )
 
   const pickFromPalette = useCallback(
-    (paletteKey: string) => addNodeFromPalette(paletteKey, { x: 480, y: 40 + nodes.length * 22 }),
-    [addNodeFromPalette, nodes.length],
+    (paletteKey: string) => addNodeFromPalette(paletteKey, canvasApiRef.current?.toFlowCenter() ?? { x: 240, y: 120 }),
+    [addNodeFromPalette],
+  )
+
+  /* ---- 节点悬浮操作：复制 / 删除（W-12） ---- */
+  const nodeActions = useMemo<NodeActions>(
+    () => ({
+      copy: (id) => {
+        const src = nodes.find((n) => n.id === id)
+        if (!src?.type) return
+        const newId = genId(src.type)
+        const clone: WfRfNode = {
+          id: newId,
+          type: src.type,
+          position: { x: src.position.x + 24, y: src.position.y + 24 },
+          data: structuredClone(src.data),
+        }
+        setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), { ...clone, selected: true }])
+        setSelection({ kind: "node", id: newId })
+      },
+      remove: (id) => {
+        const node = nodes.find((n) => n.id === id)
+        if (node?.type === "startEvent") {
+          toast.warning("开始事件不可删除")
+          return
+        }
+        setNodes((ns) => ns.filter((n) => n.id !== id))
+        setEdges((es) => es.filter((e) => e.source !== id && e.target !== id))
+        setSelection({ kind: "process" })
+      },
+    }),
+    [nodes, setNodes, setEdges],
   )
 
   /* ---- 改节点/边 ---- */
@@ -254,82 +308,151 @@ export default function FlowDesignerPage() {
   const selectedEdge = selection.kind === "edge" ? edges.find((e) => e.id === selection.id) : undefined
 
   const errorCount = issues?.filter((i) => i.level === "error").length ?? 0
+  const warningCount = (issues?.length ?? 0) - errorCount
+
+  /* ---- 校验错误画布锚定（W-14）：据 issues 计算错误/警告元素集，注入渲染副本的 data.validation ---- */
+  const { errorNodeIds, warnNodeIds, errorEdgeIds } = useMemo(() => {
+    const en = new Set<string>()
+    const wn = new Set<string>()
+    const ee = new Set<string>()
+    for (const it of issues ?? []) {
+      if (it.nodeId) (it.level === "error" ? en : wn).add(it.nodeId)
+      if (it.edgeId && it.level === "error") ee.add(it.edgeId)
+    }
+    return { errorNodeIds: en, warnNodeIds: wn, errorEdgeIds: ee }
+  }, [issues])
+
+  const displayNodes = useMemo(
+    () =>
+      nodes.map((n): WfRfNode => {
+        const state: WfValidationState | undefined = errorNodeIds.has(n.id)
+          ? "error"
+          : warnNodeIds.has(n.id)
+            ? "warning"
+            : undefined
+        return state ? { ...n, data: { ...n.data, validation: state } } : n
+      }),
+    [nodes, errorNodeIds, warnNodeIds],
+  )
+
+  const displayEdges = useMemo(
+    () =>
+      edges.map((e) =>
+        errorEdgeIds.has(e.id) ? { ...e, data: { ...e.data, validation: "error" as const } } : e,
+      ),
+    [edges, errorEdgeIds],
+  )
+
+  /* ---- 校验清单点击 → 选中并居中该元素（W-14②） ---- */
+  const focusIssue = useCallback((it: ValidationIssue) => {
+    if (it.nodeId) {
+      setSelection({ kind: "node", id: it.nodeId })
+      canvasApiRef.current?.focus({ nodeId: it.nodeId })
+    } else if (it.edgeId) {
+      setSelection({ kind: "edge", id: it.edgeId })
+      canvasApiRef.current?.focus({ edgeId: it.edgeId })
+    }
+  }, [])
+
+  const handleCanvasReady = useCallback((api: FlowCanvasApi) => {
+    canvasApiRef.current = api
+  }, [])
 
   return (
     <div className="space-y-3">
       <PageHeader
-        title="下一代流程设计器（切片 2）"
-        description="14 类节点 + 调色板拖拽新增 + BPMN 连接规则校验（连线即时 / 保存前）+ ProcessModel 序列化往返"
+        title="流程设计器"
+        description="从左侧拖拽或点击新增节点，连线编排审批流程；连线即时校验，保存前可一键全量校验。"
       />
 
       {/* 工具栏 */}
       <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
         <span className="text-xs text-muted-foreground">从左侧调色板拖拽或点击新增节点</span>
         <div className="ml-auto flex items-center gap-2">
-          {roundTripOk !== null && (
-            <span className={roundTripOk ? "text-xs text-emerald-600" : "text-xs text-rose-600"}>
+          {DEV_SCAFFOLD && roundTripOk !== null && (
+            <span className={roundTripOk ? "text-xs text-emerald-600" : "text-xs text-destructive"}>
               {roundTripOk ? "往返一致 ✓" : "往返不一致 ✗"}
             </span>
           )}
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleValidate}>
             校验
           </Button>
-          <Button size="sm" className="h-7 text-xs" onClick={handleSerialize}>
-            序列化 ProcessModel
-          </Button>
+          {DEV_SCAFFOLD && (
+            <Button size="sm" className="h-7 text-xs" onClick={handleSerialize}>
+              序列化 ProcessModel
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* 校验结果 */}
+      {/* 校验结果（W-14：每条可点击定位到画布元素；W-15：状态色走 token） */}
       {issues !== null && (
         <div className="rounded-lg border bg-card px-3 py-2 text-xs">
           {issues.length === 0 ? (
-            <div className="flex items-center gap-1.5 text-emerald-600">
+            <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
               <CircleCheck className="size-3.5" /> 校验通过，无问题
             </div>
           ) : (
-            <ul className="space-y-1">
-              {issues.map((it, i) => (
-                <li
-                  key={i}
-                  className={cn(
-                    "flex items-start gap-1.5",
-                    it.level === "error" ? "text-rose-600" : "text-amber-600",
-                  )}
-                >
-                  {it.level === "error" ? (
-                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                  ) : (
-                    <Info className="mt-0.5 size-3.5 shrink-0" />
-                  )}
-                  <span>{it.message}</span>
-                </li>
-              ))}
-            </ul>
+            <>
+              <div className="mb-1.5 font-medium text-muted-foreground">
+                共 {errorCount} 个错误 · {warningCount} 个提示
+                {errorCount > 0 && "（错误应在保存前修复）"}
+              </div>
+              <ul className="space-y-0.5">
+                {issues.map((it, i) => {
+                  const locatable = Boolean(it.nodeId || it.edgeId)
+                  return (
+                    <li key={i}>
+                      <button
+                        type="button"
+                        disabled={!locatable}
+                        onClick={() => focusIssue(it)}
+                        className={cn(
+                          "flex w-full items-start gap-1.5 rounded px-1 py-0.5 text-left",
+                          it.level === "error" ? "text-destructive" : "text-amber-600 dark:text-amber-400",
+                          locatable ? "hover:bg-accent" : "cursor-default",
+                        )}
+                        title={locatable ? "点击定位到画布元素" : undefined}
+                      >
+                        {it.level === "error" ? (
+                          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                        ) : (
+                          <Info className="mt-0.5 size-3.5 shrink-0" />
+                        )}
+                        <span>{it.message}</span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </>
           )}
-          {errorCount > 0 && <p className="mt-1.5 text-muted-foreground">共 {errorCount} 个错误应在保存前修复。</p>}
         </div>
       )}
 
       {/* 调色板 + 画布 + 属性面板 */}
-      <div className="flex h-[68vh] overflow-hidden rounded-lg border">
-        <FlowPalette onPick={pickFromPalette} />
+      <NodeActionsContext.Provider value={nodeActions}>
+        <FormFieldsContext.Provider value={SAMPLE_FIELDS}>
+          <div className="flex h-[68vh] overflow-hidden rounded-lg border">
+            <FlowPalette onPick={pickFromPalette} />
 
-        <div className="min-w-0 flex-1">
-          <FlowCanvas
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            onNodeSelect={(id) => setSelection({ kind: "node", id })}
-            onEdgeSelect={(id) => setSelection({ kind: "edge", id })}
-            onPaneClick={() => setSelection({ kind: "process" })}
-            onDropNode={addNodeFromPalette}
-          />
-        </div>
+            <div className="min-w-0 flex-1">
+              <FlowCanvas
+                nodes={displayNodes}
+                edges={displayEdges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                isValidConnection={isValidConnection}
+                onNodeSelect={(id) => setSelection({ kind: "node", id })}
+                onEdgeSelect={(id) => setSelection({ kind: "edge", id })}
+                onPaneClick={() => setSelection({ kind: "process" })}
+                onDropNode={addNodeFromPalette}
+                onReady={handleCanvasReady}
+              />
+            </div>
 
-        <aside className="flex w-80 shrink-0 flex-col overflow-hidden border-l">
+            <aside className="flex w-80 shrink-0 flex-col overflow-hidden border-l">
           {selectedNode ? (
             <div className="min-h-0 flex-1 overflow-y-auto">
               <PropertyPanel
@@ -364,6 +487,12 @@ export default function FlowDesignerPage() {
                   )}
                 </div>
               )}
+              {/* W-20：深度配置尚未开放的节点类型给占位说明，避免面板空白像坏了 */}
+              {CONFIG_PENDING_TYPES.has(selectedNode.type ?? "") && (
+                <p className="border-t px-3.5 py-3 text-[11px] leading-relaxed text-muted-foreground">
+                  该节点的详细配置（如模型 / 回调地址 / 定时 / 子流程绑定）将在后续版本开放，当前可先编辑节点名称。
+                </p>
+              )}
             </div>
           ) : selectedEdge ? (
             <>
@@ -396,14 +525,16 @@ export default function FlowDesignerPage() {
                 </div>
               </div>
             </>
-          ) : (
-            <PropertyPanel target="process" config={processConfig} onChange={setProcessConfig} formFields={SAMPLE_FIELDS} />
-          )}
-        </aside>
-      </div>
+              ) : (
+                <PropertyPanel target="process" config={processConfig} onChange={setProcessConfig} formFields={SAMPLE_FIELDS} />
+              )}
+            </aside>
+          </div>
+        </FormFieldsContext.Provider>
+      </NodeActionsContext.Provider>
 
-      {/* 序列化结果 */}
-      {serialized && (
+      {/* 序列化结果（开发自检脚手架，W-19 正式设计器隐藏） */}
+      {DEV_SCAFFOLD && serialized && (
         <details open className="rounded-lg border bg-card">
           <summary className="cursor-pointer px-3.5 py-2 text-xs font-medium text-muted-foreground">
             序列化 ProcessModel（JSON，已做 pm→rf→pm 往返自检）

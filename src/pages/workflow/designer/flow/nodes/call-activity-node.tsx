@@ -8,14 +8,16 @@ import type { WfRfNode } from "../serialize"
 import { summarizeCallActivity } from "../summary"
 import { ActivityCard } from "./node-chrome"
 
-export function CallActivityNode({ data, selected }: NodeProps<WfRfNode>) {
+export function CallActivityNode({ id, data, selected }: NodeProps<WfRfNode>) {
   return (
     <ActivityCard
+      id={id}
       title={data.name || "子流程调用"}
       icon={PhoneOutgoing}
       headerClass="bg-indigo-500"
       handleColor="!bg-indigo-500"
       selected={selected}
+      validation={data.validation}
       className="border-x-4 border-x-indigo-400/60"
     >
       {summarizeCallActivity(data.callActivity)}

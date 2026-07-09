@@ -44,10 +44,19 @@ export interface SubGraph {
   edges: SequenceFlow[]
 }
 
+/** 校验态（仅 UI 高亮用，绝不序列化进 ProcessModel；见 flow-designer 装饰逻辑） */
+export type WfValidationState = "error" | "warning"
+
 /** 挂在 react-flow `node.data` 的领域数据（审批域一律走 props，复用 WfNodeProps） */
 export interface WfNodeData extends Record<string, unknown> {
   /** 节点显示名（对应 FlowNode.name） */
   name: string
+  /**
+   * 校验高亮态（**瞬态、仅渲染用**）：由 flow-designer 据 validateProcessModel 结果注入到
+   * 展示副本的 data 上，node 组件读取加错误/警告环。toProcessModel 只拷贝已知领域字段，
+   * 故此字段永不进入序列化结果（跨端无污染）。
+   */
+  validation?: WfValidationState
   /** 审批域属性，共享 PropertyPanel 原样消费（对应 FlowNode.props） */
   props?: WfNodeProps
   /** 尺寸；省略时后端按类型给默认（对应 FlowNode.size） */
@@ -83,6 +92,8 @@ export interface WfEdgeData extends Record<string, unknown> {
   isDefault?: boolean
   condition?: BranchCondition
   expression?: string
+  /** 校验高亮态（瞬态、仅渲染用，不序列化；同 WfNodeData.validation） */
+  validation?: WfValidationState
 }
 
 export type WfRfNode = Node<WfNodeData>

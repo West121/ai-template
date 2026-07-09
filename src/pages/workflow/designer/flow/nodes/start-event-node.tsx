@@ -5,15 +5,16 @@ import { Handle, Position, type NodeProps } from "@xyflow/react"
 import { Play } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { WfRfNode } from "../serialize"
-import { NodeLabel, handleClass, selectedRing } from "./node-chrome"
+import { NodeLabel, NodeToolbarActions, handleClass, nodeRing } from "./node-chrome"
 
-export function StartEventNode({ data, selected }: NodeProps<WfRfNode>) {
+export function StartEventNode({ id, data, selected }: NodeProps<WfRfNode>) {
   return (
     <div className="relative size-12">
+      <NodeToolbarActions id={id} />
       <div
         className={cn(
           "flex size-12 items-center justify-center rounded-full border-2 border-emerald-500 bg-emerald-500/10 text-emerald-600 shadow-sm dark:text-emerald-400",
-          selectedRing(selected),
+          nodeRing(selected, data.validation),
         )}
       >
         <Play className="size-4 fill-current" />

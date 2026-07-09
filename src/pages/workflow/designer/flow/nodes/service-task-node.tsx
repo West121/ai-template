@@ -24,16 +24,18 @@ const SERVICE_META: Record<Impl, { icon: ComponentType<LucideProps>; headerClass
   script: { icon: FileCode, headerClass: "bg-fuchsia-600", handleColor: "!bg-fuchsia-600" },
 }
 
-export function ServiceTaskNode({ data, selected }: NodeProps<WfRfNode>) {
+export function ServiceTaskNode({ id, data, selected }: NodeProps<WfRfNode>) {
   const impl: Impl = data.service?.impl ?? "delegate"
   const meta = SERVICE_META[impl]
   return (
     <ActivityCard
+      id={id}
       title={data.name || "服务任务"}
       icon={meta.icon}
       headerClass={meta.headerClass}
       handleColor={meta.handleColor}
       selected={selected}
+      validation={data.validation}
     >
       {summarizeService(data.service)}
     </ActivityCard>

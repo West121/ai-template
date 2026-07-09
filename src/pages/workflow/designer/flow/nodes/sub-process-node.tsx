@@ -8,9 +8,9 @@ import { Handle, Position, type NodeProps } from "@xyflow/react"
 import { ChevronDown, ChevronRight, Layers } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { WfRfNode } from "../serialize"
-import { handleClass, selectedRing } from "./node-chrome"
+import { NodeToolbarActions, handleClass, nodeRing } from "./node-chrome"
 
-export function SubProcessNode({ data, selected }: NodeProps<WfRfNode>) {
+export function SubProcessNode({ id, data, selected }: NodeProps<WfRfNode>) {
   const [expanded, setExpanded] = useState(true)
   const childNodes = data.children?.nodes.length ?? 0
   const childEdges = data.children?.edges.length ?? 0
@@ -18,11 +18,12 @@ export function SubProcessNode({ data, selected }: NodeProps<WfRfNode>) {
   return (
     <div
       className={cn(
-        "w-56 overflow-hidden rounded-lg border-2 border-cyan-500/70 bg-card shadow-sm transition-shadow hover:shadow-md",
-        selectedRing(selected),
+        "w-52 overflow-hidden rounded-lg border-2 border-indigo-500/70 bg-card shadow-sm transition-shadow hover:shadow-md",
+        nodeRing(selected, data.validation),
       )}
     >
-      <div className="flex h-8 items-center gap-1.5 bg-cyan-600 px-2.5 text-xs font-medium text-white">
+      <NodeToolbarActions id={id} />
+      <div className="flex h-8 items-center gap-1.5 bg-indigo-600 px-2.5 text-xs font-medium text-white">
         <button
           type="button"
           className="rounded p-0.5 hover:bg-white/20"
@@ -40,13 +41,13 @@ export function SubProcessNode({ data, selected }: NodeProps<WfRfNode>) {
       {expanded && (
         <div className="p-2">
           {/* 内嵌虚线框：BPMN 子流程"双框"语义 */}
-          <div className="rounded-md border border-dashed border-cyan-500/50 bg-cyan-500/5 px-2.5 py-3 text-center text-xs text-muted-foreground">
+          <div className="rounded-md border border-dashed border-indigo-500/50 bg-indigo-500/5 px-2.5 py-3 text-center text-xs text-muted-foreground">
             {childNodes > 0 ? `内含 ${childNodes} 节点 · ${childEdges} 连线` : "空子流程（内含独立子图）"}
           </div>
         </div>
       )}
-      <Handle type="target" position={Position.Top} className={handleClass("!bg-cyan-600")} />
-      <Handle type="source" position={Position.Bottom} className={handleClass("!bg-cyan-600")} />
+      <Handle type="target" position={Position.Top} className={handleClass("!bg-indigo-600")} />
+      <Handle type="source" position={Position.Bottom} className={handleClass("!bg-indigo-600")} />
     </div>
   )
 }

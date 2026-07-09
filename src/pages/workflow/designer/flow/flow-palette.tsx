@@ -15,10 +15,10 @@ export function FlowPalette({ onPick }: { onPick: (key: string) => void }) {
 
   return (
     <div className="flex w-40 shrink-0 flex-col gap-3 overflow-y-auto border-r bg-muted/20 p-2.5">
-      <p className="px-0.5 text-[11px] leading-tight text-muted-foreground">拖拽到画布，或点击在默认位置新增</p>
+      <p className="px-0.5 text-xs leading-tight text-muted-foreground">拖拽到画布，或点击在画布中央新增</p>
       {PALETTE_GROUPS.map((group) => (
         <div key={group.title} className="space-y-1.5">
-          <div className="px-0.5 text-[11px] font-medium text-muted-foreground">{group.title}</div>
+          <div className="px-0.5 text-xs font-medium text-foreground/80">{group.title}</div>
           <div className="space-y-1">
             {group.items.map((item) => {
               const Icon = item.icon

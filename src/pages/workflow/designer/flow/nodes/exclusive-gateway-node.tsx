@@ -7,15 +7,17 @@ import { X } from "lucide-react"
 import type { WfRfNode } from "../serialize"
 import { GatewayShell } from "./node-chrome"
 
-export function ExclusiveGatewayNode({ data, selected }: NodeProps<WfRfNode>) {
+export function ExclusiveGatewayNode({ id, data, selected }: NodeProps<WfRfNode>) {
   return (
     <GatewayShell
+      id={id}
       icon={X}
       name={data.name}
       colorClass="border-amber-500 bg-amber-500/10"
       iconClass="text-amber-600 dark:text-amber-400"
       handleColor="!bg-amber-500"
       selected={selected}
+      validation={data.validation}
     />
   )
 }

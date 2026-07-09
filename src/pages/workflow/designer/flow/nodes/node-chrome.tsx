@@ -1,11 +1,21 @@
 /**
- * 自定义节点共享外观：连线锚点样式、节点名标签、选中态高亮环、
- * 圆角矩形活动卡（ActivityCard）、菱形网关壳（GatewayShell）。
+ * 自定义节点共享外观：连线锚点样式、节点名标签、选中/校验高亮环、
+ * 圆角矩形活动卡（ActivityCard）、菱形网关壳（GatewayShell）、节点悬浮操作条（NodeToolbarActions）。
  */
-import type { ComponentType, ReactNode } from "react"
-import { Handle, Position } from "@xyflow/react"
-import type { LucideProps } from "lucide-react"
+import { createContext, useContext, type ComponentType, type ReactNode } from "react"
+import { Handle, NodeToolbar, Position } from "@xyflow/react"
+import { Copy, Trash2, type LucideProps } from "lucide-react"
 import { cn } from "@/lib/utils"
+import type { FormFieldOption } from "../../shared/config"
+
+/**
+ * 表单字段清单上下文（W-07）：供边/节点摘要把字段 **key** 映射为表单 **label** 展示
+ * （画布显示「请假天数 大于 3」而非「days 大于 3」）。由 flow-designer 提供当前流程字段。
+ */
+export const FormFieldsContext = createContext<FormFieldOption[]>([])
+
+/** 节点校验态（W-14 画布锚定）：error → destructive 环，warning → amber 环 */
+export type ValidationRingState = "error" | "warning"
 
 /** 连线锚点基础样式（各节点按主题色再叠加 bg） */
 export const handleClass = (extra?: string) =>
@@ -16,10 +26,73 @@ export function selectedRing(selected?: boolean): string | false {
   return Boolean(selected) && "ring-2 ring-primary ring-offset-2 ring-offset-background"
 }
 
-/** 圆形/菱形节点下方的名称标签 */
+/**
+ * 统一高亮环：校验错误/警告优先于选中态（错误比选中更需要被看见），
+ * 错误走 `--destructive` token（亮/暗自适应），无校验态时回落到选中环。
+ */
+export function nodeRing(selected?: boolean, validation?: ValidationRingState): string | false {
+  if (validation === "error") return "ring-2 ring-destructive ring-offset-2 ring-offset-background"
+  if (validation === "warning") return "ring-2 ring-amber-500 ring-offset-2 ring-offset-background"
+  return selectedRing(selected)
+}
+
+/* ============================================================
+ * 节点悬浮操作（删除/复制）—— W-12
+ * ============================================================ */
+
+export interface NodeActions {
+  /** 复制节点（深拷贝 data + 偏移 + 选中新节点） */
+  copy: (id: string) => void
+  /** 删除节点（连同关联边） */
+  remove: (id: string) => void
+}
+
+/** 由 flow-designer 通过 Provider 注入删除/复制实现，节点组件消费（零 prop drilling） */
+export const NodeActionsContext = createContext<NodeActions | null>(null)
+
+/**
+ * 节点选中时右上角浮出的操作条（react-flow 官方 NodeToolbar，零新依赖）。
+ * 亮/暗走 popover/accent/destructive token。
+ */
+export function NodeToolbarActions({ id }: { id: string }) {
+  const actions = useContext(NodeActionsContext)
+  if (!actions) return null
+  return (
+    <NodeToolbar position={Position.Top} align="end" offset={6}>
+      <div className="flex items-center gap-0.5 rounded-md border bg-popover p-0.5 text-popover-foreground shadow-sm">
+        <button
+          type="button"
+          aria-label="复制节点"
+          title="复制"
+          className="rounded p-1 hover:bg-accent"
+          onClick={(e) => {
+            e.stopPropagation()
+            actions.copy(id)
+          }}
+        >
+          <Copy className="size-3.5" />
+        </button>
+        <button
+          type="button"
+          aria-label="删除节点"
+          title="删除"
+          className="rounded p-1 text-destructive hover:bg-accent"
+          onClick={(e) => {
+            e.stopPropagation()
+            actions.remove(id)
+          }}
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+      </div>
+    </NodeToolbar>
+  )
+}
+
+/** 圆形/菱形节点下方的名称标签（W-04：限宽截断，避免长名横向溢出压邻居） */
 export function NodeLabel({ children }: { children: ReactNode }) {
   return (
-    <div className="absolute left-1/2 top-full mt-1.5 -translate-x-1/2 whitespace-nowrap text-center text-xs font-medium text-foreground">
+    <div className="absolute left-1/2 top-full mt-1.5 max-w-[8rem] -translate-x-1/2 truncate text-center text-xs font-medium text-foreground">
       {children}
     </div>
   )
@@ -30,19 +103,24 @@ export function NodeLabel({ children }: { children: ReactNode }) {
  * headerClass 决定标题条底色、handleColor 决定锚点主题色（`!bg-*`）。
  */
 export function ActivityCard({
+  id,
   title,
   icon: Icon,
   headerClass,
   handleColor,
   selected,
+  validation,
   children,
   className,
 }: {
+  /** 节点 id（用于悬浮操作条）；缺省则不渲染操作条 */
+  id?: string
   title: string
   icon: ComponentType<LucideProps>
   headerClass: string
   handleColor: string
   selected?: boolean
+  validation?: ValidationRingState
   children?: ReactNode
   className?: string
 }) {
@@ -50,10 +128,11 @@ export function ActivityCard({
     <div
       className={cn(
         "w-52 overflow-hidden rounded-lg border bg-card shadow-sm transition-shadow hover:shadow-md",
-        selectedRing(selected),
+        nodeRing(selected, validation),
         className,
       )}
     >
+      {id && <NodeToolbarActions id={id} />}
       <div className={cn("flex h-8 items-center gap-1.5 px-3 text-xs font-medium text-white", headerClass)}>
         <Icon className="size-3.5 shrink-0" />
         <span className="min-w-0 flex-1 truncate">{title}</span>
@@ -70,13 +149,17 @@ export function ActivityCard({
  * 顶/底/右三个锚点，支持分叉多出边。
  */
 export function GatewayShell({
+  id,
   icon: Icon,
   name,
   colorClass,
   iconClass,
   handleColor,
   selected,
+  validation,
 }: {
+  /** 节点 id（用于悬浮操作条）；缺省则不渲染操作条 */
+  id?: string
   icon: ComponentType<LucideProps>
   name: ReactNode
   /** 菱形边框 + 底色，如 "border-amber-500 bg-amber-500/10" */
@@ -86,14 +169,16 @@ export function GatewayShell({
   /** 锚点主题色，如 "!bg-amber-500" */
   handleColor: string
   selected?: boolean
+  validation?: ValidationRingState
 }) {
   return (
     <div className="relative size-12">
+      {id && <NodeToolbarActions id={id} />}
       <div
         className={cn(
           "flex size-12 rotate-45 items-center justify-center rounded-md border-2 shadow-sm",
           colorClass,
-          selectedRing(selected),
+          nodeRing(selected, validation),
         )}
       >
         <Icon className={cn("size-4 -rotate-45", iconClass)} />

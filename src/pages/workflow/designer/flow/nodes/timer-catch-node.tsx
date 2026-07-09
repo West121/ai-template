@@ -7,15 +7,16 @@ import { Clock } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { WfRfNode } from "../serialize"
 import { summarizeTimer } from "../summary"
-import { NodeLabel, handleClass, selectedRing } from "./node-chrome"
+import { NodeLabel, NodeToolbarActions, handleClass, nodeRing } from "./node-chrome"
 
-export function TimerCatchNode({ data, selected }: NodeProps<WfRfNode>) {
+export function TimerCatchNode({ id, data, selected }: NodeProps<WfRfNode>) {
   return (
     <div className="relative size-12">
+      <NodeToolbarActions id={id} />
       <div
         className={cn(
           "flex size-12 items-center justify-center rounded-full border-2 border-indigo-500 bg-indigo-500/10 shadow-sm",
-          selectedRing(selected),
+          nodeRing(selected, data.validation),
         )}
       >
         {/* 内圈：中间事件双圈语义 */}

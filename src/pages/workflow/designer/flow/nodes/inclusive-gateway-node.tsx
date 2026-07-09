@@ -1,21 +1,23 @@
 /**
- * 包容网关节点（BPMN inclusiveGateway）：紫色菱形 + ◯ 标记。
+ * 包容网关节点（BPMN inclusiveGateway）：琥珀色菱形 + ◯（CircleDot）标记（裁定 A1 三网关统一 amber）。
  * 满足的多条出边都走 + 默认出边（edge.isDefault）。
  */
 import type { NodeProps } from "@xyflow/react"
-import { Circle } from "lucide-react"
+import { CircleDot } from "lucide-react"
 import type { WfRfNode } from "../serialize"
 import { GatewayShell } from "./node-chrome"
 
-export function InclusiveGatewayNode({ data, selected }: NodeProps<WfRfNode>) {
+export function InclusiveGatewayNode({ id, data, selected }: NodeProps<WfRfNode>) {
   return (
     <GatewayShell
-      icon={Circle}
+      id={id}
+      icon={CircleDot}
       name={data.name}
-      colorClass="border-violet-500 bg-violet-500/10"
-      iconClass="text-violet-600 dark:text-violet-400"
-      handleColor="!bg-violet-500"
+      colorClass="border-amber-500 bg-amber-500/10"
+      iconClass="text-amber-600 dark:text-amber-400"
+      handleColor="!bg-amber-500"
       selected={selected}
+      validation={data.validation}
     />
   )
 }
