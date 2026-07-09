@@ -128,7 +128,7 @@
 
 - ✅ **N-B-00**（spike）**通过 2026-07-09**：LiteFlow **2.16.0** 在 SB4.0.1/Java21 可用，四项实测全绿，无需回退。**坐标修正：SB4 用 `liteflow-spring-boot4-starter:2.16.0`（非普通 starter）**；`@ScriptBean` 门面访问 Spring Bean 验证成功（Groovy/GraalJS/Jython 均通过）；Jython 2.7.4 在 Java21 跑通。依赖 +~118MB（Jython 49 / GraalJS 63 / 其余 ~9）。
 - 🔵 **N-B-01（切片1+2a ✅，端到端验证通过）** `GraphToBpmnConverter` 图直译（与旧路径并存）：start/end(含terminate)/审批userTask/排它·并行·包容网关/条件边(结构化→UEL+expression逃生口)/坐标生成DI，77 单测全过。部署端点 `POST /api/wf/models/graph/deploy`(ProcessDefService TYPE_GRAPH 分支复用 Flowable 部署链)。**主控 E2E 实证 8/8**：ProcessModel→部署 Flowable→发起→INITIATOR 解析→审批→条件网关(days>3 走 e3)→APPROVED、highlight 路径正确。**切片3 待办**：subProcess、timerCatch/Boundary/cycle、callActivity、OA行为节点(cc/ai/webhook/serviceTask)、.bpmn 导入导出端点、模型级校验器(附录C.3/C.4)。
-- ⬜ **N-B-02** .bpmn 导入/导出端点（Flowable `BpmnXMLConverter`）：`POST /api/wf/models/import`、`GET /api/wf/models/{id}/bpmn`。
+- ✅ **N-B-02** .bpmn 导入/导出端点（磐石完成，E2E 12/12）：`GET /api/wf/models/{id}/bpmn` 导出 + `POST /api/wf/models/import`；`BpmnToGraphConverter` 全类型逆向（条件读 oa:condition 无损、坐标从 DI 还原）。往返 ProcessModel→XML→ProcessModel 无损。111 单测。
 - ⬜ **N-B-03** 表单字段清单端点 `GET /api/wf/forms/{formKey}/fields`；`wf_form_def` 增 `form_type` + CODE 仅存清单。
 - ✅ **N-B-04** `ExpressionService`（Aviator 5.4.3，强沙箱：解释模式+禁 new/反射/静态/循环+空 ALLOWED_CLASS_SET）+ `@FormulaFunction` 注册器 + 示例函数（deptLeader/dictLabel/workDays）+ exprEval 网关门面；GraphToBpmnConverter 边 expression 走 `${exprEval.evalBoolean}`。98 单测 + E2E 7/7（高级条件运行时 Aviator 路由、自定义函数、沙箱拒 new）。
 - ✅ **N-B-05/06/07** LiteFlow 脚本引擎 Tier2（磐石完成，E2E 7/7）：LiteFlow 2.16.0（spring-boot4-starter + groovy/graaljs/python，`enable=false` 仅用脚本 SPI，全应用装配 15s 启动）+ `ScriptService`（三语言 + `@ScriptBean("spring")` 门面调任意 Bean + 执行超时）+ 治理（`wf:script:write` V18、`wf_script_exec_log` 审计、诚实标注非沙箱）+ scriptTask→`wfScriptDelegate` + `POST /api/wf/script/test-run`。E2E：脚本节点运行时经门面调 Bean + 写 vars → 下游 Aviator 网关路由；test-run groovy/GraalJS 均成功。ScriptServiceTest 6/6。前端编辑器 = N-F-09。
@@ -145,7 +145,7 @@
 - ⬜ **N-F-06** 删除 `bpmn-js`/`diagram-js-grid` 依赖与 `designer/bpmn`。
 - ⬜ **N-F-07** 表单字段契约 `FormFieldManifest`/`FieldPolicy` + `formRegistry`；手写 react-hook-form 表单导出 `formMeta` 注册；`HostedForm` 包裹层消费 `fieldPolicy` 做显隐/只读/必填。
 - ✅ **N-F-08 / F-01** 安全 AST 解释器 `formula-eval.ts`（自写词法+Pratt，零 new Function，屏蔽原型链，23 vitest 含安全组）+ `formula-designer` 组件（接入 flow 边高级条件）+ form-runtime 迁移。**F-01 假沙箱消灭**：高频公式路径真隔离；Tier2 事件脚本保留 new Function 但诚实标注非沙箱、受信管理员专用。引入 vitest。
-- ⬜ **N-F-09** 脚本编辑器（Java/Groovy、Python、前端 JS 三类；语言标签 + 测试运行调后端）；前端脚本诚实标注受信边界。
+- ✅ **N-F-09** 脚本编辑器（疾风完成）：Groovy/JS/Python tab + 上下文速查 + 诚实"非沙箱"警示 + `wf:script:write` 权限 gate + 测试运行接 test-run 端点；model.ts/serialize 补 script 字段、接入设计器 scriptTask 模式。vitest 25（含脚本节点往返）。
 
 ### UI（丹青）
 
