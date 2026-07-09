@@ -23,6 +23,7 @@ import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
+import { FormulaDesigner } from "@/components/formula-designer"
 import { PropertyPanel } from "../shared/property-panel"
 import { defaultFlowConfig, type FormFieldOption, type ProcessConfig } from "../shared/config"
 import type { BranchCondition, WfNodeProps } from "../types"
@@ -171,6 +172,18 @@ export default function FlowDesignerPage() {
       setEdges((es) => es.map((e) => (e.id === id ? { ...e, data: { ...e.data, isDefault } } : e))),
     [setEdges],
   )
+  // 边高级公式条件（expression）：空串归一化为 undefined，避免序列化残留空字段
+  const updateEdgeExpression = useCallback(
+    (id: string, expression: string) =>
+      setEdges((es) =>
+        es.map((e) =>
+          e.id === id
+            ? { ...e, data: { ...e.data, expression: expression.trim() === "" ? undefined : expression } }
+            : e,
+        ),
+      ),
+    [setEdges],
+  )
 
   /* ---- 模型级校验 ---- */
   const buildModel = useCallback(
@@ -309,7 +322,7 @@ export default function FlowDesignerPage() {
                   onCheckedChange={(v) => toggleEdgeDefault(selectedEdge.id, v)}
                 />
               </label>
-              <div className="min-h-0 flex-1 overflow-hidden">
+              <div className="min-h-0 flex-1 overflow-y-auto">
                 <PropertyPanel
                   target={{ nodeId: selectedEdge.id, nodeType: "condition" }}
                   config={{ condition: selectedEdge.data?.condition }}
@@ -317,6 +330,18 @@ export default function FlowDesignerPage() {
                   formFields={SAMPLE_FIELDS}
                   branchMeta={{ isDefault: selectedEdge.data?.isDefault ?? false, priority: 1 }}
                 />
+                {/* 高级公式条件（Tier 1）：与上方结构化条件二选一，非空时优先（见 model.ts 边条件三态） */}
+                <div className="space-y-1.5 border-t px-3.5 py-3">
+                  <div className="text-xs font-medium">高级公式条件（expression）</div>
+                  <p className="text-[11px] text-muted-foreground">
+                    结构化条件表达不了时用公式；与上方结构化条件二选一，配置后优先生效。前端仅即时校验/预览，提交以后端为准。
+                  </p>
+                  <FormulaDesigner
+                    value={selectedEdge.data?.expression ?? ""}
+                    onChange={(expr) => updateEdgeExpression(selectedEdge.id, expr)}
+                    fields={SAMPLE_FIELDS}
+                  />
+                </div>
               </div>
             </>
           ) : (

@@ -1,7 +1,14 @@
 /**
  * 表单运行时引擎（无 UI 依赖）：被 FormRenderer 与设计器预览共用。
- * 负责：选项归一化、字段扁平化、条件求值（联动）、校验规则求值、受限脚本执行。
- * 安全：脚本仅在浏览器内以 new Function 执行，注入白名单 ctx，不暴露 window/fetch/DOM。
+ * 负责：选项归一化、字段扁平化、条件求值（联动）、校验规则求值、脚本钩子执行。
+ *
+ * 两条求值路径，信任级别不同（见 docs/design/next-gen-workflow-and-formula.md 第三部分）：
+ *  - **Tier 1 公式（安全）**：自定义校验规则 `custom.expr` 走 `formula-eval.ts` 的安全 AST
+ *    解释器（`evaluate`），**不使用 `new Function`/`eval`**，够不到 window/fetch/原型链。
+ *  - **Tier 2 脚本（受信）**：`runScript` 是表单事件钩子（onLoad/onChange/onSubmit），仍以
+ *    `new Function` 在浏览器内执行——它以**当前页面的完整权限**运行（能读 window/fetch/DOM/token）。
+ *    这不是沙箱，也不假装是：脚本是「定义态受信工件」，仅平台管理员可写、随定义版本化审核
+ *    （治理见设计文档 3.3）。此前「绝不暴露 window/fetch/DOM」的注释是安全谎言（F-01），已删除。
  */
 import type {
   ConditionGroup,
@@ -11,6 +18,7 @@ import type {
   ValidationRule,
   WidgetOption,
 } from "@/types/workflow"
+import { evaluate } from "@/lib/formula-eval"
 
 /* ---------------- 常量：类型集合 ---------------- */
 
@@ -220,10 +228,11 @@ export function validateValue(
       case "custom": {
         if (rule.expr && rule.expr.trim()) {
           try {
-            const fn = new Function("value", "data", `"use strict";return (${rule.expr});`)
-            if (!fn(value, data)) return rule.message || "校验未通过"
+            // Tier 1 安全公式：AST 解释器求值（绝不 new Function）。表达式可引用 value / data.*，
+            // 返回假值即校验不通过（与旧 new Function 语义等价，出错则不阻断）。
+            if (!evaluate(rule.expr, { value, data })) return rule.message || "校验未通过"
           } catch {
-            /* 表达式出错不阻断 */
+            /* 表达式出错不阻断（与旧行为一致） */
           }
         }
         break
@@ -243,7 +252,7 @@ export function checkUnique(values: unknown[], index: number): boolean {
   return values.every((v, i) => i === index || String(v ?? "") !== String(cur ?? ""))
 }
 
-/* ---------------- 受限脚本执行 ---------------- */
+/* ---------------- Tier 2 受信脚本钩子（非沙箱，完整页面权限） ---------------- */
 
 export interface ScriptCtx {
   data: Record<string, unknown>
@@ -284,8 +293,13 @@ export const scriptUtils: ScriptUtils = {
 }
 
 /**
- * 执行受限脚本：new Function 注入白名单 ctx，try-catch 隔离。
- * 返回脚本 return 值（onSubmit 返回 false 可拦截提交）。绝不暴露 window/fetch/DOM。
+ * 执行 Tier 2 表单事件脚本：`new Function` 注入 ctx 后在浏览器内执行，try-catch 兜错。
+ * 返回脚本 return 值（onSubmit 返回 false 可拦截提交）。
+ *
+ * **安全边界（诚实声明，F-01）**：这不是沙箱。脚本以当前页面的完整权限运行——`new Function`
+ * 只注入了 ctx，但函数体仍可自由访问 window / fetch / document / localStorage（含登录 token）。
+ * 因此脚本是「定义态受信工件」：仅平台管理员可写、随表单定义版本化与审核，禁止最终用户运行时
+ * 注入。需要安全、无副作用、高频求值的场景请改用 Tier 1 公式（`formula-eval.ts`）。
  */
 export function runScript(source: string | undefined, ctx: ScriptCtx): unknown {
   if (!source || !source.trim()) return undefined
