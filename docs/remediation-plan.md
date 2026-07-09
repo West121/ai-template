@@ -130,7 +130,7 @@
 - 🔵 **N-B-01（切片1+2a ✅，端到端验证通过）** `GraphToBpmnConverter` 图直译（与旧路径并存）：start/end(含terminate)/审批userTask/排它·并行·包容网关/条件边(结构化→UEL+expression逃生口)/坐标生成DI，77 单测全过。部署端点 `POST /api/wf/models/graph/deploy`(ProcessDefService TYPE_GRAPH 分支复用 Flowable 部署链)。**主控 E2E 实证 8/8**：ProcessModel→部署 Flowable→发起→INITIATOR 解析→审批→条件网关(days>3 走 e3)→APPROVED、highlight 路径正确。**切片3 待办**：subProcess、timerCatch/Boundary/cycle、callActivity、OA行为节点(cc/ai/webhook/serviceTask)、.bpmn 导入导出端点、模型级校验器(附录C.3/C.4)。
 - ⬜ **N-B-02** .bpmn 导入/导出端点（Flowable `BpmnXMLConverter`）：`POST /api/wf/models/import`、`GET /api/wf/models/{id}/bpmn`。
 - ⬜ **N-B-03** 表单字段清单端点 `GET /api/wf/forms/{formKey}/fields`；`wf_form_def` 增 `form_type` + CODE 仅存清单。
-- ⬜ **N-B-04** `ExpressionService`（Tier 1）：选定引擎（推荐 Aviator）+ `@FormulaFunction` 注册表；统一表单计算/高级流程条件/处理人公式；简单条件保持 UEL。
+- ✅ **N-B-04** `ExpressionService`（Aviator 5.4.3，强沙箱：解释模式+禁 new/反射/静态/循环+空 ALLOWED_CLASS_SET）+ `@FormulaFunction` 注册器 + 示例函数（deptLeader/dictLabel/workDays）+ exprEval 网关门面；GraphToBpmnConverter 边 expression 走 `${exprEval.evalBoolean}`。98 单测 + E2E 7/7（高级条件运行时 Aviator 路由、自定义函数、沙箱拒 new）。
 - ⬜ **N-B-05** `ScriptService`（Tier 2）：封装 **LiteFlow 2.16.0**（坐标 `liteflow-spring-boot4-starter`）多语言脚本（Groovy 默认 / GraalJS / QLExpress / Aviator / Lua；Python = Jython/Py2）；`@ScriptBean` 门面暴露 `spring`/`vars`/`form`/`execution`/helper + 超时/资源限额。Flowable 节点/监听器传入上下文调用。
 - ⬜ **N-B-06** 脚本治理：`wf:script:write` 权限、脚本为部署态工件（版本化）、执行审计（`wf_script_exec_log`）、测试运行端点同权限同审计。
 - ⬜ **N-B-07** 工作流接入：`scriptTask` 节点 + execution/task 监听器钩子 + 高级条件/处理人接 Expression/Script。
@@ -144,7 +144,7 @@
 - ⬜ **N-F-05** 实例详情用新节点组件渲染 + 运行时高亮（替换 bpmn-js 高亮）。
 - ⬜ **N-F-06** 删除 `bpmn-js`/`diagram-js-grid` 依赖与 `designer/bpmn`。
 - ⬜ **N-F-07** 表单字段契约 `FormFieldManifest`/`FieldPolicy` + `formRegistry`；手写 react-hook-form 表单导出 `formMeta` 注册；`HostedForm` 包裹层消费 `fieldPolicy` 做显隐/只读/必填。
-- ⬜ **N-F-08** 公式设计器组件（函数/字段选择 + 实时校验）产出规范表达式；安全 AST 解释器实时预览（替 `new Function`，消灭 F-01）。
+- ✅ **N-F-08 / F-01** 安全 AST 解释器 `formula-eval.ts`（自写词法+Pratt，零 new Function，屏蔽原型链，23 vitest 含安全组）+ `formula-designer` 组件（接入 flow 边高级条件）+ form-runtime 迁移。**F-01 假沙箱消灭**：高频公式路径真隔离；Tier2 事件脚本保留 new Function 但诚实标注非沙箱、受信管理员专用。引入 vitest。
 - ⬜ **N-F-09** 脚本编辑器（Java/Groovy、Python、前端 JS 三类；语言标签 + 测试运行调后端）；前端脚本诚实标注受信边界。
 
 ### UI（丹青）
