@@ -67,7 +67,8 @@ import java.util.Set;
  *   <li>{@code timerCatch}（intermediateCatchEvent）/ {@code timerBoundary}（boundaryEvent + attachedToRef +
  *       cancelActivity 中断/非中断）；定时支持 duration / date / cycle（周期 timeCycle）</li>
  *   <li>{@code sequenceFlow}：{@code condition} 结构化走 {@link ConditionCompiler}→UEL（红线不变）；
- *       {@code isDefault} 默认分支；{@code expression} 高级公式原样写入（与 condition 互斥，附录 C.4）</li>
+ *       {@code isDefault} 默认分支；{@code expression} 高级公式包成 {@code ${exprEval.evalBoolean(execution,'…')}}
+ *       交 Tier 1 引擎运行时求值（与 condition 互斥，附录 C.4）</li>
  * </ul>
  * 并<b>消费前端坐标</b>（position/size/waypoints）生成 BPMN DI，替代旧 {@code autoLayout()}。
  *
@@ -508,8 +509,9 @@ public class GraphToBpmnConverter {
             } else if (hasExpr && hasCond) {
                 throw new BusinessException(400, "同一条边 condition 与 expression 互斥(附录 C.4): " + eid);
             } else if (hasExpr) {
-                // 高级公式逃生口：原样下发为条件表达式
-                flow.setConditionExpression(edge.expression);
+                // 高级公式逃生口（Tier 1 引擎路径，附录 C.4）：不原样下发，包成
+                // ${exprEval.evalBoolean(execution,'<转义后expr>')}，运行时由 exprEval bean 交 Aviator 求值。
+                flow.setConditionExpression(wrapExprEval(edge.expression));
             } else if (hasCond) {
                 // 结构化条件：ConditionCompiler 编译 UEL（红线不变）+ 存 oa:condition 供回编辑
                 String uel = compileCondition(edge.condition);
@@ -519,6 +521,17 @@ public class GraphToBpmnConverter {
                 addExtText(flow, "condition", edge.condition.toString());
             }
             c.addFlowElement(flow);
+        }
+
+        /**
+         * 高级公式条件 → conditionExpression：包成 {@code ${exprEval.evalBoolean(execution,'<expr>')}}。
+         * Flowable 网关运行时以 UEL 求值该串 → 回调 {@code exprEval} bean（{@link com.xingchen.oa.workflow.engine.expression.ExprEval}）
+         * → 取 execution 变量作上下文交 Aviator 沙箱求值，使高级公式真正参与网关路由（而非把公式串误当 UEL 直跑）。
+         * 单引号/反斜杠转义镜像 {@link ConditionCompiler} 的 UEL 字符串字面量转义，避免注入/破坏 UEL 结构。
+         */
+        private String wrapExprEval(String expr) {
+            String escaped = expr.replace("\\", "\\\\").replace("'", "\\'");
+            return "${exprEval.evalBoolean(execution,'" + escaped + "')}";
         }
 
         /**

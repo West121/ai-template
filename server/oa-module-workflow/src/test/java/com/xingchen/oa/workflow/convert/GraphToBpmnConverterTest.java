@@ -147,7 +147,8 @@ class GraphToBpmnConverterTest {
     }
 
     @Test
-    void expressionEscapeHatchWrittenRaw() {
+    void expressionEscapeHatchWrappedWithExprEval() {
+        // 高级公式串（bare formula）→ 包成 ${exprEval.evalBoolean(execution,'…')}，运行时走 Aviator（N-B-04）
         JsonNode root = json("""
                 {"key": "p", "name": "p", "nodes": [
                    {"id": "start", "type": "startEvent", "name": "开始", "position": {"x": 0, "y": 0}},
@@ -155,11 +156,28 @@ class GraphToBpmnConverterTest {
                    {"id": "end", "type": "endEvent", "name": "结束", "position": {"x": 200, "y": 0}}],
                  "edges": [
                    {"id": "e1", "source": "start", "target": "gw"},
-                   {"id": "e2", "source": "gw", "target": "end", "expression": "${exprEval.eval(execution,'amount > 1000')}"}]}
+                   {"id": "e2", "source": "gw", "target": "end", "expression": "amount > 1000"}]}
                 """);
         SequenceFlow e2 = (SequenceFlow) process(converter.graphToBpmn(root)).getFlowElement("e2");
-        assertEquals("${exprEval.eval(execution,'amount > 1000')}", e2.getConditionExpression(), "高级公式原样下发");
+        assertEquals("${exprEval.evalBoolean(execution,'amount > 1000')}", e2.getConditionExpression(),
+                "高级公式包成 exprEval.evalBoolean 交 Tier1 引擎");
         assertNull(e2.getExtensionElements().get("condition"), "expression 路径不写 oa:condition");
+    }
+
+    @Test
+    void expressionSingleQuoteEscaped() {
+        // 公式内含单引号/反斜杠时按 UEL 字符串字面量转义（镜像 ConditionCompiler），防破坏 UEL 结构/注入
+        JsonNode root = json("""
+                {"key": "p", "name": "p", "nodes": [
+                   {"id": "start", "type": "startEvent", "name": "开始", "position": {"x": 0, "y": 0}},
+                   {"id": "gw", "type": "exclusiveGateway", "name": "网关", "position": {"x": 100, "y": 0}},
+                   {"id": "end", "type": "endEvent", "name": "结束", "position": {"x": 200, "y": 0}}],
+                 "edges": [
+                   {"id": "e2", "source": "gw", "target": "end", "expression": "dept == 'HR'"}]}
+                """);
+        SequenceFlow e2 = (SequenceFlow) process(converter.graphToBpmn(root)).getFlowElement("e2");
+        assertEquals("${exprEval.evalBoolean(execution,'dept == \\'HR\\'')}", e2.getConditionExpression(),
+                "单引号转义为 \\'");
     }
 
     @Test

@@ -29,6 +29,11 @@
             <groupId>org.flowable</groupId>
             <artifactId>flowable-spring-boot-starter-process</artifactId>
         </dependency>
+        <!-- Aviator：Tier 1 公式安全表达式引擎（ExpressionService/exprEval + @FormulaFunction 自定义函数） -->
+        <dependency>
+            <groupId>com.googlecode.aviator</groupId>
+            <artifactId>aviator</artifactId>
+        </dependency>
         <!-- @PreAuthorize 注解 -->
         <dependency>
             <groupId>org.springframework.security</groupId>

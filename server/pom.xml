@@ -34,6 +34,8 @@
         <flowable.version>8.0.0</flowable.version>
         <springdoc.version>3.0.3</springdoc.version>
         <lombok.version>1.18.42</lombok.version>
+        <!-- Aviator：Tier 1 公式安全表达式引擎（可注册自定义函数、可禁反射/禁任意对象访问） -->
+        <aviator.version>5.4.3</aviator.version>
     </properties>
 
     <dependencyManagement>
@@ -69,6 +71,12 @@
                 <groupId>org.flowable</groupId>
                 <artifactId>flowable-spring-boot-starter-process</artifactId>
                 <version>${flowable.version}</version>
+            </dependency>
+            <!-- Aviator（Tier 1 公式引擎） -->
+            <dependency>
+                <groupId>com.googlecode.aviator</groupId>
+                <artifactId>aviator</artifactId>
+                <version>${aviator.version}</version>
             </dependency>
             <!-- jjwt -->
             <dependency>
