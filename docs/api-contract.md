@@ -142,6 +142,15 @@ FormDef = {id,code,name,version,schemaJson,status:DRAFT|PUBLISHED|DISABLED,remar
   - relation 控件（数据源 type=form）的可选项：查以该表单为 form_code、已提交（非 DRAFT）的流程实例；keyword 匹配标题；未被任何流程使用则空页
   - FormRecord = {id, procInstId, title, label, value, summary}；value=procInstId（存储唯一值），label=实例标题或首个文本字段（展示），summary=表单标量字段摘要
 
+### 表单字段清单（N-B-03，设计文档《next-gen-workflow-and-formula》第二部分 2.2/2.3；范围锁定 ONLINE+CODE）
+统一「字段清单契约」：所有表单向流程暴露机器可读字段清单，设计时「节点字段权限编辑器」按 formKey 拉本清单渲染 visible/editable/required 矩阵，写入节点 `WfNodeProps.formPerms`（已有字段，不新增模型）；运行时任务领取回传该节点 formPerms（详情 `nodeFormPerms`，已有，本切片不改），前端 FormRenderer/HostedForm 据此显隐/只读/必填。
+- FormFieldManifest = {formKey, formType:ONLINE|CODE, fields:[FieldDescriptor]}
+- FieldDescriptor = {key, label, type, group?, options?:[{label,value}], dataSource?}（type 原样取自控件类型 input/textarea/number/select/date/user/subform/...；group 来自分组容器(group)标题或子表单标题，顶层字段无 group；options 仅选项型控件 radio/checkbox/select，归一化 {label,value}；dataSource 原样透传 widget.dataSource，如 {type:"dict",dictCode} / {type:"form",defCode,...}）
+- GET `/api/wf/forms/{formKey}/fields`【登录即可，与表单查看一致】→ R<FormFieldManifest>
+  - formKey = wf_form_def.code，取该 code 最新版本表单；表单不存在 → 404
+  - **ONLINE**（form_type 缺省 ONLINE）：解析该表单 schemaJson 递归提取扁平 fields —— 容器（grid/group/tabs/collapse）透明下钻、布局控件（divider/note/html）跳过；**子表单**整体是一个 `type:subform` 字段，其列字段以 `子表单key.列key` 前缀展开、group=子表单标题（与前端 `form-runtime.ts` 的 `collectDataWidgets` 同源，差异仅在本端把子表单列独立展开）
+  - **CODE**：`wf_form_def` 增 `form_type`（V19，默认 ONLINE）+ 预留「仅存字段清单不存 schemaJson」（schema_json 放宽可空、增 `field_manifest` TEXT 列存 FieldDescriptor[]）；若登记了 CODE 型清单则返回，否则 404 —— **CODE 表单字段清单以前端 registry 为准，本端点主要服务 ONLINE**
+
 ### 流程定义（wf_process_ext 一条/def_code；引擎负责流程版本）
 ProcessDef = {id,defCode,name,category,icon,formCode,formVersion,designerType:DINGTALK|BPMN,designerJson,bpmnXml,status,processDefinitionId,remark,createdAt,formType:DYNAMIC|CUSTOM,formSubmitPath,formViewPath,flowConfig}
   （P1-C 扩展：formType 缺省 DYNAMIC=动态表单；CUSTOM=自定义 React 路由表单，formSubmitPath 发起页路由、formViewPath 详情查看路由；flowConfig=流程级配置 JSON，见下）
