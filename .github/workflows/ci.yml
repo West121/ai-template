@@ -1,0 +1,192 @@
+name: CI
+
+# 星辰 OA · 最小 CI 流水线（Q-01）
+# 分两层：
+#   fast-gate      —— 快速门禁，每次 push / PR 触发（前端 lint+tsc+build，后端 compile）
+#   integration-smoke —— 集成冒烟，PR / 手动触发（起 pg+redis+后端，跑 server/smoke-test.mjs）
+#
+# 破坏性变更提醒（B-01 之后）：后端启动/测试必须提供环境变量 OA_JWT_SECRET（≥32 字符），
+# 否则 OaJwtProperties 的 @PostConstruct 校验会快速失败。fast-gate 仅 compile 不校验密钥，
+# 但仍注入以便将来改为 `mvn test` 时无需再动流水线；integration-smoke 必须注入。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支/PR 的新推送取消仍在跑的旧任务，省 CI 额度
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"      # Node LTS
+  JAVA_VERSION: "21"      # 后端 Java 21（server/README 标 GraalVM；CI 用 temurin 21 编译即可，
+                          # 若将来某模块依赖 GraalVM 特性再换 distribution: graalvm 并记录）
+  PNPM_VERSION: "10"      # 仓库 pnpm-lock.yaml lockfileVersion 9.0，pnpm 9/10 均兼容
+
+jobs:
+  # ============================================================
+  # Job A · 快速门禁（每次 push / PR）
+  #   前端：pnpm install → lint(oxlint) → tsc -b → build
+  #   后端：mvn -T1C -DskipTests compile（Java 21）
+  # ============================================================
+  fast-gate:
+    name: Fast gate (lint / tsc / build / compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------- 前端 ----------
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint (oxlint)
+        run: pnpm lint
+
+      - name: Type-check (tsc -b)
+        run: pnpm exec tsc -b
+
+      - name: Build (vite)
+        run: pnpm build
+
+      # ---------- 后端 ----------
+      - name: Setup Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Backend compile
+        working-directory: server
+        # 仅 compile，不需要 DB / 密钥；OA_JWT_SECRET 仍注入，便于将来切到 `mvn test` 免改流水线
+        env:
+          OA_JWT_SECRET: ${{ secrets.OA_JWT_SECRET || 'ci-fast-gate-dummy-secret-please-override-32ch' }}
+        run: mvn -q -B -T1C -DskipTests compile
+
+  # ============================================================
+  # Job B · 集成冒烟（PR / 手动触发，允许较慢）
+  #   起 postgres + redis（services，标准端口）→ 起后端 → node server/smoke-test.mjs
+  #
+  # 已知风险 / 取舍（详见流水线内注释）：
+  #   1. smoke-test.mjs 结尾用 `docker exec oa-postgres psql` 清理数据；CI 的 service 容器
+  #      名不是 oa-postgres，故设 OA_SMOKE_KEEP=1 跳过清理（CI 库本就一次性，无需清理）。
+  #   2. 冒烟依赖后端完整启动（Flyway 迁移 + 种子 + Flowable 部署），耗时较长；健康检查最多等 300s。
+  #   3. 首次跑通前设 continue-on-error: true，不阻塞门禁；跑稳后应移除该行使其成为硬门禁（见 Q-03）。
+  # ============================================================
+  integration-smoke:
+    name: Integration smoke (pg + redis + backend + smoke-test)
+    runs-on: ubuntu-latest
+    # 仅 PR / 手动触发；避免每次 push 都拉起重型集成环境
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    # TODO(Q-03): 冒烟稳定跑通后删除下面这行，让集成 job 成为硬门禁
+    continue-on-error: true
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: oa_platform
+          POSTGRES_USER: oa
+          POSTGRES_PASSWORD: oa123456
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U oa -d oa_platform"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      # 数据源 / redis 指向 service 容器（标准端口，覆盖 application.yml 里 15432/26379 的本地默认）
+      OA_DB_URL: jdbc:postgresql://localhost:5432/oa_platform
+      OA_DB_USERNAME: oa
+      OA_DB_PASSWORD: oa123456
+      OA_REDIS_HOST: localhost
+      OA_REDIS_PORT: "6379"
+      OA_REDIS_PASSWORD: ""
+      # B-01：JWT 密钥必须 ≥32 字符，否则后端启动即失败
+      OA_JWT_SECRET: ${{ secrets.OA_JWT_SECRET || 'ci-integration-smoke-secret-0123456789abcdef' }}
+      # CI 无 xxl-job-admin，也没有 docker-compose，均关闭以免启动期反复重试/报错
+      XXL_JOB_ENABLED: "false"
+      SPRING_DOCKER_COMPOSE_ENABLED: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # 打成可执行 jar，便于后台启动（比 spring-boot:run 更好控制进程/日志）
+      - name: Build backend jar
+        working-directory: server
+        run: mvn -q -B -T1C -DskipTests -pl oa-boot -am package
+
+      - name: Start backend
+        working-directory: server
+        run: |
+          JAR=$(ls oa-boot/target/oa-boot-*.jar | head -n1)
+          echo "启动后端：$JAR"
+          nohup java -jar "$JAR" > backend.log 2>&1 &
+          echo $! > backend.pid
+
+      - name: Wait for backend health (:8081/actuator/health)
+        run: |
+          echo "等待后端健康检查 UP（最多 300s）..."
+          for i in $(seq 1 60); do
+            body=$(curl -fs http://localhost:8081/actuator/health || true)
+            echo "[$i] $body"
+            if echo "$body" | grep -q '"status":"UP"'; then
+              echo "后端已就绪"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::后端 300s 内未就绪"
+          echo "===== backend.log (tail) ====="
+          tail -n 200 server/backend.log || true
+          exit 1
+
+      - name: Run smoke test
+        env:
+          OA_BASE: http://localhost:8081
+          # service 容器名不是 oa-postgres，清理会失败；CI 库一次性，直接保留数据跳过清理
+          OA_SMOKE_KEEP: "1"
+        run: node server/smoke-test.mjs
+
+      - name: Dump backend log on failure
+        if: failure()
+        run: |
+          echo "===== backend.log (tail 300) ====="
+          tail -n 300 server/backend.log || true

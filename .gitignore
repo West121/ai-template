@@ -34,3 +34,6 @@ server/logs/
 
 # WorkBuddy local config
 .workbuddy/
+
+# Claude Code transient agent worktrees (agent 定义 .claude/agents/ 仍纳入版本管理)
+.claude/worktrees/
