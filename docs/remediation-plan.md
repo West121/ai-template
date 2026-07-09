@@ -127,7 +127,7 @@
 ### 后端（磐石）
 
 - ✅ **N-B-00**（spike）**通过 2026-07-09**：LiteFlow **2.16.0** 在 SB4.0.1/Java21 可用，四项实测全绿，无需回退。**坐标修正：SB4 用 `liteflow-spring-boot4-starter:2.16.0`（非普通 starter）**；`@ScriptBean` 门面访问 Spring Bean 验证成功（Groovy/GraalJS/Jython 均通过）；Jython 2.7.4 在 Java21 跑通。依赖 +~118MB（Jython 49 / GraalJS 63 / 其余 ~9）。
-- 🔵 **N-B-01（切片1 ✅）** 新增 `GraphToBpmnConverter`（图直译，与旧路径并存）：start/end(含terminate)/审批userTask/排它网关/条件边(结构化→UEL+expression逃生口)/坐标生成DI，5 单测（共75全过）。**切片2 待办**：parallel/inclusive 网关、subProcess、timerCatch/Boundary/cycle、callActivity、OA行为节点(cc/ai/webhook/serviceTask)、.bpmn 导入导出端点、**接控制器端点做真端到端部署**、模型级校验器(附录C.3/C.4拦截)。
+- 🔵 **N-B-01（切片1+2a ✅，端到端验证通过）** `GraphToBpmnConverter` 图直译（与旧路径并存）：start/end(含terminate)/审批userTask/排它·并行·包容网关/条件边(结构化→UEL+expression逃生口)/坐标生成DI，77 单测全过。部署端点 `POST /api/wf/models/graph/deploy`(ProcessDefService TYPE_GRAPH 分支复用 Flowable 部署链)。**主控 E2E 实证 8/8**：ProcessModel→部署 Flowable→发起→INITIATOR 解析→审批→条件网关(days>3 走 e3)→APPROVED、highlight 路径正确。**切片3 待办**：subProcess、timerCatch/Boundary/cycle、callActivity、OA行为节点(cc/ai/webhook/serviceTask)、.bpmn 导入导出端点、模型级校验器(附录C.3/C.4)。
 - ⬜ **N-B-02** .bpmn 导入/导出端点（Flowable `BpmnXMLConverter`）：`POST /api/wf/models/import`、`GET /api/wf/models/{id}/bpmn`。
 - ⬜ **N-B-03** 表单字段清单端点 `GET /api/wf/forms/{formKey}/fields`；`wf_form_def` 增 `form_type` + CODE 仅存清单。
 - ⬜ **N-B-04** `ExpressionService`（Tier 1）：选定引擎（推荐 Aviator）+ `@FormulaFunction` 注册表；统一表单计算/高级流程条件/处理人公式；简单条件保持 UEL。
