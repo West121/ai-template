@@ -59,6 +59,10 @@ oa:
     # 本地开发示例：export OA_JWT_SECRET=$(openssl rand -hex 32)
     secret: ${OA_JWT_SECRET:}
     expire-minutes: 720
+  # CORS 允许来源（B-13）：逗号分隔的显式来源列表（allowCredentials=true 不可用 "*"）。
+  # dev 默认放行本地 Vite（5173/5181）；生产用环境变量 OA_CORS_ALLOWED_ORIGINS 覆盖。
+  cors:
+    allowed-origins: ${OA_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:5181}
   # AI 审批节点（P3）：默认关闭 → AI 节点走规则模拟并在意见明示「AI模拟」。
   # 启用真实调用：enabled=true 且配置 api-key（DeepSeek / OpenAI / 任意 OpenAI 兼容 chat completions 网关）。
   # 预设 DeepSeek（推荐，OpenAI 兼容、性价比高）：base-url=https://api.deepseek.com  model=deepseek-chat

@@ -127,6 +127,7 @@ public class InstanceController {
     }
 
     @PostMapping("/instances/{id}/resurrect")
+    @PreAuthorize("hasAuthority('wf:instance:admin')")
     public R<InstanceDetailResponse> resurrect(@PathVariable Long id, @Valid @RequestBody ResurrectRequest req) {
         return R.ok(service.resurrect(id, req));
     }

@@ -7,6 +7,7 @@
 #   OA_DB_URL / OA_DB_USERNAME / OA_DB_PASSWORD   数据库
 #   OA_JWT_SECRET                                  JWT HS256 密钥（>= 32 字符，建议 64+）
 #   OA_REDIS_HOST                                  Redis 地址
+#   OA_CORS_ALLOWED_ORIGINS                        允许的前端来源（逗号分隔，如 https://oa.example.com）
 # 可选环境变量：
 #   OA_REDIS_PORT（默认 6379）/ OA_REDIS_PASSWORD（默认空）
 #   OA_STORAGE_TYPE（local|minio|s3，默认 local）及 MINIO/S3 四项（见下方注释）
@@ -32,6 +33,9 @@ oa:
   jwt:
     # 无默认值：变量缺失时占位符解析失败，启动即报错（早于 OaJwtProperties 校验）
     secret: ${OA_JWT_SECRET}
+  # CORS 允许来源（B-13）：生产无默认值，必须经环境变量注入（逗号分隔的显式来源）
+  cors:
+    allowed-origins: ${OA_CORS_ALLOWED_ORIGINS}
   storage:
     type: ${OA_STORAGE_TYPE:local}
     # minio / s3 时通过环境变量注入（勿写死在文件里）：

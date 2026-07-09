@@ -43,7 +43,11 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class SysUserService {
 
-    private static final String DEFAULT_PASSWORD = "admin123";
+    /** 重置密码随机字符集：去除易混淆字符（0/O、1/l/I），便于管理员口头/书面转交。 */
+    private static final char[] RESET_PWD_ALPHABET =
+            "ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789@#%".toCharArray();
+    private static final int RESET_PWD_LENGTH = 12;
+    private static final java.security.SecureRandom SECURE_RANDOM = new java.security.SecureRandom();
 
     private final SysUserRepository userRepository;
     private final SysUserAssignmentRepository assignmentRepository;
@@ -166,13 +170,27 @@ public class SysUserService {
     }
 
     /**
-     * 重置密码为 admin123。
+     * 重置密码为一次性随机初始密码（B-12）。
+     * 不再使用可预测的固定常量；库中仅存 BCrypt 摘要，明文仅本次调用返回给管理员转交用户。
+     *
+     * @return 生成的明文初始密码（仅此次可见）
      */
     @Transactional
-    public void resetPassword(Long id) {
+    public String resetPassword(Long id) {
         SysUser user = requireUser(id);
-        user.setPassword(passwordEncoder.encode(DEFAULT_PASSWORD));
+        String rawPassword = randomInitialPassword();
+        user.setPassword(passwordEncoder.encode(rawPassword));
         userRepository.save(user);
+        return rawPassword;
+    }
+
+    /** 生成随机初始密码（{@value #RESET_PWD_LENGTH} 位，来自去混淆字符集）。 */
+    private String randomInitialPassword() {
+        StringBuilder sb = new StringBuilder(RESET_PWD_LENGTH);
+        for (int i = 0; i < RESET_PWD_LENGTH; i++) {
+            sb.append(RESET_PWD_ALPHABET[SECURE_RANDOM.nextInt(RESET_PWD_ALPHABET.length)]);
+        }
+        return sb.toString();
     }
 
     /**

@@ -1,5 +1,7 @@
 # OA 平台 API 契约（前后端开发共同遵守）
 
+> 最后更新：2026-07-09（含修复批次 1：文件下载/审批 logs 归属校验、日志接口 `system:log:list` 权限、DTO 化）。变更历史见 `CHANGELOG.md`。
+
 - 基址：前端经 Vite 代理 `/api` → `http://localhost:8081`
 - 统一响应：`R<T> = { code: 0成功|其他失败, message, data }`；分页 `PageResult<T> = { list, total, pageNum, pageSize }`
 - 认证：除 `/api/auth/login` 外均需 `Authorization: Bearer <jwt>`；401=未登录，403=无功能权限
@@ -75,7 +77,7 @@ RECEIVE status: TO_SIGN(待签收)/PROCESSING(办理中)/FINISHED(已办结)；S
 - POST/PUT/DELETE `/api/system/posts...`【P:system:post:edit】
 - GET `/api/system/users?keyword=&deptId=&enabled=&pageNum=` → {id,username,name,empNo,phone,email,gender:MALE|FEMALE|UNKNOWN,birthday,hireDate,officeLocation,leaderId,leaderName,avatar,remark,enabled,createdAt,primaryDeptName,primaryPostName,roleNames[]}；keyword 匹配 name/username/empNo/phone；leaderName 由后端按 leaderId 一次 findAllById 组装（无 N+1）；GET `/{id}` 返回同样全字段
 - POST `/api/system/users` {username,name,phone,password,deptId,postId,roleIds[],empNo?,email?,gender?,birthday?,hireDate?,officeLocation?,leaderId?,avatar?,remark?}（建主任职；empNo 缺省自动生成 XC+4 位递增，传入则查重、唯一约束 uk_sys_user_emp_no）【P:system:user:edit】
-- PUT `/api/system/users/{id}` {name,phone,email?,gender?,birthday?,hireDate?,officeLocation?,leaderId?,avatar?,remark?}（工号不可改；leaderId 不能为本人、须存在）；PUT `/{id}/enabled` {enabled}；POST `/{id}/reset-password`（重置 admin123）；DELETE `/{id}`【P:system:user:edit】
+- PUT `/api/system/users/{id}` {name,phone,email?,gender?,birthday?,hireDate?,officeLocation?,leaderId?,avatar?,remark?}（工号不可改；leaderId 不能为本人、须存在）；PUT `/{id}/enabled` {enabled}；POST `/{id}/reset-password`（B-12：重置为一次性随机初始密码，响应 `R<String>` data=新明文密码，供管理员转交用户；不再固定 admin123）；DELETE `/{id}`【P:system:user:edit】
 - GET `/api/system/users/{id}/assignments` → AssignmentInfo[]；POST `/api/system/users/{id}/assignments` {deptId,postId,roleIds[],primary:false} 添加兼任；DELETE `/api/system/assignments/{aid}`（主任职不可删）【P:system:user:edit】
 - GET `/api/system/roles?pageNum=` → {id,code,name,dataScope,enabled,userCount,remark?}
 - POST/PUT/DELETE `/api/system/roles...` {code,name,dataScope,remark}【P:system:role:edit】
@@ -279,7 +281,7 @@ NotifyItem = {id,type,title,content,procInstId,readFlag,createdAt}
 ### P3 高级能力（前缀 /api/wf）
 运行时端点：
 - POST `/api/wf/instances/{id}/predict` → `{path:[{nodeId,nodeName,type,assignees:[{name}]}], note?}` 流程预测：按当前表单值/流程变量静态 DFS 走 designerJson，条件分支离线求值（结构化条件，白名单操作符），输出后续未完成节点 + 预计审批人（离线试算 ORG/LEADER/FORM_FIELD/INITIATOR），不落库；BPMN 专业模式返回空 path + note
-- POST `/api/wf/instances/{id}/resurrect` {nodeId,comment?} → InstanceDetail 唤醒：仅已结束实例(APPROVED/REJECTED/TERMINATED/CANCELED)按快照(form_data)重建新实例并 ChangeActivityState 定位到 nodeId 重审，复用同一 ext 行(proc_inst_id 更新)，ext.resurrect_from 记原实例，通知发起人
+- POST `/api/wf/instances/{id}/resurrect` {nodeId,comment?}【P:wf:instance:admin】（B-11：唤醒为治理操作，复用流程管理员权限，非管理员 403）→ InstanceDetail 唤醒：仅已结束实例(APPROVED/REJECTED/TERMINATED/CANCELED)按快照(form_data)重建新实例并 ChangeActivityState 定位到 nodeId 重审，复用同一 ext 行(proc_inst_id 更新)，ext.resurrect_from 记原实例，通知发起人
 - POST `/api/wf/instances`（增强）可选 `bizTime`(ISO 日期 yyyy-MM-dd 或带时区日期时间) → 穿越时空：ext.biz_time + 首个 SUBMIT 操作 biz_time 记录；详情 bizTime 按服务器本地时区展示，引擎真实时间不动
 - POST `/api/wf/instances/{id}/adhoc-task` {name,assignees:[OrgRef]} → 动态构建 ad-hoc 任务（taskService.newTask，不体现在流程图、不参与主流程完成条件，服务层管理；办理走 tasks/{id}/complete-adhoc）
 

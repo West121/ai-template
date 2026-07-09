@@ -74,9 +74,9 @@ public class SysUserController {
     @PostMapping("/{id}/reset-password")
     @PreAuthorize("hasAuthority('system:user:edit')")
     @OperLog(module = "用户", action = "重置密码")
-    public R<Void> resetPassword(@PathVariable Long id) {
-        userService.resetPassword(id);
-        return R.ok();
+    public R<String> resetPassword(@PathVariable Long id) {
+        // data = 新生成的一次性随机初始密码，供管理员转交用户（B-12）
+        return R.ok(userService.resetPassword(id));
     }
 
     @DeleteMapping("/{id}")

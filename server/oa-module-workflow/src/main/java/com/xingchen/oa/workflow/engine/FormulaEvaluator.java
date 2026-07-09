@@ -173,7 +173,14 @@ public final class FormulaEvaluator {
         return ctx.variable(name);
     }
 
-    /** IF 需要惰性求值分支，故按未求值的原始 token 处理；其余函数参数求值后传入。 */
+    /**
+     * 函数调用：参数在 {@link #parseArgs()} 阶段已全部求值后传入——本求值器「解析与求值合一」，
+     * 无独立 AST，故 IF 实为「先全量求值两个分支、再择一返回」而非惰性求值。
+     * 取人函数（USER/ROLE/POST/DEPT/DEPT_LEADER/INITIATOR）失败时统一降级为空集且无副作用，
+     * 因此全量求值与「只算命中分支」的结果一致，代价仅是对未命中分支多一次无用的名称解析。
+     * 如需真正惰性，需改造为「先构建 AST，再按条件只求值命中分支」，改动面较大且可能影响现有降级语义，
+     * 收益（省一次解析）不足以承担该风险，故此处仅澄清注释与实现一致（B-16）。
+     */
     private Object callFunction(String name, List<Object> args) {
         String fn = name.toUpperCase();
         switch (fn) {
