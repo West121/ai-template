@@ -45,6 +45,7 @@ const RecordPickerDemoPage = lazy(() => import("@/pages/demo/record-picker"))
 const AdvancedFormDemoPage = lazy(() => import("@/pages/demo/form"))
 const BpmnDemoPage = lazy(() => import("@/pages/demo/bpmn"))
 const ApprovalFlowDemoPage = lazy(() => import("@/pages/demo/approval-flow"))
+const FlowDesignerDemoPage = lazy(() => import("@/pages/workflow/designer/flow/flow-designer"))
 const NotFoundPage = lazy(() => import("@/pages/not-found"))
 
 function PageLoading() {
@@ -164,6 +165,7 @@ export default function App() {
               <Route path="form" element={<AdvancedFormDemoPage />} />
               <Route path="bpmn" element={<BpmnDemoPage />} />
               <Route path="approval-flow" element={<ApprovalFlowDemoPage />} />
+              <Route path="flow-designer" element={<FlowDesignerDemoPage />} />
             </Route>
             <Route path="*" element={<NotFoundPage />} />
           </Route>

@@ -144,6 +144,7 @@ export const menuTree: MenuItem[] = [
       { title: "高级表单", path: "/demo/form", icon: FileStack },
       { title: "BPMN 设计器", path: "/demo/bpmn", icon: Workflow },
       { title: "审批流设计器", path: "/demo/approval-flow", icon: GitFork },
+      { title: "下一代设计器", path: "/demo/flow-designer", icon: Workflow },
     ],
   },
 ]
