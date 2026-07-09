@@ -288,3 +288,9 @@ Tier 2 脚本 = 完整应用权限,等价于"把 Java 代码提交进仓库",治
 3. **拒绝终止显式化，但加两道保险**：接受"前端显式画 `endEvent{terminate:true}`"取代旧转换器在 autoReject 内部隐式补 terminate。**必须**：(a) 模型级校验器拦截"拒绝/autoReject 路径缺 terminate end"；(b) 旧模型→ProcessModel 迁移工具自动补 terminate end。不接受隐式行为静默丢失。
 4. **边条件二源、互斥**：`condition`(结构化)只走 `ConditionCompiler`→UEL(红线不变)；`expression`(高级公式串)原样下发 Tier 1 引擎(Aviator / `exprEval` bean)。**同一条边二选一**，不同时存在；校验器拦截同时设置。
 5. **新图直译路径与旧树路径并存过渡**：N-B-01 **新增**图直译路径，**不删**旧树路径。旧 dingtalk 设计器 + 现有 smoke 继续走旧路径；新 react-flow 设计器走新路径。待新设计器全面替换、smoke 迁移到新路径后，再由主控按阶段删除旧路径。→ 降低一次性替换风险。
+
+### 附录 C 补充 · N-B-01 落地澄清（2026-07-09）
+
+6. **结构化条件以 `ConditionOperator` 名下发**（`eq/ne/gt/gte/lt/lte/contains/notContains`），即 `BranchCondition` 原样。后端图直译路径用 `OP_SYMBOL`（镜像前端 `serde.ts#OP_UEL`）映射为符号后交 `ConditionCompiler`，UEL 产物与前端 `compileUel` 字节一致、`ConditionCompiler` 零改动。**N-F-01 序列化器产出 condition 时保持 operator 名形，不自行转符号。**
+7. **`oa:` 扩展元素一律小写**（`oa:condition`、`oa:assigneeRules`…），遵循 moddle `tagAlias:lowerCase`。旧 bpmn-js serde 的大写 `oa:Condition` 随 bpmn-js 删除废弃，新路径与 .bpmn 往返统一用小写。
+8. **分组认领只认 `props.handleOptions.candidate`**（WfNodeProps 原生）；旧钉钉模型的 `node.groupMode` 字段不带入新路径。
