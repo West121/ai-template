@@ -40,16 +40,16 @@
 - ⬜ **B-07** 乐观锁。全库无一处 `@Version`。给 `Approval`、`WfAddSign` 加 `@Version`，`approve/reject/withdraw`、`AddSignService.advance` 并发冲突转 409。**验收**：并发 approve+reject 只有一个成功且审计日志一致。
 - ⬜ **B-08** 内存分页下推。`ApprovalService.done()`（:78-108）、`MeetingService.my()`（:107-120）全量加载后 subList。改为 repository 层分页查询。
 - ⬜ **B-09** 热路径全表扫描。`AssigneeResolver.java:523,533,595,606,622` 多处 `findAll().stream()` 过滤，改为条件查询；顺带收敛 `UserNameResolver`/`DeptNameResolver` 重复实现。
-- ⬜ **B-10** 首节点 WEBHOOK 时序缺陷：在 `wf_instance_ext` 落库前触发导致拿不到标题（workflow-design.md:301）。调整触发时机或补数据。
-- ⬜ **B-11** "唤醒"操作无独立权限点（workflow-design.md:330），补权限码。
+- ⬜ **B-10** 首节点 WEBHOOK 时序缺陷：在 `wf_instance_ext` 落库前触发导致拿不到标题（workflow-design.md:301）。调整触发时机或补数据。（推迟：并入新方向工作流批次）
+- ✅ **B-11** "唤醒"操作补权限。（磐石完成 2026-07-09：resurrect 端点补 `@PreAuthorize("hasAuthority('wf:instance:admin')")`，复用现有权限码不新增迁移，api-contract 同步。**衍生前端跟进 F-11**：唤醒按钮入口 gate 成 `resurrectable && isAdmin`。）
 
 ### 低危 / 债务
 
-- ⬜ **B-12** 密码重置固定 `admin123`（`SysUserService.java:172-176`），改为随机初始密码或强制首登改密标记。
-- ⬜ **B-13** CORS 允许来源可配置化（`CorsConfig.java:20-26` 写死 localhost）。
-- ⬜ **B-14** 状态魔法字符串 → 枚举（11 个实体 50 处 `STATUS_*` 常量；`MeetingService` 与实体存在两套状态词汇）。
-- ⬜ **B-15** 拆分 `InstanceService.java`（1216 行，13 个 @Transactional 方法）。
-- ⬜ **B-16** `FormulaEvaluator` 的 IF 注释声称惰性求值实际全量求值（:176），修实现或修注释。
+- ✅ **B-12** 密码重置去掉固定 `admin123`。（磐石完成：`resetPassword` 用 `SecureRandom` 生成 12 位去混淆随机明文，返回 `R<String>` data=新密码供管理员转交；DataInitializer 种子路径不受影响。**衍生前端跟进 F-12**：`system/user.tsx:448` toast 从"已重置为 admin123"改为显示返回的新密码。）
+- ✅ **B-13** CORS 可配置化。（磐石完成：`oa.cors.allowed-origins` 配置项，dev 默认 localhost:5173/5181，prod 走 `OA_CORS_ALLOWED_ORIGINS`，保留 allowCredentials。）
+- ⬜ **B-14** 状态魔法字符串 → 枚举（11 个实体 50 处 `STATUS_*` 常量；`MeetingService` 与实体存在两套状态词汇）。（待排期）
+- ⬜ **B-15** 拆分 `InstanceService.java`（1216 行）。（推迟：新方向工作流批次会重构此类，届时一并拆）
+- ✅ **B-16** `FormulaEvaluator` IF 注释。（磐石完成：改注释如实说明"参数已全量求值、IF 为先算两分支再择一"；因取人函数无副作用且失败降级空集，全量求值与惰性结果一致，无正确性 bug，重构惰性收益不足故只修注释。Q-02 补择一逻辑单测。）
 
 ## 2. 前端（疾风 · oa-frontend-dev）
 
@@ -60,13 +60,15 @@
 
 ### 中危
 
-- ⬜ **F-03** 抽取 `useApiData` hook + 共享降级组件。35 个页面重复 `loadError`/`NetworkError`(52 处)/`setLoading`(36 文件) 样板。新建 `src/hooks/use-api-data.ts` + `<OfflineFallback>`/`<ErrorState>` 组件（视觉规范由丹青出，见 U-01），分批迁移页面。**验收**：迁移后各页面离线降级行为一致，代码净删除数百行。
-- ⬜ **F-04** 启用 `react-hooks/exhaustive-deps`。`.oxlintrc.json` 未启用该规则，代码中 8+ 处 disable 注释是死的（`form-renderer.tsx:952,1287,1657,1681`、`org-picker.tsx:181`、`user.tsx:670` 等）。启用规则、逐一排查真实 stale-closure 风险。
+- ✅ **F-03** 抽取 `useApiData` hook + 共享降级组件。（疾风完成 2026-07-09：`src/hooks/use-api-data.ts` + `<OfflineFallback>`/`<ErrorState>`；迁了 4 个代表页 meeting/rooms、attendance/trip、attendance/record、system/user，其余 31 页照 hook 顶部 7 步注释迁。lint/tsc 绿。）35 个页面重复 `loadError`/`NetworkError`(52 处)/`setLoading`(36 文件) 样板。新建 `src/hooks/use-api-data.ts` + `<OfflineFallback>`/`<ErrorState>` 组件（视觉规范由丹青出，见 U-01），分批迁移页面。**验收**：迁移后各页面离线降级行为一致，代码净删除数百行。
+- ✅ **F-04** 启用 `exhaustive-deps`。（疾风完成：`.oxlintrc.json` 启用 `react/exhaustive-deps: warn`；修 7 处真实缺依赖/复杂依赖数组（含 form-renderer `useWidgetOptions`）；合理冻结依赖的 disable 补原因注释。lint 绿、src 内 0 exhaustive-deps 警告。）`.oxlintrc.json` 未启用该规则，代码中 8+ 处 disable 注释是死的（`form-renderer.tsx:952,1287,1657,1681`、`org-picker.tsx:181`、`user.tsx:670` 等）。启用规则、逐一排查真实 stale-closure 风险。
 - ⬜ **F-05** 拆分巨型文件：`designer-core.tsx`(1850)、`form-renderer.tsx`(1753，含富文本/控件渲染/联动逻辑混杂)、`system/user.tsx`(1492)、`property-panel.tsx`(1333)。
 - ⬜ **F-06** mock 降级数据与后端 DTO 同步机制：`dashboard/index.tsx:33-91` 等手工维护 mock 形状，用共享类型约束（`satisfies` 后端契约类型）防漂移。
 
 ### 低危
 
+- ⬜ **F-11**（B-11 衍生）唤醒按钮入口 gate 成 `resurrectable && isAdmin`（`InstanceDetail`），非管理员不显示，避免点了 403。→ 交疾风随 F-03/F-04 后一并做。
+- ⬜ **F-12**（B-12 衍生）`src/pages/system/user.tsx:448` 重置密码 toast 从硬编码"已重置为 admin123"改为显示接口返回的 `data`（新随机密码）。→ 交疾风。
 - ⬜ **F-07** 401 处理：`api.ts:45-48` 整页 `window.location.href` 跳转 + 多请求惊群，改为单次事件 + router 跳转。
 - ⬜ **F-08** `switchAssignment`（auth-store.ts:111-121）补 try/catch，与 login/refreshMe 一致。
 - ⬜ **F-09** 替换废弃的 `document.execCommand`（form-renderer.tsx:955）。
@@ -84,8 +86,9 @@
 ### 高危
 
 - ✅ **Q-01** 最小 CI 流水线。（鹰眼完成 2026-07-09：`.github/workflows/ci.yml` = Job A 快速门禁（前端 lint/tsc/build 本地已实证通过 + 后端 compile）+ Job B 集成冒烟（services 起 pg/redis + 起后端 + smoke-test，暂 `continue-on-error`）。`OA_JWT_SECRET` secret 优先 + 兜底串注入。**遗留**：Job B 需真实 runner 首跑验证后转硬门禁 → 并入 **Q-03**；`.claude/worktrees/` 应加入 oxlint/git 忽略避免本地扫到嵌套 worktree。）
-- ⬜ **Q-02** 纯逻辑热点单测（成本最低收益最高）：后端 `ConditionCompiler`、`AssigneeResolver`、`FormulaEvaluator`；前端搭 vitest，覆盖 `bpmn/oa/serde.ts`（compileUel/parseUel 与后端互镜像，必须双向测）、`form-runtime.ts`、`dingtalk/serialize.ts`。
-- ⬜ **Q-03** smoke-test 加固：清理失败从静默跳过改为显式告警；CI 中用 docker compose 起 postgres/redis + 后端后跑 `node server/smoke-test.mjs`；为 B-03/B-04/B-05/B-07 补断言用例。
+- ✅ **Q-02（后端部分）** 纯逻辑单测。（鹰眼完成 2026-07-09：`ConditionCompilerTest`(17) + `FormulaEvaluatorTest`(19，含 B-16 IF 择一) + `AssigneeResolverTest`(22，Mockito)；`mvn -pl oa-module-workflow -am test` = 70 项全过。ConditionCompiler 与前端 serde 字节级镜像验证成立。）
+  - ⬜ **Q-02（前端部分，推迟）** vitest 覆盖 serde/form-runtime/dingtalk-serialize —— 这些文件将被新方向重写，改为在路径七随 `ProcessModel` 序列化与公式 AST 一并建 vitest（见 N-Q-04）。
+- ✅ **Q-03** smoke-test 加固。（鹰眼完成 2026-07-09：修时间脆弱性（会议改用"明天"计算时段，任何时刻跑稳定）；清理失败改为醒目 WARNING；补 B-11/12/13 共 10 条断言。整合后 smoke **390/390 全绿**。**残余**：B-04/B-05 专用断言（现由既有 403 检查间接覆盖）、B-07 真并发断言、CI Job B 真实 runner 验证 → 后续 QA 小批处理。）
 
 ### 中危
 
@@ -95,10 +98,11 @@
 ## 5. 文档与治理（主控直管）
 
 - ⬜ **D-01** 重写根 README：反映真实全栈架构（server/ 后端、api.ts 客户端、离线降级机制），快速开始补后端启动。当前 README 会误导新人以为是纯 mock 模板。
-- ⬜ **D-02** `docs/flow-designer-v2.md` 与 `bpmn-designer-full-parity-design.md` 对"主力设计器"的说法互相矛盾，前者已过期——标注 superseded 或更新。
-- ⬜ **D-03** `docs/superpowers/plans/` 三份计划 56 个 checkbox 全未勾选但工作大多已提交，逐条核对勾选，标出真正遗留项。
-- ⬜ **D-04** `api-contract.md` 加版本/日期头；建立 CHANGELOG.md 与版本号策略（当前 0.0.0、无 tag）。
-- ⬜ **D-05** 提交 CLAUDE.md（当前 untracked）。
+- ✅ **D-01** 重写根 README（主控 2026-07-09）：反映全栈架构、后端启动（含 `OA_JWT_SECRET`）、`src/lib/api.ts` 与离线降级、指向 server/README 与 docs。
+- ✅ **D-02** `docs/flow-designer-v2.md` 顶部加"已被 next-gen 设计取代"横幅。
+- ✅ **D-03** `docs/superpowers/plans/STATUS.md` 说明台账已非活跃 backlog，以 remediation-plan/design 为准。
+- ✅ **D-04** `api-contract.md` 加"最后更新"头；新建 `CHANGELOG.md`（[Unreleased] 记录批次 1/2）。
+- ✅ **D-05** CLAUDE.md 已随 `chore:` 提交纳入版本管理。
 
 ## 6. 实施批次
 
