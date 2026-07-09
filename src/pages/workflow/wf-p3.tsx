@@ -27,6 +27,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { api, ApiError, NetworkError } from "@/lib/api"
+import { useHasPerm } from "@/stores/auth-store"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -336,6 +337,11 @@ export function WfP3Bar({
   const [printOpen, setPrintOpen] = useState(false)
   const [resurrectOpen, setResurrectOpen] = useState(false)
 
+  // 唤醒是管理员操作（后端 B-11 收权到 wf:instance:admin）——复用 WfOpBar 里 jump/terminate
+  // 的同一判断：优先详情下发的 isAdmin，回退前端权限码，避免非管理员点击后 403。
+  const adminPerm = useHasPerm("wf:instance:admin")
+  const isAdmin = detail.isAdmin ?? adminPerm
+
   return (
     <>
       {detail.predictable && (
@@ -346,7 +352,7 @@ export function WfP3Bar({
       <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setPrintOpen(true)}>
         <Printer className="size-3.5" /> 打印
       </Button>
-      {detail.resurrectable && (
+      {detail.resurrectable && isAdmin && (
         <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setResurrectOpen(true)}>
           <RotateCcw className="size-3.5" /> 唤醒
         </Button>

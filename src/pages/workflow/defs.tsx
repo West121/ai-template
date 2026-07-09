@@ -581,6 +581,8 @@ export default function WorkflowDefsPage() {
         ),
       },
     ],
+    // 列定义随 publishedForms（关联表单名映射）重建即可；单元格引用的操作函数每次渲染稳定，
+    // 无需纳入依赖，故冻结依赖避免整表无谓重建。
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [publishedForms],
   )

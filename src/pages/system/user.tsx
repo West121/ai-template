@@ -3,14 +3,12 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import type { ColumnDef } from "@tanstack/react-table"
 import {
   BriefcaseBusiness,
-  CloudOff,
+  Copy,
   Ellipsis,
   IdCard,
   KeyRound,
   Pencil,
   Plus,
-  RotateCw,
-  ShieldAlert,
   Trash2,
 } from "lucide-react"
 import { useForm } from "react-hook-form"
@@ -23,11 +21,13 @@ import { Drawer } from "@/components/drawer"
 import { DataTable } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { RecordPicker, RecordPickerField, type RecordPickerColumn } from "@/components/record-picker"
-import { api, NetworkError, type PageResult } from "@/lib/api"
+import { OfflineFallback } from "@/components/offline-fallback"
+import { ErrorState } from "@/components/error-state"
+import { useApiData } from "@/hooks/use-api-data"
+import { api, type PageResult } from "@/lib/api"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
@@ -64,7 +64,7 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import { useAuthStore, useHasPerm } from "@/stores/auth-store"
+import { useHasPerm } from "@/stores/auth-store"
 
 interface UserRow extends Record<string, unknown> {
   id: number
@@ -238,9 +238,6 @@ const editDefaults: EditFormValues = {
 }
 
 export default function UserPage() {
-  const [rows, setRows] = useState<UserRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
   const [deptFilter, setDeptFilter] = useState("all")
   const [statusFilter, setStatusFilter] = useState("all")
 
@@ -249,7 +246,6 @@ export default function UserPage() {
   const [postOptions, setPostOptions] = useState<PostOption[]>([])
   const [roleOptions, setRoleOptions] = useState<RoleOption[]>([])
 
-  const offline = useAuthStore((s) => s.offline)
   const canEdit = useHasPerm("system:user:edit")
 
   // 新增用户
@@ -278,6 +274,8 @@ export default function UserPage() {
 
   // 确认类弹窗
   const [resetTarget, setResetTarget] = useState<UserRow | null>(null)
+  // 重置成功后展示后端返回的一次性随机新密码（供管理员转交用户）
+  const [resetResult, setResetResult] = useState<{ name: string; password: string } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null)
 
   // 任职管理 Drawer
@@ -289,22 +287,13 @@ export default function UserPage() {
   const [addRoleIds, setAddRoleIds] = useState<number[]>([])
   const [addSubmitting, setAddSubmitting] = useState(false)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setLoadError(null)
-    try {
-      const params = new URLSearchParams({ pageNum: "1", pageSize: "100" })
-      if (deptFilter !== "all") params.set("deptId", deptFilter)
-      if (statusFilter !== "all") params.set("enabled", statusFilter === "enabled" ? "true" : "false")
-      const page = await api<PageResult<UserRow>>(`/api/system/users?${params.toString()}`)
-      setRows(page.list)
-    } catch (err) {
-      if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
-    } finally {
-      setLoading(false)
-    }
+  const { data, loading, error, offline, reload, setData } = useApiData<PageResult<UserRow>>(() => {
+    const params = new URLSearchParams({ pageNum: "1", pageSize: "100" })
+    if (deptFilter !== "all") params.set("deptId", deptFilter)
+    if (statusFilter !== "all") params.set("enabled", statusFilter === "enabled" ? "true" : "false")
+    return api<PageResult<UserRow>>(`/api/system/users?${params.toString()}`)
   }, [deptFilter, statusFilter])
+  const rows = data?.list ?? []
 
   const loadOptions = useCallback(async () => {
     try {
@@ -320,15 +309,6 @@ export default function UserPage() {
       // 选项加载失败不阻塞列表；后端未启动由列表的 NetworkError 卡片兜底
     }
   }, [])
-
-  useEffect(() => {
-    if (offline) {
-      setLoading(false)
-      setLoadError("network")
-      return
-    }
-    void load()
-  }, [load, offline])
 
   useEffect(() => {
     if (!offline) void loadOptions()
@@ -366,7 +346,7 @@ export default function UserPage() {
       })
       toast.success(`用户「${values.name}」已创建`)
       setCreateOpen(false)
-      void load()
+      reload()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "创建失败")
     }
@@ -408,7 +388,7 @@ export default function UserPage() {
       })
       toast.success(`用户「${values.name}」已更新`)
       setEditing(null)
-      void load()
+      reload()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "更新失败")
     }
@@ -434,7 +414,11 @@ export default function UserPage() {
         method: "PUT",
         body: JSON.stringify({ enabled: checked }),
       })
-      setRows((prev) => prev.map((u) => (u.id === row.id ? { ...u, enabled: checked } : u)))
+      setData((prev) =>
+        prev
+          ? { ...prev, list: prev.list.map((u) => (u.id === row.id ? { ...u, enabled: checked } : u)) }
+          : prev,
+      )
       toast.success(`已${checked ? "启用" : "停用"}用户「${row.name}」`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "操作失败")
@@ -443,13 +427,27 @@ export default function UserPage() {
 
   const confirmReset = async () => {
     if (!resetTarget) return
+    const name = resetTarget.name
     try {
-      await api(`/api/system/users/${resetTarget.id}/reset-password`, { method: "POST" })
-      toast.success(`用户「${resetTarget.name}」的密码已重置为 admin123`)
+      // 后端 B-12：返回一次性随机新密码（不再是固定 admin123）
+      const password = await api<string>(`/api/system/users/${resetTarget.id}/reset-password`, {
+        method: "POST",
+      })
+      setResetResult({ name, password })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "重置失败")
     } finally {
       setResetTarget(null)
+    }
+  }
+
+  const copyNewPassword = async () => {
+    if (!resetResult) return
+    try {
+      await navigator.clipboard.writeText(resetResult.password)
+      toast.success("新密码已复制到剪贴板")
+    } catch {
+      toast.error("复制失败，请手动选择密码复制")
     }
   }
 
@@ -458,7 +456,9 @@ export default function UserPage() {
     try {
       await api(`/api/system/users/${deleteTarget.id}`, { method: "DELETE" })
       toast.success(`用户「${deleteTarget.name}」已删除`)
-      setRows((prev) => prev.filter((u) => u.id !== deleteTarget.id))
+      setData((prev) =>
+        prev ? { ...prev, list: prev.list.filter((u) => u.id !== deleteTarget.id) } : prev,
+      )
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "删除失败")
     } finally {
@@ -515,7 +515,7 @@ export default function UserPage() {
       setAddPostId("")
       setAddRoleIds([])
       await loadAssignments(assignTarget.id)
-      void load()
+      reload()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "添加兼任失败")
     } finally {
@@ -529,7 +529,7 @@ export default function UserPage() {
       await api(`/api/system/assignments/${assignment.id}`, { method: "DELETE" })
       toast.success(`已删除「${assignment.deptName} · ${assignment.postName}」兼任`)
       await loadAssignments(assignTarget.id)
-      void load()
+      reload()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "删除失败")
     }
@@ -543,8 +543,8 @@ export default function UserPage() {
 
   // 状态派生字段：advancedFilter 的 select 条件按中文值求值
   const tableRows = useMemo<UserTableRow[]>(
-    () => rows.map((row) => ({ ...row, enabledText: row.enabled ? "启用" : "停用" })),
-    [rows],
+    () => (data?.list ?? []).map((row) => ({ ...row, enabledText: row.enabled ? "启用" : "停用" })),
+    [data],
   )
 
   // 条件筛选 select 字段的可选值：部门树拍平名称 / 岗位名称
@@ -667,6 +667,8 @@ export default function UserPage() {
         ),
       },
     ],
+    // 列定义只需随 canEdit 与筛选选项重建；单元格引用的 openEdit/openProfile/toggleEnabled
+    // 等每次渲染稳定，无需纳入依赖，故冻结依赖避免整表无谓重建。
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [canEdit, deptNameOptions, postNameOptions],
   )
@@ -676,7 +678,7 @@ export default function UserPage() {
       <PageHeader
         title="用户管理"
         description={
-          offline || loadError === "network"
+          offline
             ? "后端未连接——启动 server/ 后此页为真实数据"
             : "维护系统登录账号、角色分配、任职（含兼任）与启用状态"
         }
@@ -684,39 +686,16 @@ export default function UserPage() {
 
       <PermissionBanner perm="system:user:edit" action="用户管理" />
 
-      {loadError === "network" ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
-            <div className="flex size-12 items-center justify-center rounded-full bg-muted">
-              <CloudOff className="size-5 text-muted-foreground" />
-            </div>
-            <div className="text-sm font-medium">后端服务未启动</div>
-            <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
-              此页面已接入真实接口。启动后端：cd server && docker compose up -d && mvn -pl oa-boot spring-boot:run，
-              然后用 admin（密码 admin123）重新登录，即可管理真实用户、角色分配与兼任任职。
-            </p>
-            <Button
-              size="sm"
-              className="gap-1.5"
-              onClick={() => {
-                void load()
-                void loadOptions()
-              }}
-            >
-              <RotateCw className="size-3.5" /> 重试连接
-            </Button>
-          </CardContent>
-        </Card>
-      ) : loadError ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
-            <ShieldAlert className="size-8 text-rose-500/60" />
-            <div className="text-sm">{loadError}</div>
-            <Button size="sm" variant="outline" onClick={() => void load()}>
-              重试
-            </Button>
-          </CardContent>
-        </Card>
+      {offline ? (
+        <OfflineFallback
+          description="此页面已接入真实接口。启动后端：cd server && docker compose up -d && mvn -pl oa-boot spring-boot:run，然后用 admin（密码 admin123）重新登录，即可管理真实用户、角色分配与兼任任职。"
+          onRetry={() => {
+            reload()
+            void loadOptions()
+          }}
+        />
+      ) : error ? (
+        <ErrorState message={error} onRetry={reload} />
       ) : (
         <DataTable
           columns={columns}
@@ -724,7 +703,7 @@ export default function UserPage() {
           searchKeys={["username", "name", "empNo", "phone"]}
           searchPlaceholder="搜索姓名 / 账号 / 工号 / 手机号"
           loading={loading}
-          onRefresh={() => void load()}
+          onRefresh={() => reload()}
           exportFileName="用户列表"
           advancedFilter
           groupOptions={[
@@ -1456,7 +1435,7 @@ export default function UserPage() {
           <DialogHeader>
             <DialogTitle>重置密码</DialogTitle>
             <DialogDescription>
-              确定将用户「{resetTarget?.name}」的密码重置为初始密码 admin123 吗？
+              确定将用户「{resetTarget?.name}」的密码重置为一次性随机密码吗？重置后将显示新密码，请及时转交本人。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1464,6 +1443,35 @@ export default function UserPage() {
               取消
             </Button>
             <Button onClick={() => void confirmReset()}>确认重置</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 重置成功：展示一次性新密码 */}
+      <Dialog open={!!resetResult} onOpenChange={(open) => !open && setResetResult(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>新密码已生成</DialogTitle>
+            <DialogDescription>
+              用户「{resetResult?.name}」的密码已重置。请复制下方新密码并转交本人，此密码仅显示一次。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center gap-2 rounded-md border bg-muted/50 p-3">
+            <code className="flex-1 font-mono text-sm break-all select-all">
+              {resetResult?.password}
+            </code>
+            <Button
+              variant="outline"
+              size="icon"
+              className="size-8 shrink-0"
+              onClick={() => void copyNewPassword()}
+              aria-label="复制新密码"
+            >
+              <Copy className="size-3.5" />
+            </Button>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setResetResult(null)}>我已记录</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

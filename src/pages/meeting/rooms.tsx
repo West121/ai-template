@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { toast } from "sonner"
-import { CloudOff, MapPin, RotateCw, ShieldAlert, Users } from "lucide-react"
+import { MapPin, Users } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
-import { api, NetworkError } from "@/lib/api"
+import { OfflineFallback } from "@/components/offline-fallback"
+import { ErrorState } from "@/components/error-state"
+import { useApiData } from "@/hooks/use-api-data"
+import { api } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
@@ -26,7 +29,6 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { useAuthStore } from "@/stores/auth-store"
 
 type DayKey = "today" | "tomorrow"
 
@@ -85,9 +87,6 @@ function findBooking(bookings: RoomBooking[], hour: number) {
 }
 
 export default function RoomsPage() {
-  const [rooms, setRooms] = useState<Room[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
   const [day, setDay] = useState<DayKey>("today")
 
   // 预订对话框
@@ -96,8 +95,6 @@ export default function RoomsPage() {
   const [startHour, setStartHour] = useState("9")
   const [endHour, setEndHour] = useState("10")
   const [submitting, setSubmitting] = useState(false)
-
-  const offline = useAuthStore((s) => s.offline)
 
   const { todayStr, tomorrowStr } = useMemo(() => {
     const now = new Date()
@@ -111,30 +108,16 @@ export default function RoomsPage() {
   const dayLabel =
     day === "today" ? `今天（${todayStr.slice(5)}）` : `明天（${tomorrowStr.slice(5)}）`
 
+  const {
+    data,
+    loading,
+    error,
+    offline,
+    reload,
+  } = useApiData<Room[]>(() => api<Room[]>(`/api/office/meeting-rooms?date=${activeDate}`), [activeDate])
+  const rooms = data ?? []
+
   const bookingRoom = rooms.find((r) => r.id === bookingRoomId) ?? null
-
-  const load = useCallback(async (date: string) => {
-    setLoading(true)
-    setLoadError(null)
-    try {
-      const list = await api<Room[]>(`/api/office/meeting-rooms?date=${date}`)
-      setRooms(list)
-    } catch (err) {
-      if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (offline) {
-      setLoading(false)
-      setLoadError("network")
-      return
-    }
-    void load(activeDate)
-  }, [load, offline, activeDate])
 
   const openBooking = (room: Room) => {
     setSubject("")
@@ -171,7 +154,7 @@ export default function RoomsPage() {
       toast.success(
         `已预订 ${bookingRoom.name} ${dayLabel} ${start}:00-${end}:00「${subject.trim()}」`,
       )
-      void load(activeDate)
+      reload()
     } catch (err) {
       // 409 时段冲突等：直接展示后端 message
       toast.error(err instanceof Error ? err.message : "预订失败")
@@ -185,7 +168,7 @@ export default function RoomsPage() {
       <PageHeader
         title="会议室预订"
         description={
-          offline || loadError === "network"
+          offline
             ? "后端未连接——启动 server/ 后此页为真实数据"
             : "查看各会议室当日时段占用情况，快速预订空闲时段"
         }
@@ -199,32 +182,13 @@ export default function RoomsPage() {
         }
       />
 
-      {loadError === "network" ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
-            <div className="flex size-12 items-center justify-center rounded-full bg-muted">
-              <CloudOff className="size-5 text-muted-foreground" />
-            </div>
-            <div className="text-sm font-medium">后端服务未启动</div>
-            <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
-              此页面已接入真实接口。启动后端：cd server && docker compose up -d && mvn -pl oa-boot
-              spring-boot:run，然后重新登录，即可查看真实会议室占用并在线预订（时段冲突由后端校验）。
-            </p>
-            <Button size="sm" className="gap-1.5" onClick={() => void load(activeDate)}>
-              <RotateCw className="size-3.5" /> 重试连接
-            </Button>
-          </CardContent>
-        </Card>
-      ) : loadError ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
-            <ShieldAlert className="size-8 text-rose-500/60" />
-            <div className="text-sm">{loadError}</div>
-            <Button size="sm" variant="outline" onClick={() => void load(activeDate)}>
-              重试
-            </Button>
-          </CardContent>
-        </Card>
+      {offline ? (
+        <OfflineFallback
+          description="此页面已接入真实接口。启动后端：cd server && docker compose up -d && mvn -pl oa-boot spring-boot:run，然后重新登录，即可查看真实会议室占用并在线预订（时段冲突由后端校验）。"
+          onRetry={reload}
+        />
+      ) : error ? (
+        <ErrorState message={error} onRetry={reload} />
       ) : loading ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (

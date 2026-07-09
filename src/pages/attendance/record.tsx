@@ -1,21 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import type { ColumnDef } from "@tanstack/react-table"
 import { format } from "date-fns"
 import {
   AlarmClockOff,
   CalendarCheck2,
   CircleAlert,
-  CloudOff,
   Fingerprint,
   LogOut,
-  RotateCw,
-  ShieldAlert,
   Timer,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card } from "@/components/ui/card"
 import {
   Select,
   SelectContent,
@@ -25,10 +22,12 @@ import {
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import { PageHeader } from "@/components/page-header"
+import { OfflineFallback } from "@/components/offline-fallback"
+import { ErrorState } from "@/components/error-state"
 import { DataTable } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
+import { useApiData } from "@/hooks/use-api-data"
 import { api, NetworkError } from "@/lib/api"
-import { useAuthStore } from "@/stores/auth-store"
 
 type AttendanceStatus = "NORMAL" | "LATE" | "EARLY" | "ABSENT" | "REST"
 
@@ -136,37 +135,15 @@ const columns: ColumnDef<AttendanceRow, unknown>[] = [
 ]
 
 export default function AttendanceRecordPage() {
-  const [data, setData] = useState<RecordsData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
   const [statusFilter, setStatusFilter] = useState("all")
 
-  const offline = useAuthStore((s) => s.offline)
   const monthKey = useMemo(() => format(new Date(), "yyyy-MM"), [])
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setLoadError(null)
-    try {
-      const res = await api<RecordsData>(`/api/office/attendance/records?month=${monthKey}`)
-      setData(res)
-    } catch (err) {
-      if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
-    } finally {
-      setLoading(false)
-    }
-  }, [monthKey])
-
-  useEffect(() => {
-    if (offline) {
-      setLoading(false)
-      setLoadError("network")
-      return
-    }
-    void load()
-  }, [load, offline])
+  const { data, loading, error, offline, reload } = useApiData<RecordsData>(
+    () => api<RecordsData>(`/api/office/attendance/records?month=${monthKey}`),
+    [monthKey],
+  )
 
   const handleCheck = useCallback(async () => {
     setChecking(true)
@@ -175,20 +152,19 @@ export default function AttendanceRecordPage() {
       toast.success(
         rec.checkOut ? `签退成功（${rec.checkOut}）` : `签到成功（${rec.checkIn ?? ""}）`,
       )
-      await load()
+      reload()
     } catch (err) {
       if (err instanceof NetworkError) toast.error("无法连接后端服务")
       else toast.error(err instanceof Error ? err.message : "打卡失败")
     } finally {
       setChecking(false)
     }
-  }, [load])
+  }, [reload])
 
-  const rows = data?.list ?? []
-  const filtered = useMemo(
-    () => (statusFilter === "all" ? rows : rows.filter((r) => r.status === statusFilter)),
-    [rows, statusFilter],
-  )
+  const filtered = useMemo(() => {
+    const rows = data?.list ?? []
+    return statusFilter === "all" ? rows : rows.filter((r) => r.status === statusFilter)
+  }, [data, statusFilter])
 
   const stats = [
     { label: "出勤天数", value: `${data?.summary.days ?? 0} 天`, icon: CalendarCheck2, iconClass: "bg-emerald-500/10 text-emerald-600" },
@@ -207,7 +183,7 @@ export default function AttendanceRecordPage() {
           <Button
             size="sm"
             className="h-8 gap-1.5"
-            disabled={checking || loadError === "network"}
+            disabled={checking || offline}
             onClick={() => void handleCheck()}
           >
             <Fingerprint className="size-4" />
@@ -216,32 +192,13 @@ export default function AttendanceRecordPage() {
         }
       />
 
-      {loadError === "network" ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
-            <div className="flex size-12 items-center justify-center rounded-full bg-muted">
-              <CloudOff className="size-5 text-muted-foreground" />
-            </div>
-            <div className="text-sm font-medium">后端服务未启动</div>
-            <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
-              此页面已接入真实接口。启动后端：cd server && docker compose up -d && mvn -pl oa-boot
-              spring-boot:run，然后重新登录即可查看本月真实打卡记录并体验一键打卡。
-            </p>
-            <Button size="sm" className="gap-1.5" onClick={() => void load()}>
-              <RotateCw className="size-3.5" /> 重试连接
-            </Button>
-          </CardContent>
-        </Card>
-      ) : loadError ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
-            <ShieldAlert className="size-8 text-rose-500/60" />
-            <div className="text-sm">{loadError}</div>
-            <Button size="sm" variant="outline" onClick={() => void load()}>
-              重试
-            </Button>
-          </CardContent>
-        </Card>
+      {offline ? (
+        <OfflineFallback
+          description="此页面已接入真实接口。启动后端：cd server && docker compose up -d && mvn -pl oa-boot spring-boot:run，然后重新登录即可查看本月真实打卡记录并体验一键打卡。"
+          onRetry={reload}
+        />
+      ) : error ? (
+        <ErrorState message={error} onRetry={reload} />
       ) : (
         <>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
@@ -266,7 +223,7 @@ export default function AttendanceRecordPage() {
             searchPlaceholder="搜索日期…"
             exportFileName="打卡记录"
             initialPageSize={20}
-            onRefresh={() => void load()}
+            onRefresh={reload}
             filterSlot={
               <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger size="sm" className="h-8 w-32 text-sm">

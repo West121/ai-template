@@ -305,15 +305,22 @@ function useWidgetOptions(widget: FormWidget, override?: WidgetOption[]): Widget
   const [remote, setRemote] = useState<WidgetOption[] | null>(null)
   const ds = widget.dataSource
 
+  // 抽出原始依赖为具名基本量，供依赖数组静态校验（联动键随数据源配置变化重新拉取）
+  const dsType = ds?.type
+  const dsDictCode = ds && "dictCode" in ds ? ds.dictCode : undefined
+  const dsUrl = ds && "url" in ds ? ds.url : undefined
+  const dsLabelField = ds && "labelField" in ds ? ds.labelField : undefined
+  const dsValueField = ds && "valueField" in ds ? ds.valueField : undefined
+
   useEffect(() => {
     let alive = true
-    if (ds?.type === "dict" && ds.dictCode) {
+    if (dsType === "dict" && dsDictCode) {
       void (async () => {
         try {
           const page = await api<{ list: DictType[] }>(
             "/api/infra/dict/types?pageNum=1&pageSize=200",
           )
-          const t = page.list.find((x) => x.code === ds.dictCode)
+          const t = page.list.find((x) => x.code === dsDictCode)
           if (!t) {
             if (alive) setRemote([])
             return
@@ -324,19 +331,19 @@ function useWidgetOptions(widget: FormWidget, override?: WidgetOption[]): Widget
           if (alive) setRemote([])
         }
       })()
-    } else if (ds?.type === "api" && ds.url) {
+    } else if (dsType === "api" && dsUrl) {
       void (async () => {
         try {
           // 远程接口：兼容 T[] 或 { list: T[] } 两种返回
-          const raw = await api<unknown>(ds.url)
+          const raw = await api<unknown>(dsUrl)
           const list = Array.isArray(raw)
             ? raw
             : Array.isArray((raw as { list?: unknown[] })?.list)
               ? (raw as { list: unknown[] }).list
               : []
           const opts = (list as Record<string, unknown>[]).map((row) => ({
-            label: String(row[ds.labelField] ?? ""),
-            value: String(row[ds.valueField] ?? ""),
+            label: String(row[dsLabelField ?? ""] ?? ""),
+            value: String(row[dsValueField ?? ""] ?? ""),
           }))
           if (alive) setRemote(opts)
         } catch {
@@ -349,13 +356,7 @@ function useWidgetOptions(widget: FormWidget, override?: WidgetOption[]): Widget
     return () => {
       alive = false
     }
-  }, [
-    ds?.type,
-    ds && "dictCode" in ds ? ds.dictCode : "",
-    ds && "url" in ds ? ds.url : "",
-    ds && "labelField" in ds ? ds.labelField : "",
-    ds && "valueField" in ds ? ds.valueField : "",
-  ])
+  }, [dsType, dsDictCode, dsUrl, dsLabelField, dsValueField])
 
   if (override) return override
   if (remote) return remote

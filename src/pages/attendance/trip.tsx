@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useState } from "react"
+import { useState } from "react"
 import type { ColumnDef } from "@tanstack/react-table"
-import { CloudOff, Plus, RotateCw, ShieldAlert } from "lucide-react"
+import { Plus } from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -25,8 +24,11 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { PageHeader } from "@/components/page-header"
+import { OfflineFallback } from "@/components/offline-fallback"
+import { ErrorState } from "@/components/error-state"
 import { DataTable } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
+import { useApiData } from "@/hooks/use-api-data"
 import { api, NetworkError, type PageResult } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
 
@@ -75,9 +77,6 @@ function tripNo(id: number) {
 }
 
 export default function AttendanceTripPage() {
-  const [rows, setRows] = useState<TripRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState("all")
   const [applyOpen, setApplyOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -92,31 +91,13 @@ export default function AttendanceTripPage() {
     reason: "",
   })
 
-  const offline = useAuthStore((s) => s.offline)
   const activeAssignmentId = useAuthStore((s) => s.activeAssignmentId)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setLoadError(null)
-    try {
-      const page = await api<PageResult<TripRow>>("/api/office/trips?pageNum=1&pageSize=100")
-      setRows(page.list)
-    } catch (err) {
-      if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (offline) {
-      setLoading(false)
-      setLoadError("network")
-      return
-    }
-    void load()
-  }, [load, offline, activeAssignmentId])
+  const { data, loading, error, offline, reload } = useApiData<PageResult<TripRow>>(
+    () => api<PageResult<TripRow>>("/api/office/trips?pageNum=1&pageSize=100"),
+    [activeAssignmentId],
+  )
+  const rows = data?.list ?? []
 
   const filtered = statusFilter === "all" ? rows : rows.filter((r) => r.status === statusFilter)
 
@@ -152,7 +133,7 @@ export default function AttendanceTripPage() {
       setApplyOpen(false)
       setForm({ destination: "", startDate: "", endDate: "", transport: "", budget: "", reason: "" })
       toast.success("出差申请已提交，等待审批")
-      await load()
+      reload()
     } catch (err) {
       if (err instanceof NetworkError) toast.error("无法连接后端服务")
       else toast.error(err instanceof Error ? err.message : "提交失败")
@@ -167,7 +148,7 @@ export default function AttendanceTripPage() {
       await api(`/api/office/trips/${revokeRow.id}/withdraw`, { method: "POST" })
       toast.success(`出差申请 ${tripNo(revokeRow.id)} 已撤销`)
       setRevokeRow(null)
-      await load()
+      reload()
     } catch (err) {
       if (err instanceof NetworkError) toast.error("无法连接后端服务")
       else toast.error(err instanceof Error ? err.message : "撤销失败")
@@ -264,42 +245,23 @@ export default function AttendanceTripPage() {
     },
   ]
 
-  if (loadError === "network") {
+  if (offline) {
     return (
       <div className="space-y-4">
         <PageHeader title="出差管理" description="后端未连接——启动 server/ 后此页为真实数据" />
-        <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
-            <div className="flex size-12 items-center justify-center rounded-full bg-muted">
-              <CloudOff className="size-5 text-muted-foreground" />
-            </div>
-            <div className="text-sm font-medium">后端服务未启动</div>
-            <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
-              此页面已接入真实接口。启动后端：cd server && docker compose up -d && mvn -pl oa-boot
-              spring-boot:run，然后重新登录即可提交与管理真实出差申请。
-            </p>
-            <Button size="sm" className="gap-1.5" onClick={() => void load()}>
-              <RotateCw className="size-3.5" /> 重试连接
-            </Button>
-          </CardContent>
-        </Card>
+        <OfflineFallback
+          description="此页面已接入真实接口。启动后端：cd server && docker compose up -d && mvn -pl oa-boot spring-boot:run，然后重新登录即可提交与管理真实出差申请。"
+          onRetry={reload}
+        />
       </div>
     )
   }
 
-  if (loadError) {
+  if (error) {
     return (
       <div className="space-y-4">
         <PageHeader title="出差管理" description="提交出差申请，跟踪审批进度与差旅预算" />
-        <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
-            <ShieldAlert className="size-8 text-rose-500/60" />
-            <div className="text-sm">{loadError}</div>
-            <Button size="sm" variant="outline" onClick={() => void load()}>
-              重试
-            </Button>
-          </CardContent>
-        </Card>
+        <ErrorState message={error} onRetry={reload} />
       </div>
     )
   }
@@ -315,7 +277,7 @@ export default function AttendanceTripPage() {
         searchKeys={["destination", "reason"]}
         searchPlaceholder="搜索目的地 / 事由…"
         exportFileName="出差记录"
-        onRefresh={() => void load()}
+        onRefresh={reload}
         filterSlot={
           <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger size="sm" className="h-8 w-32 text-sm">

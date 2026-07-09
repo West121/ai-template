@@ -186,6 +186,8 @@ export default function PostPage() {
         ),
       },
     ],
+    // 列定义只需随 canEdit 重建；单元格引用的 openEdit/setDeleteTarget 每次渲染稳定，
+    // 无需纳入依赖，故冻结依赖避免整表无谓重建。
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [canEdit],
   )

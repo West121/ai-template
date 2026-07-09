@@ -96,7 +96,10 @@ export function RecordPicker<T extends Record<string, unknown>>({
     })
   }
 
-  const selectedRows = useMemo(() => data.filter((row) => selected.includes(idOf(row))), [data, selected])
+  const selectedRows = useMemo(
+    () => data.filter((row) => selected.includes(String(row[idField]))),
+    [data, selected, idField],
+  )
 
   const confirm = () => {
     onConfirm(selected, selectedRows)
