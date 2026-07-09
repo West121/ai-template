@@ -1,37 +1,43 @@
 /**
- * 下一代流程设计器 · 最小可用页面（切片 1）。
+ * 下一代流程设计器 · 预览页（切片 2）。
  *
- * 打通「建模 → 序列化」闭环：加开始/审批/网关/结束节点、连线、点选节点/边/画布编辑属性、
- * 一键序列化出 `ProcessModel` 并做一次往返自检（console + 页面展示）。
+ * 打通「建模 → 校验 → 序列化」闭环：
+ *  - 左侧调色板拖拽 / 点击新增全部 14 类节点（onDrop 计算落点写入 position）。
+ *  - 连线时按 BPMN 规则即时校验（非法连接拒绝 + toast 提示）。
+ *  - 点选节点/边/画布，复用共享 PropertyPanel 编辑属性（面板本身不改）。
+ *  - 「校验」按钮跑模型级校验器，列出 error/warning；「序列化」出 ProcessModel + 往返自检。
  *
  * 复用共享 PropertyPanel（不重写）：
  *  - 点击空白/流程 → target="process"，读写 ProcessConfig。
- *  - 点击 userTask 节点 → target={nodeId,nodeType:"approval"}，props 读写走 node.data.props。
- *  - 点击其它节点 → 通用 target（仅节点名）。
- *  - 点击边 → target={nodeId:edgeId,nodeType:"condition"}，编辑该顺序流的结构化分支条件；
- *    默认分支开关在面板上方单独提供（ConditionEditor 本身不含 isDefault 切换）。
+ *  - 点击 userTask → approval 分区；cc → 抄送分区；其余类型 → 通用（仅节点名）。
+ *  - 点击边 → nodeType="condition"，编辑结构化分支条件 + 默认分支开关。
  *
- * 调色板拖拽、其余节点类型、BPMN 连接规则校验、自动布局、.bpmn 导入导出、只读高亮 —— 推迟。
+ * 节点专属 config（ai/webhook/timer/service…）的深度编辑面板、elkjs 自动布局、
+ * 旧 designerJson 迁移、只读运行时高亮、表单字段清单接入 —— 推迟到后续切片。
  */
 import { useCallback, useMemo, useState } from "react"
 import { addEdge, useEdgesState, useNodesState, type Connection } from "@xyflow/react"
-import { CircleDot, GitFork, Square, UserCheck } from "lucide-react"
+import { AlertTriangle, CircleCheck, Info } from "lucide-react"
+import { toast } from "sonner"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
+import { cn } from "@/lib/utils"
 import { PropertyPanel } from "../shared/property-panel"
 import { defaultFlowConfig, type FormFieldOption, type ProcessConfig } from "../shared/config"
 import type { BranchCondition, WfNodeProps } from "../types"
-import type { FlowNodeType, ProcessModel } from "./model"
+import type { FlowNodeType, Point, ProcessModel } from "./model"
 import { FlowCanvas } from "./canvas"
+import { FlowPalette } from "./flow-palette"
+import { PALETTE_INDEX } from "./node-catalog"
 import {
   SEQUENCE_FLOW_EDGE_TYPE,
   fromProcessModel,
   toProcessModel,
-  type WfNodeData,
   type WfRfEdge,
   type WfRfNode,
 } from "./serialize"
+import { validateConnection, validateProcessModel, type ValidationIssue } from "./validate"
 
 /* ---------- 演示种子（以 ProcessModel 契约撰写，经 fromProcessModel 载入，天然演示一次往返） ---------- */
 
@@ -83,31 +89,16 @@ const SAMPLE_FIELDS: FormFieldOption[] = [
   { key: "applicant", label: "申请人", isUser: true },
 ]
 
-const NODE_DEFAULT_NAME: Record<FlowNodeType, string> = {
-  startEvent: "开始",
-  endEvent: "结束",
-  userTask: "审批节点",
-  exclusiveGateway: "网关",
-  serviceTask: "服务任务",
-  parallelGateway: "并行网关",
-  inclusiveGateway: "包容网关",
-  callActivity: "子流程调用",
-  subProcess: "子流程",
-  timerCatch: "定时",
-  timerBoundary: "边界定时",
-  cc: "抄送",
-  ai: "AI 审批",
-  webhook: "Webhook",
-}
-
 let idSeq = 0
 const genId = (prefix: string) => `${prefix}_${(idSeq++).toString(36)}_${Math.random().toString(36).slice(2, 6)}`
 
 type Selection = { kind: "process" } | { kind: "node"; id: string } | { kind: "edge"; id: string }
 
-/** userTask → 面板 approval 分区；其余类型走通用（仅节点名） */
+/** react-flow node.type → 共享面板分区键：userTask→approval、cc→cc，其余走通用（仅节点名） */
 function panelNodeType(type: string | undefined): string {
-  return type === "userTask" ? "approval" : type ?? "node"
+  if (type === "userTask") return "approval"
+  if (type === "cc") return "cc"
+  return type ?? "node"
 }
 
 export default function FlowDesignerPage() {
@@ -120,33 +111,46 @@ export default function FlowDesignerPage() {
   })
   const [serialized, setSerialized] = useState<string>("")
   const [roundTripOk, setRoundTripOk] = useState<boolean | null>(null)
+  const [issues, setIssues] = useState<ValidationIssue[] | null>(null)
 
-  /* ---- 连线 ---- */
+  /* ---- 连线（即时 BPMN 连接规则校验） ---- */
   const onConnect = useCallback(
-    (c: Connection) =>
-      setEdges((eds) =>
-        addEdge<WfRfEdge>(
-          { ...c, id: genId("edge"), type: SEQUENCE_FLOW_EDGE_TYPE, data: {} },
-          eds,
-        ),
-      ),
-    [setEdges],
+    (c: Connection) => {
+      const src = nodes.find((n) => n.id === c.source)
+      const tgt = nodes.find((n) => n.id === c.target)
+      if (!src?.type || !tgt?.type) return
+      const result = validateConnection(
+        { id: src.id, type: src.type as FlowNodeType },
+        { id: tgt.id, type: tgt.type as FlowNodeType },
+        edges.map((e) => ({ source: e.source, target: e.target })),
+      )
+      if (!result.ok) {
+        toast.error("无法连接", { description: result.reason })
+        return
+      }
+      setEdges((eds) => addEdge<WfRfEdge>({ ...c, id: genId("edge"), type: SEQUENCE_FLOW_EDGE_TYPE, data: {} }, eds))
+    },
+    [nodes, edges, setEdges],
   )
 
-  /* ---- 增删改节点/边 ---- */
-  const addNode = useCallback(
-    (type: FlowNodeType) => {
-      const id = genId(type)
-      const data: WfNodeData = { name: NODE_DEFAULT_NAME[type] }
-      setNodes((ns) => [
-        ...ns,
-        { id, type, position: { x: 460, y: 40 + ns.length * 24 }, data },
-      ])
+  /* ---- 调色板新增节点（点击默认位置 / 拖拽落点） ---- */
+  const addNodeFromPalette = useCallback(
+    (paletteKey: string, position: Point) => {
+      const item = PALETTE_INDEX[paletteKey]
+      if (!item) return
+      const id = genId(item.type)
+      setNodes((ns) => [...ns, { id, type: item.type, position, data: item.makeData() }])
       setSelection({ kind: "node", id })
     },
     [setNodes],
   )
 
+  const pickFromPalette = useCallback(
+    (paletteKey: string) => addNodeFromPalette(paletteKey, { x: 480, y: 40 + nodes.length * 22 }),
+    [addNodeFromPalette, nodes.length],
+  )
+
+  /* ---- 改节点/边 ---- */
   const updateNodeProps = useCallback(
     (id: string, props: WfNodeProps) =>
       setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, props } } : n))),
@@ -168,75 +172,108 @@ export default function FlowDesignerPage() {
     [setEdges],
   )
 
+  /* ---- 模型级校验 ---- */
+  const buildModel = useCallback(
+    () =>
+      toProcessModel(nodes, edges, {
+        key: SEED_MODEL.key,
+        name: processConfig.base.name,
+        flowConfig: processConfig.flow,
+      }),
+    [nodes, edges, processConfig],
+  )
+
+  const handleValidate = useCallback(() => {
+    const found = validateProcessModel(buildModel())
+    setIssues(found)
+    const errors = found.filter((i) => i.level === "error").length
+    if (errors > 0) toast.error(`校验未通过：${errors} 个错误`)
+    else if (found.length > 0) toast.warning(`校验通过，但有 ${found.length} 个提示`)
+    else toast.success("校验通过，无问题")
+  }, [buildModel])
+
   /* ---- 序列化 + 往返自检 ---- */
   const handleSerialize = useCallback(() => {
-    const pm = toProcessModel(nodes, edges, {
-      key: SEED_MODEL.key,
-      name: processConfig.base.name,
-      flowConfig: processConfig.flow,
-    })
+    const pm = buildModel()
     const back = fromProcessModel(pm)
-    const pm2 = toProcessModel(back.nodes, back.edges, {
-      key: pm.key,
-      name: pm.name,
-      flowConfig: pm.flowConfig,
-    })
+    const pm2 = toProcessModel(back.nodes, back.edges, { key: pm.key, name: pm.name, flowConfig: pm.flowConfig })
     const ok = JSON.stringify(pm) === JSON.stringify(pm2)
     // eslint-disable-next-line no-console
     console.log("[flow] ProcessModel", pm, "| round-trip equal:", ok)
     setSerialized(JSON.stringify(pm, null, 2))
     setRoundTripOk(ok)
-  }, [nodes, edges, processConfig])
+  }, [buildModel])
 
   const nodeOptions = useMemo(
-    () =>
-      nodes
-        .filter((n) => n.type === "userTask")
-        .map((n) => ({ id: n.id, name: n.data.name })),
+    () => nodes.filter((n) => n.type === "userTask").map((n) => ({ id: n.id, name: n.data.name })),
     [nodes],
   )
 
-  const selectedNode =
-    selection.kind === "node" ? nodes.find((n) => n.id === selection.id) : undefined
-  const selectedEdge =
-    selection.kind === "edge" ? edges.find((e) => e.id === selection.id) : undefined
+  const selectedNode = selection.kind === "node" ? nodes.find((n) => n.id === selection.id) : undefined
+  const selectedEdge = selection.kind === "edge" ? edges.find((e) => e.id === selection.id) : undefined
+
+  const errorCount = issues?.filter((i) => i.level === "error").length ?? 0
 
   return (
     <div className="space-y-3">
       <PageHeader
-        title="下一代流程设计器（切片 1）"
-        description="react-flow 画布核心 · 开始/审批/排它网关/结束四类节点 + 顺序流 · 序列化往返 ProcessModel"
+        title="下一代流程设计器（切片 2）"
+        description="14 类节点 + 调色板拖拽新增 + BPMN 连接规则校验（连线即时 / 保存前）+ ProcessModel 序列化往返"
       />
 
       {/* 工具栏 */}
       <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
-        <span className="text-xs text-muted-foreground">添加节点：</span>
-        <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => addNode("startEvent")}>
-          <CircleDot className="size-3.5 text-emerald-500" /> 开始
-        </Button>
-        <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => addNode("userTask")}>
-          <UserCheck className="size-3.5 text-orange-500" /> 审批
-        </Button>
-        <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => addNode("exclusiveGateway")}>
-          <GitFork className="size-3.5 text-amber-500" /> 排它网关
-        </Button>
-        <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => addNode("endEvent")}>
-          <Square className="size-3.5 text-slate-500" /> 结束
-        </Button>
+        <span className="text-xs text-muted-foreground">从左侧调色板拖拽或点击新增节点</span>
         <div className="ml-auto flex items-center gap-2">
           {roundTripOk !== null && (
             <span className={roundTripOk ? "text-xs text-emerald-600" : "text-xs text-rose-600"}>
               {roundTripOk ? "往返一致 ✓" : "往返不一致 ✗"}
             </span>
           )}
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleValidate}>
+            校验
+          </Button>
           <Button size="sm" className="h-7 text-xs" onClick={handleSerialize}>
             序列化 ProcessModel
           </Button>
         </div>
       </div>
 
-      {/* 画布 + 属性面板 */}
+      {/* 校验结果 */}
+      {issues !== null && (
+        <div className="rounded-lg border bg-card px-3 py-2 text-xs">
+          {issues.length === 0 ? (
+            <div className="flex items-center gap-1.5 text-emerald-600">
+              <CircleCheck className="size-3.5" /> 校验通过，无问题
+            </div>
+          ) : (
+            <ul className="space-y-1">
+              {issues.map((it, i) => (
+                <li
+                  key={i}
+                  className={cn(
+                    "flex items-start gap-1.5",
+                    it.level === "error" ? "text-rose-600" : "text-amber-600",
+                  )}
+                >
+                  {it.level === "error" ? (
+                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                  ) : (
+                    <Info className="mt-0.5 size-3.5 shrink-0" />
+                  )}
+                  <span>{it.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {errorCount > 0 && <p className="mt-1.5 text-muted-foreground">共 {errorCount} 个错误应在保存前修复。</p>}
+        </div>
+      )}
+
+      {/* 调色板 + 画布 + 属性面板 */}
       <div className="flex h-[68vh] overflow-hidden rounded-lg border">
+        <FlowPalette onPick={pickFromPalette} />
+
         <div className="min-w-0 flex-1">
           <FlowCanvas
             nodes={nodes}
@@ -247,6 +284,7 @@ export default function FlowDesignerPage() {
             onNodeSelect={(id) => setSelection({ kind: "node", id })}
             onEdgeSelect={(id) => setSelection({ kind: "edge", id })}
             onPaneClick={() => setSelection({ kind: "process" })}
+            onDropNode={addNodeFromPalette}
           />
         </div>
 
@@ -282,12 +320,7 @@ export default function FlowDesignerPage() {
               </div>
             </>
           ) : (
-            <PropertyPanel
-              target="process"
-              config={processConfig}
-              onChange={setProcessConfig}
-              formFields={SAMPLE_FIELDS}
-            />
+            <PropertyPanel target="process" config={processConfig} onChange={setProcessConfig} formFields={SAMPLE_FIELDS} />
           )}
         </aside>
       </div>

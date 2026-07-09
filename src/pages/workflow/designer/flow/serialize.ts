@@ -1,28 +1,47 @@
 /**
- * 归一化模型 `ProcessModel` ⇄ react-flow(@xyflow/react) 画布状态 双向序列化（切片 1）。
+ * 归一化模型 `ProcessModel` ⇄ react-flow(@xyflow/react) 画布状态 双向序列化。
  *
  * 本文件是「画布层」与「契约层」之间的唯一桥梁，**纯数据转换、无 React 运行时依赖**
  * （仅 `import type`，便于独立单测 / node 直跑）。严格遵循 model.ts 契约：
- *  - 节点：id / name / position / size? / props?（+ endEvent.terminate、userTask.formKey）
+ *  - 节点：id / name / position / size? / props?（+ 各类节点专属 config，见下）
  *  - 边  ：id / source / target / name? / waypoints? / isDefault? / condition? / expression?
  *
  * react-flow 侧把领域数据挂在 `node.data`（WfNodeData）与 `edge.data`（WfEdgeData）：
- *  - `node.type` 直接复用 `FlowNodeType` 判别键（startEvent/userTask/exclusiveGateway/endEvent…）。
+ *  - `node.type` 直接复用 `FlowNodeType` 判别键（startEvent/userTask/serviceTask/...）。
  *  - `WfNodeProps` 原样挂 `node.data.props`，供共享 PropertyPanel 读写。
+ *  - 节点专属 config（serviceTask.service / callActivity / subProcess.children / timer /
+ *    ai / webhook / timerBoundary.attachedTo）挂在同名 `node.data.*` 字段，往返无损。
  *
- * 切片 1 仅落地 4 类核心节点的 `toProcessModel`（其余类型抛错，待后续切片补齐）；
- * `fromProcessModel` 已按契约对全部节点类型透传（画布暂只渲染 4 类）。
+ * 切片 2：`toProcessModel` / `fromProcessModel` 覆盖 model.ts 全部 14 类 FlowNodeType。
  *
  * 禁 any；类型导入一律 `import type`（verbatimModuleSyntax）。
  */
 import type { Edge, Node } from "@xyflow/react"
 import type { BranchCondition, WfNodeProps } from "../types"
 import type { FlowConfig } from "../shared/config"
-import type { FlowNode, FlowNodeType, Point, ProcessModel, SequenceFlow, Size } from "./model"
+import type {
+  AiConfig,
+  CallActivityConfig,
+  FlowNode,
+  FlowNodeType,
+  Point,
+  ProcessModel,
+  SequenceFlow,
+  ServiceTaskConfig,
+  Size,
+  TimerConfig,
+  WebhookConfig,
+} from "./model"
 
 /* ============================================================
  * react-flow 侧数据形状
  * ============================================================ */
+
+/** 嵌入式子流程内联子图（对应 SubProcessNode.children） */
+export interface SubGraph {
+  nodes: FlowNode[]
+  edges: SequenceFlow[]
+}
 
 /** 挂在 react-flow `node.data` 的领域数据（审批域一律走 props，复用 WfNodeProps） */
 export interface WfNodeData extends Record<string, unknown> {
@@ -36,6 +55,22 @@ export interface WfNodeData extends Record<string, unknown> {
   terminate?: boolean
   /** userTask 专属：覆盖流程级 formKey */
   formKey?: string
+  /** serviceTask 专属：实现判别（autoApprove/autoReject/trigger/delegate） */
+  service?: ServiceTaskConfig
+  /** callActivity 专属：子流程调用配置 */
+  callActivity?: CallActivityConfig
+  /** subProcess 专属：内联子图 */
+  children?: SubGraph
+  /** timerCatch / timerBoundary 专属：定时配置 */
+  timer?: TimerConfig
+  /** timerBoundary 专属：宿主活动节点 id */
+  attachedTo?: string
+  /** timerBoundary 专属：是否中断宿主（默认 true） */
+  cancelActivity?: boolean
+  /** ai 专属：AI 审批配置 */
+  ai?: AiConfig
+  /** webhook 专属：回调配置 */
+  webhook?: WebhookConfig
 }
 
 /** 挂在 react-flow `edge.data` 的领域数据（对应 SequenceFlow 的可选字段） */
@@ -53,14 +88,6 @@ export type WfRfEdge = Edge<WfEdgeData>
 /** react-flow 自定义边类型键（见 edges/index.ts） */
 export const SEQUENCE_FLOW_EDGE_TYPE = "sequenceFlow"
 
-/** 本切片画布已渲染的节点类型 */
-const SUPPORTED_NODE_TYPES: readonly FlowNodeType[] = [
-  "startEvent",
-  "endEvent",
-  "userTask",
-  "exclusiveGateway",
-]
-
 /** 流程元信息（不在画布 node/edge 内，由页面单独持有） */
 export interface ProcessMeta {
   key: string
@@ -71,6 +98,21 @@ export interface ProcessMeta {
 }
 
 const DEFAULT_META: ProcessMeta = { key: "process", name: "未命名流程" }
+
+/* ============================================================
+ * 缺省 config 兜底（round-trip 时 model 必带；此处仅防御非法态）
+ * ============================================================ */
+
+const DEFAULT_SERVICE: ServiceTaskConfig = { impl: "delegate", delegateExpression: "" }
+const DEFAULT_CALL_ACTIVITY: CallActivityConfig = { calledElement: "", async: false, paramMap: [] }
+const DEFAULT_TIMER: TimerConfig = { mode: "duration", value: "" }
+const DEFAULT_AI: AiConfig = {
+  model: "",
+  systemPrompt: "",
+  formContext: [],
+  outputMap: { decision: "", comment: "" },
+}
+const DEFAULT_WEBHOOK: WebhookConfig = { url: "" }
 
 /* ============================================================
  * 画布状态 → ProcessModel
@@ -107,25 +149,54 @@ function rfNodeToFlowNode(node: WfRfNode): FlowNode {
   if (node.data.size) common.size = node.data.size
   if (node.data.props) common.props = node.data.props
 
+  const d = node.data
+
   switch (type) {
     case "startEvent":
       return { ...base, ...common, type: "startEvent" }
     case "endEvent": {
       const end: FlowNode = { ...base, ...common, type: "endEvent" }
-      if (node.data.terminate) end.terminate = true
+      if (d.terminate) end.terminate = true
       return end
     }
     case "userTask": {
       const task: FlowNode = { ...base, ...common, type: "userTask" }
-      if (node.data.formKey !== undefined) task.formKey = node.data.formKey
+      if (d.formKey !== undefined) task.formKey = d.formKey
       return task
     }
+    case "serviceTask":
+      return { ...base, ...common, type: "serviceTask", service: d.service ?? DEFAULT_SERVICE }
     case "exclusiveGateway":
       return { ...base, ...common, type: "exclusiveGateway" }
+    case "parallelGateway":
+      return { ...base, ...common, type: "parallelGateway" }
+    case "inclusiveGateway":
+      return { ...base, ...common, type: "inclusiveGateway" }
+    case "callActivity":
+      return { ...base, ...common, type: "callActivity", callActivity: d.callActivity ?? DEFAULT_CALL_ACTIVITY }
+    case "subProcess":
+      return { ...base, ...common, type: "subProcess", children: d.children ?? { nodes: [], edges: [] } }
+    case "timerCatch":
+      return { ...base, ...common, type: "timerCatch", timer: d.timer ?? DEFAULT_TIMER }
+    case "timerBoundary": {
+      const boundary: FlowNode = {
+        ...base,
+        ...common,
+        type: "timerBoundary",
+        timer: d.timer ?? DEFAULT_TIMER,
+        attachedTo: d.attachedTo ?? "",
+      }
+      if (d.cancelActivity !== undefined) boundary.cancelActivity = d.cancelActivity
+      return boundary
+    }
+    case "cc":
+      return { ...base, ...common, type: "cc" }
+    case "ai":
+      return { ...base, ...common, type: "ai", ai: d.ai ?? DEFAULT_AI }
+    case "webhook":
+      return { ...base, ...common, type: "webhook", webhook: d.webhook ?? DEFAULT_WEBHOOK }
     default:
-      throw new Error(
-        `toProcessModel：切片 1 暂不支持节点类型「${String(type)}」，仅支持 ${SUPPORTED_NODE_TYPES.join(" / ")}`,
-      )
+      throw new Error(`toProcessModel：未知节点类型「${String(type)}」`)
   }
 }
 
@@ -156,8 +227,41 @@ function flowNodeToRfNode(node: FlowNode): WfRfNode {
   const data: WfNodeData = { name: node.name }
   if (node.props) data.props = node.props
   if (node.size) data.size = node.size
-  if (node.type === "endEvent" && node.terminate) data.terminate = true
-  if (node.type === "userTask" && node.formKey !== undefined) data.formKey = node.formKey
+
+  switch (node.type) {
+    case "endEvent":
+      if (node.terminate) data.terminate = true
+      break
+    case "userTask":
+      if (node.formKey !== undefined) data.formKey = node.formKey
+      break
+    case "serviceTask":
+      data.service = node.service
+      break
+    case "callActivity":
+      data.callActivity = node.callActivity
+      break
+    case "subProcess":
+      data.children = node.children
+      break
+    case "timerCatch":
+      data.timer = node.timer
+      break
+    case "timerBoundary":
+      data.timer = node.timer
+      data.attachedTo = node.attachedTo
+      if (node.cancelActivity !== undefined) data.cancelActivity = node.cancelActivity
+      break
+    case "ai":
+      data.ai = node.ai
+      break
+    case "webhook":
+      data.webhook = node.webhook
+      break
+    default:
+      break
+  }
+
   return {
     id: node.id,
     type: node.type,
