@@ -294,3 +294,8 @@ Tier 2 脚本 = 完整应用权限,等价于"把 Java 代码提交进仓库",治
 6. **结构化条件以 `ConditionOperator` 名下发**（`eq/ne/gt/gte/lt/lte/contains/notContains`），即 `BranchCondition` 原样。后端图直译路径用 `OP_SYMBOL`（镜像前端 `serde.ts#OP_UEL`）映射为符号后交 `ConditionCompiler`，UEL 产物与前端 `compileUel` 字节一致、`ConditionCompiler` 零改动。**N-F-01 序列化器产出 condition 时保持 operator 名形，不自行转符号。**
 7. **`oa:` 扩展元素一律小写**（`oa:condition`、`oa:assigneeRules`…），遵循 moddle `tagAlias:lowerCase`。旧 bpmn-js serde 的大写 `oa:Condition` 随 bpmn-js 删除废弃，新路径与 .bpmn 往返统一用小写。
 8. **分组认领只认 `props.handleOptions.candidate`**（WfNodeProps 原生）；旧钉钉模型的 `node.groupMode` 字段不带入新路径。
+
+### 附录 C 再修正 · N-B-01 切片3（2026-07-09，以已落地 model.ts 为准）
+
+9. **修正 C.1**：以**已实现的前端 `flow/model.ts` + 附录 B 映射**为准——`cc`/`ai`/`webhook` 是**一等 type**；`autoApprove`/`autoReject`/`trigger` 序列化为 **`serviceTask{service.impl:...}`**（非一等 type）。理由：前后端字节一致优先，否则前端产物 `{type:"serviceTask",service:{impl:"autoApprove"}}` 无法转换。**UX 与序列化分离**：调色板仍把"自动通过/自动拒绝/触发器"作独立可拖拽项呈现（好 UX），底层落为 serviceTask{impl}。C.1 中"auto*/trigger 也提升为一等 type"作废。BPMN 映射不变：全部 → serviceTask+delegate。
+10. **trigger TIMER 前置延时**：遵循"图直译不合成拓扑"——真延时由前端**显式画 `timerCatch` 节点**；trigger 自身的 timer 值存 `oa:triggerTimer` 扩展供 `wfTriggerDelegate` 读，信息不丢，转换器不再像旧树路径那样合成中间捕获事件。
