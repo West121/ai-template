@@ -11,5 +11,9 @@ public interface SysFileRepository extends JpaRepository<SysFile, Long> {
 
     Page<SysFile> findByOriginalNameContaining(String keyword, Pageable pageable);
 
+    Page<SysFile> findByUploaderId(Long uploaderId, Pageable pageable);
+
+    Page<SysFile> findByOriginalNameContainingAndUploaderId(String keyword, Long uploaderId, Pageable pageable);
+
     Optional<SysFile> findFirstByFileHashOrderByIdAsc(String fileHash);
 }

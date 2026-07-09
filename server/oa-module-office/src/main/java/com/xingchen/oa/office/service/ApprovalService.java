@@ -2,6 +2,7 @@ package com.xingchen.oa.office.service;
 
 import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.exception.BusinessException;
+import com.xingchen.oa.common.security.DataScope;
 import com.xingchen.oa.common.security.UserContext;
 import com.xingchen.oa.office.dto.ApprovalCcResponse;
 import com.xingchen.oa.office.dto.ApprovalCreateRequest;
@@ -16,7 +17,9 @@ import com.xingchen.oa.office.repository.ApprovalLogRepository;
 import com.xingchen.oa.office.repository.ApprovalRepository;
 import com.xingchen.oa.office.support.DeptNameResolver;
 import com.xingchen.oa.office.support.SecuritySupport;
+import jakarta.persistence.OptimisticLockException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -26,7 +29,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -77,24 +80,30 @@ public class ApprovalService {
      */
     public PageResult<ApprovalDoneResponse> done(int pageNum, int pageSize) {
         Long userId = SecuritySupport.currentUser().getUserId();
-        List<ApprovalLog> logs = logRepository.findByActorIdAndActionInOrderByCreatedAtDesc(userId, DONE_ACTIONS);
-        Map<Long, ApprovalLog> latestByApproval = new LinkedHashMap<>();
-        for (ApprovalLog log : logs) {
+        // B-08：分页下推。total=去重后的审批单数（与原 ordered.size() 一致）；
+        // 当前页 = 去重后按最近操作时间倒序的审批单 id 分页。
+        long total = logRepository.countDistinctApprovalByActor(userId, DONE_ACTIONS);
+        List<Long> pageApprovalIds = logRepository.findDistinctApprovalIdsByActor(
+                userId, DONE_ACTIONS, PageRequest.of(Math.max(pageNum - 1, 0), pageSize));
+        if (pageApprovalIds.isEmpty()) {
+            return new PageResult<>(List.of(), total, pageNum, pageSize);
+        }
+        // 仅对当前页这批单，取每单该操作人最近一次操作（myAction/actedAt）。
+        Map<Long, ApprovalLog> latestByApproval = new HashMap<>();
+        for (ApprovalLog log : logRepository
+                .findByActorIdAndActionInAndApprovalIdInOrderByCreatedAtDesc(userId, DONE_ACTIONS, pageApprovalIds)) {
             latestByApproval.putIfAbsent(log.getApprovalId(), log);
         }
-        List<ApprovalLog> ordered = List.copyOf(latestByApproval.values());
-        int from = Math.min(Math.max(pageNum - 1, 0) * pageSize, ordered.size());
-        int to = Math.min(from + pageSize, ordered.size());
-        List<ApprovalLog> pageLogs = ordered.subList(from, to);
-
         Map<Long, Approval> approvals = approvalRepository
-                .findAllById(pageLogs.stream().map(ApprovalLog::getApprovalId).toList())
+                .findAllById(pageApprovalIds)
                 .stream().collect(Collectors.toMap(Approval::getId, Function.identity()));
         Map<Long, String> deptNames = deptNameResolver.nameMap();
-        List<ApprovalDoneResponse> list = pageLogs.stream()
-                .map(log -> {
-                    Approval a = approvals.get(log.getApprovalId());
-                    if (a == null) {
+        // 保持查询给定的顺序（按最近操作时间倒序）。
+        List<ApprovalDoneResponse> list = pageApprovalIds.stream()
+                .map(approvalId -> {
+                    Approval a = approvals.get(approvalId);
+                    ApprovalLog log = latestByApproval.get(approvalId);
+                    if (a == null || log == null) {
                         return null;
                     }
                     return new ApprovalDoneResponse(
@@ -105,7 +114,7 @@ public class ApprovalService {
                 })
                 .filter(Objects::nonNull)
                 .toList();
-        return new PageResult<>(list, ordered.size(), pageNum, pageSize);
+        return new PageResult<>(list, total, pageNum, pageSize);
     }
 
     /**
@@ -189,8 +198,11 @@ public class ApprovalService {
     public ApprovalResponse approve(Long id, String comment) {
         Approval approval = pendingApproval(id);
         approval.setStatus(Approval.STATUS_APPROVED);
+        // B-07：先做版本敏感的状态推进（saveAndFlush 触发 UPDATE ... WHERE version=?），
+        // 冲突转 409；胜出后再记日志，避免败者写入审计日志（且随事务回滚）。
+        Approval saved = saveWithOptimisticLock(approval);
         addLog(id, ApprovalLog.ACTION_APPROVE, comment);
-        return toResponse(approvalRepository.save(approval), deptNameResolver.nameMap());
+        return toResponse(saved, deptNameResolver.nameMap());
     }
 
     @Transactional
@@ -200,8 +212,9 @@ public class ApprovalService {
         }
         Approval approval = pendingApproval(id);
         approval.setStatus(Approval.STATUS_REJECTED);
+        Approval saved = saveWithOptimisticLock(approval);
         addLog(id, ApprovalLog.ACTION_REJECT, reason);
-        return toResponse(approvalRepository.save(approval), deptNameResolver.nameMap());
+        return toResponse(saved, deptNameResolver.nameMap());
     }
 
     /**
@@ -219,18 +232,65 @@ public class ApprovalService {
             throw new BusinessException(400, "仅待审批的单据可撤回");
         }
         approval.setStatus(Approval.STATUS_WITHDRAWN);
+        Approval saved = saveWithOptimisticLock(approval);
         addLog(id, ApprovalLog.ACTION_WITHDRAW, null);
-        return toResponse(approvalRepository.save(approval), deptNameResolver.nameMap());
+        return toResponse(saved, deptNameResolver.nameMap());
     }
 
-    public List<ApprovalLogResponse> logs(Long id) {
-        if (!approvalRepository.existsById(id)) {
-            throw new BusinessException(404, "审批单不存在");
+    /**
+     * 版本敏感保存（B-07）：并发状态推进冲突时 Hibernate 抛乐观锁异常，转 409。
+     * saveAndFlush 使 UPDATE 立即执行，冲突在本方法内抛出并被捕获（否则将延迟到事务提交、越过 try）。
+     */
+    private Approval saveWithOptimisticLock(Approval approval) {
+        try {
+            return approvalRepository.saveAndFlush(approval);
+        } catch (OptimisticLockingFailureException | OptimisticLockException e) {
+            throw new BusinessException(409, "该审批单已被其他人处理，请刷新后重试");
         }
-        return logRepository.findByApprovalIdOrderByCreatedAtAsc(id).stream()
+    }
+
+    /**
+     * 流转记录（B-05 越权修复）：仅发起人 / 审批人（已操作或数据权限内待办可见）/ 抄送人可读，
+     * 无关用户返回 403。
+     */
+    public List<ApprovalLogResponse> logs(Long id) {
+        Approval approval = approvalRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(404, "审批单不存在"));
+        List<ApprovalLog> logs = logRepository.findByApprovalIdOrderByCreatedAtAsc(id);
+        if (!canViewLogs(approval, logs, SecuritySupport.currentUser())) {
+            throw new BusinessException(403, "无权查看该审批单的流转记录");
+        }
+        return logs.stream()
                 .map(log -> new ApprovalLogResponse(
                         log.getAction(), log.getActorName(), log.getComment(), log.getCreatedAt()))
                 .toList();
+    }
+
+    /**
+     * 归属校验：发起人本人 / 曾操作过该单的审批人 / 抄送人 / 数据权限范围覆盖该单
+     * （即待办列表里本就可见，如部门经理对本部门单据）。
+     */
+    private boolean canViewLogs(Approval approval, List<ApprovalLog> logs, UserContext user) {
+        Long userId = user.getUserId();
+        if (Objects.equals(approval.getApplicantId(), userId)) {
+            return true;
+        }
+        if (logs.stream().anyMatch(log -> Objects.equals(log.getActorId(), userId))) {
+            return true;
+        }
+        if (!ccRepository.findByApprovalIdAndUserId(approval.getId(), userId).isEmpty()) {
+            return true;
+        }
+        DataScope scope = user.getDataScope();
+        if (scope == null) {
+            return false;
+        }
+        if (scope.all()) {
+            return true;
+        }
+        return !scope.selfOnly()
+                && approval.getDeptId() != null
+                && scope.deptIds().contains(approval.getDeptId());
     }
 
     private Approval pendingApproval(Long id) {

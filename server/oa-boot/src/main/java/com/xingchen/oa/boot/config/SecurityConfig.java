@@ -1,6 +1,7 @@
 package com.xingchen.oa.boot.config;
 
 import com.xingchen.oa.boot.security.JwtAuthFilter;
+import jakarta.servlet.DispatcherType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -34,6 +35,9 @@ public class SecurityConfig {
                 .cors(Customizer.withDefaults())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // B-18：放行 ERROR 派发。否则匿名/出错请求向 /error 二次派发时会被再次鉴权拒绝，
+                        // 而此时 401 响应已写出 → "response already committed" → 连接被重置（keep-alive 复用后表现为 socket closed）。
+                        .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers(
                                 "/api/auth/login",
                                 "/swagger-ui/**",

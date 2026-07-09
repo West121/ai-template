@@ -54,6 +54,9 @@ public class FileService {
 
     private static final String META_FILE = "upload.meta.json";
 
+    /** 文件全量查看/下载权限码（V15 种子；超管代码级全量自动拥有），无此码仅能访问自己上传的文件 */
+    public static final String PERM_FILE_VIEW_ALL = "system:file:list";
+
     private final SysFileRepository fileRepository;
     private final StorageService storageService;
     private final StorageProperties storageProperties;
@@ -67,12 +70,23 @@ public class FileService {
     // 分页 / 直传 / 下载 / 删除
     // ------------------------------------------------------------------
 
+    /**
+     * 分页：有 system:file:list（或数据权限 ALL）可见全部；否则仅可见自己上传的文件（B-04 IDOR 修复）。
+     */
     @Transactional(readOnly = true)
     public PageResult<FileRecordResponse> page(String keyword, int pageNum, int pageSize) {
         Pageable pageable = PageRequest.of(Math.max(pageNum - 1, 0), pageSize, Sort.by(Sort.Order.desc("id")));
-        Page<SysFile> page = StringUtils.hasText(keyword)
-                ? fileRepository.findByOriginalNameContaining(keyword, pageable)
-                : fileRepository.findAll(pageable);
+        Page<SysFile> page;
+        if (canViewAll(currentUser())) {
+            page = StringUtils.hasText(keyword)
+                    ? fileRepository.findByOriginalNameContaining(keyword, pageable)
+                    : fileRepository.findAll(pageable);
+        } else {
+            Long userId = currentUser().getUserId();
+            page = StringUtils.hasText(keyword)
+                    ? fileRepository.findByOriginalNameContainingAndUploaderId(keyword, userId, pageable)
+                    : fileRepository.findByUploaderId(userId, pageable);
+        }
         return PageResult.from(page.map(FileRecordResponse::of));
     }
 
@@ -104,6 +118,37 @@ public class FileService {
     public SysFile getOrThrow(Long id) {
         return fileRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(404, "文件记录不存在"));
+    }
+
+    /**
+     * 下载前的归属校验（B-04 IDOR 修复）：上传者本人、持有 system:file:list、
+     * 或数据权限为 ALL 的用户可下载；其余返回 403。
+     */
+    @Transactional(readOnly = true)
+    public SysFile getReadableOrThrow(Long id) {
+        SysFile file = getOrThrow(id);
+        UserContext user = currentUser();
+        boolean owner = file.getUploaderId() != null && file.getUploaderId().equals(user.getUserId());
+        if (!owner && !canViewAll(user)) {
+            throw new BusinessException(403, "无权访问该文件");
+        }
+        return file;
+    }
+
+    private UserContext currentUser() {
+        UserContext user = CurrentUserHolder.get();
+        if (user == null) {
+            throw new BusinessException(401, "未登录或凭证已失效");
+        }
+        return user;
+    }
+
+    /** 全量可见：持有 system:file:list 权限码，或当前激活身份数据权限为 ALL。 */
+    private boolean canViewAll(UserContext user) {
+        if (user.getPermissions() != null && user.getPermissions().contains(PERM_FILE_VIEW_ALL)) {
+            return true;
+        }
+        return user.getDataScope() != null && user.getDataScope().all();
     }
 
     public InputStream openStream(SysFile file) {

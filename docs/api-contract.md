@@ -19,14 +19,15 @@ status: PENDING/APPROVED/REJECTED/WITHDRAWN；type: LEAVE/EXPENSE/TRIP/OVERTIME/
 - GET `/api/office/approvals?status=&pageNum=&pageSize=`【DS】待办等通用查询（已实现）
 - GET `/api/office/approvals/pending-count`【DS】→ Long（已实现）
 - POST `/api/office/approvals` {title,type,reason,startDate?,endDate?,ccUserIds?:number[]} 自动填 applicant/dept（已实现，需扩展 ccUserIds/日期）
-- GET `/api/office/approvals/my?status=&pageNum=` 我发起的（不走 DS，applicant_id=me）
-- GET `/api/office/approvals/done?pageNum=` 我处理过的（依据操作日志）响应加 {myAction:APPROVE|REJECT, actedAt}
-- GET `/api/office/approvals/cc?pageNum=` 抄送我的，响应加 {readFlag:boolean}
-- POST `/api/office/approvals/cc/{approvalId}/read` 标记已读；POST `/api/office/approvals/cc/read-all`
+- GET `/api/office/approvals/my?status=&pageNum=`【P:office:approval:list】我发起的（不走 DS，applicant_id=me）
+- GET `/api/office/approvals/done?pageNum=`【P:office:approval:list】我处理过的（依据操作日志）响应加 {myAction:APPROVE|REJECT, actedAt}
+- GET `/api/office/approvals/cc?pageNum=`【P:office:approval:list】抄送我的，响应加 {readFlag:boolean}
+- POST `/api/office/approvals/cc/{approvalId}/read`【P:office:approval:list】标记已读；POST `/api/office/approvals/cc/read-all`【P:office:approval:list】
 - POST `/api/office/approvals/{id}/approve` {comment?}【P:office:approval:approve】（已实现，补日志）
 - POST `/api/office/approvals/{id}/reject` {reason}【P:office:approval:approve】（已实现，补日志）
-- POST `/api/office/approvals/{id}/withdraw` 仅本人且 PENDING → WITHDRAWN
-- GET `/api/office/approvals/{id}/logs` → [{action:CREATE|APPROVE|REJECT|WITHDRAW, actorName, comment?, createdAt}]
+- POST `/api/office/approvals/{id}/withdraw`【P:office:approval:create】仅本人且 PENDING → WITHDRAWN
+- GET `/api/office/approvals/{id}/logs`【P:office:approval:list】→ [{action:CREATE|APPROVE|REJECT|WITHDRAW, actorName, comment?, createdAt}]
+  归属校验（B-05）：仅发起人 / 审批人（曾操作过该单，或数据权限范围覆盖该单）/ 抄送人可读，无关用户 → 403
 
 ## 公文（oa-module-office）
 Document = {id,direction:RECEIVE|SEND,code,title,unit(来文/主送单位),secret:PUBLIC|INTERNAL|SECRET,urgency:NORMAL|URGENT|EXTRA,status,drafter?,signer?,docDate,deptId,deptName,createdAt}
@@ -95,8 +96,10 @@ RECEIVE status: TO_SIGN(待签收)/PROCESSING(办理中)/FINISHED(已办结)；S
 ### 文件管理（存储可切换 local | minio | s3）
 FileRecord = {id,originalName,ext,size,contentType,storageType:LOCAL|MINIO|S3,objectKey,uploaderId,uploaderName,createdAt}
 - GET `/api/infra/files?keyword=&pageNum=&pageSize=` 分页（keyword 匹配 originalName）
+  归属过滤（B-04）：持有 system:file:list 或数据权限 ALL → 全量；否则仅返回本人上传的文件
 - POST `/api/infra/files/upload` multipart(file) → FileRecord（小文件直传）
 - GET `/api/infra/files/{id}/download` → 文件流（attachment；MINIO/S3 也统一走后端流式转发）
+  归属校验（B-04 IDOR 修复）：仅上传者本人 / 持有 system:file:list / 数据权限 ALL 可下载，其余 → 403
 - DELETE `/api/infra/files/{id}`【P:system:file:edit】（同时删存储对象）
 - 分片上传/断点续传/秒传：
   - POST `/api/infra/files/chunk/init` {fileName,size,contentType,chunkSize,fileHash} → {uploadId,uploaded:number[],instant:boolean,file?:FileRecord}
@@ -114,11 +117,13 @@ DictType = {id,code,name,remark,enabled,itemCount}；DictItem = {id,typeId,paren
 - 种子：leave_type 请假类型（平铺）、education 学历（平铺）、region 行政区划（树形：广东省>广州/深圳>区，浙江省>杭州>区 两省示例）
 
 ### 日志管理
-- 登录日志 LoginLog={id,username,ip,location,userAgent,success,message,createdAt}：GET `/api/infra/logs/login?keyword=&pageNum=`；登录成功/失败由 AuthService 自动落库；location=IP 归属地（ip2region v2 离线库：内网 IP→"内网"，国内→"省份城市" 如 "广东省广州市"，国外→"国家 城市"，解析失败→"未知"）
-- 操作日志 OperLog={id,username,module,action,method,params,status:SUCCESS|FAIL,errorMsg,costMs,ip,createdAt}：GET `/api/infra/logs/oper?keyword=&module=&pageNum=`
-  记录机制：`@OperLog(module,action)` 注解（放 oa-common）+ infra 内 AOP 切面；在关键写接口标注（审批同意/驳回、用户/部门/角色/字典增删改、公告发布、文件上传删除等）
-- 运行日志：GET `/api/infra/logs/runtime?lines=200` → {file,lines:string[]}（tail 应用日志文件；boot 配置 logging.file.name=./logs/oa-platform.log）
+B-06：三个日志接口均需【P:system:log:list】，且返回 Response DTO（LoginLogResponse/OperLogResponse），不直接返回 JPA 实体。
+- 登录日志 LoginLog={id,username,ip,location,userAgent,success,message,createdAt}：GET `/api/infra/logs/login?keyword=&pageNum=`【P:system:log:list】；登录成功/失败由 AuthService 自动落库；location=IP 归属地（ip2region v2 离线库：内网 IP→"内网"，国内→"省份城市" 如 "广东省广州市"，国外→"国家 城市"，解析失败→"未知"）
+- 操作日志 OperLog={id,username,module,action,method,params,status:SUCCESS|FAIL,errorMsg,costMs,ip,createdAt}：GET `/api/infra/logs/oper?keyword=&module=&pageNum=`【P:system:log:list】
+  记录机制：`@OperLog(module,action)` 注解（放 oa-common）+ infra 内 AOP 切面；在关键写接口标注（审批同意/驳回/撤回、用户/部门/角色/字典增删改、公告发布、文件上传删除等）
+- 运行日志：GET `/api/infra/logs/runtime?lines=200`【P:system:log:list】→ {file,lines:string[]}（tail 应用日志文件；boot 配置 logging.file.name=./logs/oa-platform.log）
 新权限码（V6 种子）：system:file:edit、system:dict:edit、system:log:list（超管代码级全量自动拥有）
+新权限码（V15 种子，B-04）：system:file:list（文件查询：查看/下载全部文件；超管代码级自动拥有，其余角色默认不授权）
 
 ## 工作流域（oa-module-workflow / Flowable 8）
 前缀 `/api/wf`；认证复用现有 JWT/Security（CurrentUserHolder）。运行时接口（发起/待办/审批/通知）登录即可；定义管理接口需【P:wf:def:edit】。

@@ -36,4 +36,26 @@ public interface SysUserAssignmentRepository extends JpaRepository<SysUserAssign
      */
     @Query("select count(a) from SysUserAssignment a join a.roles r where r.id = :roleId")
     long countByRoleId(@Param("roleId") Long roleId);
+
+    /**
+     * 持有某角色的启用任职对应用户 id（去重）。
+     * B-09：替代 AssigneeResolver 中 findAll().stream().filter 全表扫描。
+     */
+    @Query("select distinct a.userId from SysUserAssignment a join a.roles r "
+            + "where r.id = :roleId and a.enabled = true")
+    List<Long> findUserIdsByRoleId(@Param("roleId") Long roleId);
+
+    /**
+     * 任职于某岗位的启用任职对应用户 id（去重）。B-09。
+     */
+    @Query("select distinct a.userId from SysUserAssignment a "
+            + "where a.post.id = :postId and a.enabled = true")
+    List<Long> findUserIdsByPostId(@Param("postId") Long postId);
+
+    /**
+     * 任职于某部门的启用任职对应用户 id（去重）。B-09。
+     */
+    @Query("select distinct a.userId from SysUserAssignment a "
+            + "where a.dept.id = :deptId and a.enabled = true")
+    List<Long> findUserIdsByDeptId(@Param("deptId") Long deptId);
 }

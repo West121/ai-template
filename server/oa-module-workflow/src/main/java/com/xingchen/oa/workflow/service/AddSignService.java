@@ -8,9 +8,11 @@ import com.xingchen.oa.workflow.entity.WfOperation;
 import com.xingchen.oa.workflow.repository.WfAddSignRepository;
 import com.xingchen.oa.workflow.support.WfAudit;
 import com.xingchen.oa.workflow.support.WfSupport;
+import jakarta.persistence.OptimisticLockException;
 import lombok.RequiredArgsConstructor;
 import org.flowable.engine.TaskService;
 import org.flowable.task.api.Task;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.type.TypeReference;
@@ -96,7 +98,9 @@ public class AddSignService {
         if (pos < chain.size() - 1) {
             Long next = chain.get(pos + 1);
             c.setPos(pos + 1);
-            repository.save(c);
+            // B-07：并发推进同一加签链时，@Version 保证只有一个 saveAndFlush 成功，另一个转 409。
+            // 先落库版本再改引擎任务，避免败者已 setAssignee 又回滚造成的引擎/审计不一致。
+            saveWithOptimisticLock(c);
             if (vars != null && !vars.isEmpty()) {
                 taskService.setVariables(task.getId(), vars); // 保留各审批人对表单的修改
             }
@@ -109,8 +113,20 @@ public class AddSignService {
             return true;
         }
         c.setStatus(WfAddSign.STATUS_DONE);
-        repository.save(c);
+        saveWithOptimisticLock(c);
         return false;
+    }
+
+    /**
+     * 版本敏感保存（B-07）：加签链并发推进冲突时 Hibernate 抛乐观锁异常，转 409。
+     * saveAndFlush 使 UPDATE 立即执行，冲突在此抛出并被捕获（否则将延迟到事务提交、越过 try）。
+     */
+    private void saveWithOptimisticLock(WfAddSign c) {
+        try {
+            repository.saveAndFlush(c);
+        } catch (OptimisticLockingFailureException | OptimisticLockException e) {
+            throw new BusinessException(409, "该任务正被其他人并发处理，请刷新后重试");
+        }
     }
 
     private String toJson(List<Long> ids) {

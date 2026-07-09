@@ -5,7 +5,6 @@ import com.xingchen.oa.system.entity.SysDept;
 import com.xingchen.oa.system.entity.SysPost;
 import com.xingchen.oa.system.entity.SysRole;
 import com.xingchen.oa.system.entity.SysUser;
-import com.xingchen.oa.system.entity.SysUserAssignment;
 import com.xingchen.oa.system.repository.SysDeptRepository;
 import com.xingchen.oa.system.repository.SysPostRepository;
 import com.xingchen.oa.system.repository.SysRoleRepository;
@@ -515,24 +514,20 @@ public class AssigneeResolver {
                 .orElse(null);
     }
 
-    /** 角色名→id（按 name 或 code 精确匹配，小表全扫）。 */
+    /** 角色名→id（按 name 或 code 精确匹配；B-09：条件查询替代全表扫描）。 */
     private Optional<Long> roleIdByName(String name) {
         if (name == null) {
             return Optional.empty();
         }
-        return roleRepository.findAll().stream()
-                .filter(r -> name.equals(r.getName()) || name.equals(r.getCode()))
-                .map(SysRole::getId).findFirst();
+        return roleRepository.findFirstByNameOrCode(name, name).map(SysRole::getId);
     }
 
-    /** 岗位名→id（按 name 或 code 精确匹配，小表全扫）。 */
+    /** 岗位名→id（按 name 或 code 精确匹配；B-09：条件查询替代全表扫描）。 */
     private Optional<Long> postIdByName(String name) {
         if (name == null) {
             return Optional.empty();
         }
-        return postRepository.findAll().stream()
-                .filter(p -> name.equals(p.getName()) || name.equals(p.getCode()))
-                .map(SysPost::getId).findFirst();
+        return postRepository.findFirstByNameOrCode(name, name).map(SysPost::getId);
     }
 
     /** 构造一个内存 OrgRef 节点 {kind,id} 供 expandOrgRef 复用。 */
@@ -591,23 +586,15 @@ public class AssigneeResolver {
             }
             case "DEPT" -> membersOfDept(id, out);
             case "ROLE" -> {
+                // B-09：按角色条件查询启用任职用户 id，替代 findAll().stream().filter 全表扫描
                 if (id != null) {
-                    assignmentRepository.findAll().stream()
-                            .filter(a -> Boolean.TRUE.equals(a.getEnabled())
-                                    && a.getRoles() != null
-                                    && a.getRoles().stream().anyMatch(r -> id.equals(r.getId())))
-                            .map(SysUserAssignment::getUserId)
-                            .forEach(out::add);
+                    out.addAll(assignmentRepository.findUserIdsByRoleId(id));
                 }
             }
             case "POST" -> {
-                // 角色岗位-岗位维度：任职岗位命中即入选
+                // 角色岗位-岗位维度：任职岗位命中即入选（B-09：条件查询替代全表扫描）
                 if (id != null) {
-                    assignmentRepository.findAll().stream()
-                            .filter(a -> Boolean.TRUE.equals(a.getEnabled())
-                                    && a.getPost() != null && id.equals(a.getPost().getId()))
-                            .map(SysUserAssignment::getUserId)
-                            .forEach(out::add);
+                    out.addAll(assignmentRepository.findUserIdsByPostId(id));
                 }
             }
             default -> log.warn("未知 ORG ref kind: {}", kind);
@@ -619,11 +606,8 @@ public class AssigneeResolver {
         if (deptId == null) {
             return;
         }
-        assignmentRepository.findAll().stream()
-                .filter(a -> a.getDept() != null && deptId.equals(a.getDept().getId())
-                        && Boolean.TRUE.equals(a.getEnabled()))
-                .map(SysUserAssignment::getUserId)
-                .forEach(out::add);
+        // B-09：按部门条件查询启用任职用户 id，替代 findAll().stream().filter 全表扫描
+        out.addAll(assignmentRepository.findUserIdsByDeptId(deptId));
     }
 
     /** 本节点历史办理人（历史优先用）。 */

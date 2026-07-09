@@ -1,0 +1,49 @@
+# ============================================================
+# 生产 profile（启动加 --spring.profiles.active=prod）
+# 安全要求（B-02）：本文件不得出现任何真实凭据/密钥，敏感项一律由环境变量注入。
+# 无默认值的 ${VAR} 占位符在变量缺失时解析失败 → 启动快速失败（即为设计意图）。
+#
+# 必填环境变量：
+#   OA_DB_URL / OA_DB_USERNAME / OA_DB_PASSWORD   数据库
+#   OA_JWT_SECRET                                  JWT HS256 密钥（>= 32 字符，建议 64+）
+#   OA_REDIS_HOST                                  Redis 地址
+# 可选环境变量：
+#   OA_REDIS_PORT（默认 6379）/ OA_REDIS_PASSWORD（默认空）
+#   OA_STORAGE_TYPE（local|minio|s3，默认 local）及 MINIO/S3 四项（见下方注释）
+#   XXL_JOB_ENABLED（默认 false）/ XXL_JOB_ADMIN_ADDRESSES / XXL_JOB_ACCESS_TOKEN
+# ============================================================
+
+spring:
+  datasource:
+    url: ${OA_DB_URL}
+    username: ${OA_DB_USERNAME}
+    password: ${OA_DB_PASSWORD}
+  data:
+    redis:
+      host: ${OA_REDIS_HOST}
+      port: ${OA_REDIS_PORT:6379}
+      password: ${OA_REDIS_PASSWORD:}
+  # 生产不托管 docker-compose（开发用 base 配置的 start_only）
+  docker:
+    compose:
+      enabled: false
+
+oa:
+  jwt:
+    # 无默认值：变量缺失时占位符解析失败，启动即报错（早于 OaJwtProperties 校验）
+    secret: ${OA_JWT_SECRET}
+  storage:
+    type: ${OA_STORAGE_TYPE:local}
+    # minio / s3 时通过环境变量注入（勿写死在文件里）：
+    # minio:
+    #   endpoint: ${OA_MINIO_ENDPOINT}
+    #   access-key: ${OA_MINIO_ACCESS_KEY}
+    #   secret-key: ${OA_MINIO_SECRET_KEY}
+    #   bucket: ${OA_MINIO_BUCKET}
+
+# XXL-Job：生产默认关闭执行器；启用时 admin 地址与 accessToken 必须来自环境变量
+xxl:
+  job:
+    enabled: ${XXL_JOB_ENABLED:false}
+    admin-addresses: ${XXL_JOB_ADMIN_ADDRESSES:}
+    access-token: ${XXL_JOB_ACCESS_TOKEN:}

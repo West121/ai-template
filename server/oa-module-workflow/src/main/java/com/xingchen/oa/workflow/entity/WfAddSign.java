@@ -6,6 +6,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
@@ -58,4 +59,11 @@ public class WfAddSign {
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private OffsetDateTime createdAt;
+
+    /**
+     * 乐观锁版本（B-07）：加签链 advance 并发推进冲突时由此保证只有一个成功。
+     */
+    @Version
+    @Column(nullable = false)
+    private Long version;
 }

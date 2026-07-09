@@ -12,6 +12,9 @@ import com.xingchen.oa.office.repository.MeetingRepository;
 import com.xingchen.oa.office.repository.MeetingRoomRepository;
 import com.xingchen.oa.office.support.SecuritySupport;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -78,6 +81,7 @@ public class MeetingService {
         if (request.startHour() < 0 || request.endHour() > 24 || request.startHour() >= request.endHour()) {
             throw new BusinessException(400, "会议时段不合法");
         }
+        // 快路径：内存预检，正常场景直接给出友好 409（不必等 DB 约束）。
         boolean conflict = meetingRepository
                 .findByRoomIdAndMeetingDateAndStatusNot(request.roomId(), request.date(), Meeting.STATUS_CANCELED)
                 .stream()
@@ -95,8 +99,15 @@ public class MeetingService {
         meeting.setOrganizerId(context.getUserId());
         meeting.setAttendeeIds("");
         meeting.setStatus(Meeting.STATUS_BOOKED);
-        Meeting saved = meetingRepository.save(meeting);
-        return toResponse(saved, room.getName(), context.getUserId());
+        // 并发防线（B-03）：两个请求同时通过上面的内存预检时，DB 的 EXCLUDE 排他约束
+        // （V16，excl_oa_meeting_room_time）只允许一个落库，另一个触发约束冲突 → 转 409。
+        // IDENTITY 主键使 save() 立即 INSERT，冲突在此抛出并被 Spring 翻译为 DataIntegrityViolationException。
+        try {
+            Meeting saved = meetingRepository.saveAndFlush(meeting);
+            return toResponse(saved, room.getName(), context.getUserId());
+        } catch (DataIntegrityViolationException e) {
+            throw new BusinessException(409, "该时段已被预订");
+        }
     }
 
     /**
@@ -104,20 +115,20 @@ public class MeetingService {
      */
     public PageResult<MeetingResponse> my(int pageNum, int pageSize) {
         Long userId = SecuritySupport.currentUser().getUserId();
-        List<Meeting> mine = meetingRepository
-                .findByOrganizerIdOrAttendeeIdsContaining(userId, String.valueOf(userId)).stream()
-                .filter(m -> involved(m, userId))
-                .sorted(Comparator.comparing(Meeting::getMeetingDate).reversed()
-                        .thenComparing(Meeting::getStartHour))
-                .toList();
-        int from = Math.min(Math.max(pageNum - 1, 0) * pageSize, mine.size());
-        int to = Math.min(from + pageSize, mine.size());
-        Map<Long, String> roomNames = roomRepository.findAll().stream()
+        // B-08：分页下推到 DB。findMine 用边界 LIKE 精确匹配 attendee 成员，等价原内存 involved() 过滤，
+        // 排序与 total 由数据库计算（不再全量加载后 subList）。
+        Sort sort = Sort.by(Sort.Order.desc("meetingDate"), Sort.Order.asc("startHour"));
+        Page<Meeting> page = meetingRepository.findMine(userId, String.valueOf(userId),
+                PageRequest.of(Math.max(pageNum - 1, 0), pageSize, sort));
+        List<Meeting> mine = page.getContent();
+        // 仅解析当前页涉及的会议室名（不再 findAll 全表）。
+        Map<Long, String> roomNames = roomRepository
+                .findAllById(mine.stream().map(Meeting::getRoomId).distinct().toList()).stream()
                 .collect(Collectors.toMap(MeetingRoom::getId, MeetingRoom::getName, (a, b) -> a));
-        List<MeetingResponse> list = mine.subList(from, to).stream()
+        List<MeetingResponse> list = mine.stream()
                 .map(m -> toResponse(m, roomNames.get(m.getRoomId()), userId))
                 .toList();
-        return new PageResult<>(list, mine.size(), pageNum, pageSize);
+        return new PageResult<>(list, page.getTotalElements(), pageNum, pageSize);
     }
 
     /**

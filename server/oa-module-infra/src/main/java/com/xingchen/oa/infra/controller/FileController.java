@@ -43,7 +43,11 @@ public class FileController {
 
     private final FileService fileService;
 
+    /**
+     * 分页（B-04）：登录即可调用；service 内做归属过滤 —— 无 system:file:list 且数据权限非 ALL 时仅返回本人上传的文件。
+     */
     @GetMapping
+    @PreAuthorize("isAuthenticated()")
     public R<PageResult<FileRecordResponse>> page(
             @RequestParam(required = false) String keyword,
             @RequestParam(defaultValue = "1") int pageNum,
@@ -57,9 +61,13 @@ public class FileController {
         return R.ok(fileService.upload(file));
     }
 
+    /**
+     * 下载（B-04 IDOR 修复）：仅上传者本人 / 持有 system:file:list / 数据权限 ALL 可下载，否则 403。
+     */
     @GetMapping("/{id}/download")
+    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<StreamingResponseBody> download(@PathVariable Long id) {
-        SysFile file = fileService.getOrThrow(id);
+        SysFile file = fileService.getReadableOrThrow(id);
         String name = StringUtils.hasText(file.getOriginalName()) ? file.getOriginalName() : "download";
         StreamingResponseBody body = out -> {
             try (InputStream in = fileService.openStream(file)) {

@@ -52,6 +52,7 @@ public class ApprovalController {
      * 我发起的（applicant_id = 当前用户，不走数据权限）。
      */
     @GetMapping("/my")
+    @PreAuthorize("hasAuthority('office:approval:list')")
     public R<PageResult<ApprovalResponse>> my(
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "1") int pageNum,
@@ -63,6 +64,7 @@ public class ApprovalController {
      * 我处理过的（依据操作日志）。
      */
     @GetMapping("/done")
+    @PreAuthorize("hasAuthority('office:approval:list')")
     public R<PageResult<ApprovalDoneResponse>> done(
             @RequestParam(defaultValue = "1") int pageNum,
             @RequestParam(defaultValue = "10") int pageSize) {
@@ -73,6 +75,7 @@ public class ApprovalController {
      * 抄送我的。
      */
     @GetMapping("/cc")
+    @PreAuthorize("hasAuthority('office:approval:list')")
     public R<PageResult<ApprovalCcResponse>> cc(
             @RequestParam(defaultValue = "1") int pageNum,
             @RequestParam(defaultValue = "10") int pageSize) {
@@ -80,12 +83,14 @@ public class ApprovalController {
     }
 
     @PostMapping("/cc/{approvalId}/read")
+    @PreAuthorize("hasAuthority('office:approval:list')")
     public R<Void> markCcRead(@PathVariable Long approvalId) {
         approvalService.markCcRead(approvalId);
         return R.ok();
     }
 
     @PostMapping("/cc/read-all")
+    @PreAuthorize("hasAuthority('office:approval:list')")
     public R<Void> markAllCcRead() {
         approvalService.markAllCcRead();
         return R.ok();
@@ -118,11 +123,18 @@ public class ApprovalController {
      * 撤回：仅本人且 PENDING。
      */
     @PostMapping("/{id}/withdraw")
+    @PreAuthorize("hasAuthority('office:approval:create')")
+    @OperLog(module = "审批", action = "撤回")
     public R<ApprovalResponse> withdraw(@PathVariable Long id) {
         return R.ok(approvalService.withdraw(id));
     }
 
+    /**
+     * 流转记录（B-05 越权修复）：service 内做归属校验，
+     * 仅发起人 / 审批人 / 抄送人 / 数据权限可见者可读，无关用户 403。
+     */
     @GetMapping("/{id}/logs")
+    @PreAuthorize("hasAuthority('office:approval:list')")
     public R<List<ApprovalLogResponse>> logs(@PathVariable Long id) {
         return R.ok(approvalService.logs(id));
     }

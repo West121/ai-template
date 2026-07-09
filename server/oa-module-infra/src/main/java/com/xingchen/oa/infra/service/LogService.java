@@ -1,8 +1,9 @@
 package com.xingchen.oa.infra.service;
 
 import com.xingchen.oa.common.core.PageResult;
+import com.xingchen.oa.infra.dto.LoginLogResponse;
+import com.xingchen.oa.infra.dto.OperLogResponse;
 import com.xingchen.oa.infra.dto.RuntimeLogResponse;
-import com.xingchen.oa.infra.entity.SysLoginLog;
 import com.xingchen.oa.infra.entity.SysOperLog;
 import com.xingchen.oa.infra.repository.SysLoginLogRepository;
 import com.xingchen.oa.infra.repository.SysOperLogRepository;
@@ -42,15 +43,16 @@ public class LogService {
     private String logFileName;
 
     @Transactional(readOnly = true)
-    public PageResult<SysLoginLog> loginLogs(String keyword, int pageNum, int pageSize) {
+    public PageResult<LoginLogResponse> loginLogs(String keyword, int pageNum, int pageSize) {
         Pageable pageable = PageRequest.of(Math.max(pageNum - 1, 0), pageSize, Sort.by(Sort.Order.desc("id")));
-        return PageResult.from(StringUtils.hasText(keyword)
+        return PageResult.from((StringUtils.hasText(keyword)
                 ? loginLogRepository.findByUsernameContaining(keyword, pageable)
-                : loginLogRepository.findAll(pageable));
+                : loginLogRepository.findAll(pageable))
+                .map(LoginLogResponse::of));
     }
 
     @Transactional(readOnly = true)
-    public PageResult<SysOperLog> operLogs(String keyword, String module, int pageNum, int pageSize) {
+    public PageResult<OperLogResponse> operLogs(String keyword, String module, int pageNum, int pageSize) {
         Pageable pageable = PageRequest.of(Math.max(pageNum - 1, 0), pageSize, Sort.by(Sort.Order.desc("id")));
         Specification<SysOperLog> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
@@ -66,7 +68,7 @@ public class LogService {
             }
             return cb.and(predicates.toArray(new Predicate[0]));
         };
-        return PageResult.from(operLogRepository.findAll(spec, pageable));
+        return PageResult.from(operLogRepository.findAll(spec, pageable).map(OperLogResponse::of));
     }
 
     /**

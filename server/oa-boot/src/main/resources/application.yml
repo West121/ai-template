@@ -5,9 +5,10 @@ spring:
   application:
     name: oa-platform
   datasource:
-    url: jdbc:postgresql://localhost:15432/oa_platform
-    username: oa
-    password: oa123456
+    # 默认值仅用于本地 docker-compose 开发环境；生产走 application-prod.yml + 环境变量（B-02）
+    url: ${OA_DB_URL:jdbc:postgresql://localhost:15432/oa_platform}
+    username: ${OA_DB_USERNAME:oa}
+    password: ${OA_DB_PASSWORD:oa123456}
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -18,8 +19,9 @@ spring:
     locations: classpath:db/migration
   data:
     redis:
-      host: localhost
-      port: 26379
+      host: ${OA_REDIS_HOST:localhost}
+      port: ${OA_REDIS_PORT:26379}
+      password: ${OA_REDIS_PASSWORD:}
   docker:
     compose:
       file: ./docker-compose.yml
@@ -52,8 +54,10 @@ oa:
     #   secret-key: minioadmin
     #   bucket: oa-files
   jwt:
-    # HS256 密钥，>= 64 字符；生产环境务必通过环境变量覆盖
-    secret: xK9mP2vQ7rT4wY6zB1nC3eF5hJ8kL0aD2gS4uV6xW8yZ1bE3cH5jM7pR9tN4qA6s
+    # HS256 密钥（>= 32 字符，建议 64+）。安全要求（B-01）：仓库不内置默认密钥，
+    # 一律通过环境变量 OA_JWT_SECRET 注入；未设置时 OaJwtProperties 启动校验快速失败。
+    # 本地开发示例：export OA_JWT_SECRET=$(openssl rand -hex 32)
+    secret: ${OA_JWT_SECRET:}
     expire-minutes: 720
   # AI 审批节点（P3）：默认关闭 → AI 节点走规则模拟并在意见明示「AI模拟」。
   # 启用真实调用：enabled=true 且配置 api-key（DeepSeek / OpenAI / 任意 OpenAI 兼容 chat completions 网关）。
@@ -87,9 +91,10 @@ logging:
 # XXL-Job 执行器（调度中心由 docker-compose 的 xxl-job-admin 提供，默认账号 admin/123456）
 xxl:
   job:
-    enabled: true
-    admin-addresses: http://localhost:8082/xxl-job-admin
-    access-token: default_token
+    enabled: ${XXL_JOB_ENABLED:true}
+    admin-addresses: ${XXL_JOB_ADMIN_ADDRESSES:http://localhost:8082/xxl-job-admin}
+    # 默认值仅匹配本地 docker-compose 的 xxl-job-admin；生产必须用环境变量覆盖（B-02）
+    access-token: ${XXL_JOB_ACCESS_TOKEN:default_token}
     executor:
       appname: oa-executor
       port: 9999
