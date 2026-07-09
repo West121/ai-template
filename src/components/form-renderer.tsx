@@ -948,7 +948,10 @@ function RichTextEditor({
 }) {
   const ref = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
-    if (ref.current && ref.current.innerHTML !== value) ref.current.innerHTML = value
+    if (!ref.current) return
+    // 编辑装载侧同样净化：已存 HTML 可能携带 XSS 向量（如 <img onerror>），写入 innerHTML 前必须过 sanitizeHtml
+    const clean = sanitizeHtml(value)
+    if (ref.current.innerHTML !== clean) ref.current.innerHTML = clean
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const exec = (cmd: string) => {
