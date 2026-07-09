@@ -129,7 +129,7 @@
 - ✅ **N-B-00**（spike）**通过 2026-07-09**：LiteFlow **2.16.0** 在 SB4.0.1/Java21 可用，四项实测全绿，无需回退。**坐标修正：SB4 用 `liteflow-spring-boot4-starter:2.16.0`（非普通 starter）**；`@ScriptBean` 门面访问 Spring Bean 验证成功（Groovy/GraalJS/Jython 均通过）；Jython 2.7.4 在 Java21 跑通。依赖 +~118MB（Jython 49 / GraalJS 63 / 其余 ~9）。
 - 🔵 **N-B-01（切片1+2a ✅，端到端验证通过）** `GraphToBpmnConverter` 图直译（与旧路径并存）：start/end(含terminate)/审批userTask/排它·并行·包容网关/条件边(结构化→UEL+expression逃生口)/坐标生成DI，77 单测全过。部署端点 `POST /api/wf/models/graph/deploy`(ProcessDefService TYPE_GRAPH 分支复用 Flowable 部署链)。**主控 E2E 实证 8/8**：ProcessModel→部署 Flowable→发起→INITIATOR 解析→审批→条件网关(days>3 走 e3)→APPROVED、highlight 路径正确。**切片3 待办**：subProcess、timerCatch/Boundary/cycle、callActivity、OA行为节点(cc/ai/webhook/serviceTask)、.bpmn 导入导出端点、模型级校验器(附录C.3/C.4)。
 - ✅ **N-B-02** .bpmn 导入/导出端点（磐石完成，E2E 12/12）：`GET /api/wf/models/{id}/bpmn` 导出 + `POST /api/wf/models/import`；`BpmnToGraphConverter` 全类型逆向（条件读 oa:condition 无损、坐标从 DI 还原）。往返 ProcessModel→XML→ProcessModel 无损。111 单测。
-- ⬜ **N-B-03** 表单字段清单端点 `GET /api/wf/forms/{formKey}/fields`；`wf_form_def` 增 `form_type` + CODE 仅存清单。
+- ✅ **N-B-03** 表单字段清单端点（磐石完成，115 单测）：`GET /api/wf/forms/{formKey}/fields` + `FormManifestExtractor`（schemaJson→扁平字段，容器下钻/子表单前缀/字典 options）+ V19（form_type/field_manifest）。CODE 清单以前端 registry 为准。真 E2E 随 N-F-07。
 - ✅ **N-B-04** `ExpressionService`（Aviator 5.4.3，强沙箱：解释模式+禁 new/反射/静态/循环+空 ALLOWED_CLASS_SET）+ `@FormulaFunction` 注册器 + 示例函数（deptLeader/dictLabel/workDays）+ exprEval 网关门面；GraphToBpmnConverter 边 expression 走 `${exprEval.evalBoolean}`。98 单测 + E2E 7/7（高级条件运行时 Aviator 路由、自定义函数、沙箱拒 new）。
 - ✅ **N-B-05/06/07** LiteFlow 脚本引擎 Tier2（磐石完成，E2E 7/7）：LiteFlow 2.16.0（spring-boot4-starter + groovy/graaljs/python，`enable=false` 仅用脚本 SPI，全应用装配 15s 启动）+ `ScriptService`（三语言 + `@ScriptBean("spring")` 门面调任意 Bean + 执行超时）+ 治理（`wf:script:write` V18、`wf_script_exec_log` 审计、诚实标注非沙箱）+ scriptTask→`wfScriptDelegate` + `POST /api/wf/script/test-run`。E2E：脚本节点运行时经门面调 Bean + 写 vars → 下游 Aviator 网关路由；test-run groovy/GraalJS 均成功。ScriptServiceTest 6/6。前端编辑器 = N-F-09。
 - ✅ **N-B-06** 脚本治理（随 N-B-05/06/07 完成）。
@@ -150,7 +150,7 @@
 ### UI（丹青）
 
 - ✅ **N-U-01** 新设计器视觉/交互规范 `docs/design/flow-designer-ui-spec.md`（丹青完成，22 条走查/2 P0/4 P1）。**主控裁定**：分歧A=A1（三网关统一 amber 色相 + 内部标记 X/＋/◯ 区分，BPMN 标准）；分歧B=cc/ai/webhook teal 集成家族、AI 更亮一档。
-- ⬜ **N-U-01-fix**（疾风，设计器 UI 打磨专项，脚本编辑器之后）落地走查修复：**W-03(P0,跨端)** 前端把真实 size 写进 ProcessModel（后端 DI 默认仅兜底）；**W-14(P0)** 校验错误用 nodeId/edgeId 画布高亮 + 走 `--destructive`；W-01 节点分类色相（按裁定 A1/B）；W-10 边选中反馈、W-11 连线拖拽实时 isValidConnection、W-12 NodeToolbar 删除/复制；术语 W-18/19。
+- ✅ **N-U-01-fix**（疾风完成，走查 18/22）：W-03 真实 size 写模型（跨端 DI 对齐）、W-14 校验画布高亮（瞬态不泄漏）、配色裁定 A1/B、W-10/11/12 边选中/isValidConnection/NodeToolbar、术语统一、snapToGrid。tsc/lint/vitest 绿。余 W-02(部分)/W-09/W-22 次要推迟。
 - ⬜ **N-U-02** 公式/脚本编辑器 UX 规范（函数/字段选择器、校验提示、测试运行结果态）。
 
 ### 测试（鹰眼）
