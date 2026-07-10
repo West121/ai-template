@@ -187,7 +187,7 @@ ProcessDef = {id,defCode,name,category,icon,formCode,formVersion,designerType:DI
       - **办理人类型（精简后，按我们的组织模型）**：`kind:ACCOUNT|ROLE|POST|DEPT|LEADER|FORM_FIELD|INITIATOR|FORMULA`（兼容旧 `type`；旧 `FIND_LEADER` 并入 `LEADER`）：
         - `ACCOUNT`（指定人员）→ refs 按 id/username 取用户；`ROLE`（角色）→ 角色全员；`POST`（岗位）→ **优先读 `postName`(岗位名或编码)查 sys_post→展开该岗位任职用户**，再叠加 refs 里的 POST 引用；`DEPT`（部门）→ 部门全员（refs.kind 缺省按规则类型推断，ref 自带 kind 优先）；
         - `LEADER.level:N` → 沿申请人部门 ancestors 上溯第 N 级主管；`FORM_FIELD.field` → 表单人员字段；`INITIATOR` → 发起人本人；
-        - `FORMULA.formula:"<表达式>"` → **自定义公式**（受限求值引擎）：取人函数 `USER(id...) / ROLE("名称") / DEPT(id) / POST("名称") / DEPT_LEADER(level) / INITIATOR()`、逻辑 `IF(cond,a,b) / AND / OR / NOT`（亦支持中缀 `&& || !`）、比较 `> < >= <= == !=`，操作数含表单字段标识符/数字/字符串/true·false。示例 `IF(days>3, ROLE("总经理"), DEPT_LEADER(1))`。求值失败降级空集 + 日志。
+        - `FORMULA.formula:"<表达式>"` → **自定义公式**（受限求值引擎）：取人函数 `USER(id...) / ROLE("名称") / DEPT(id) / POST("名称") / DEPT_LEADER(level) / INITIATOR()`、逻辑 `IF(cond,a,b) / AND / OR / NOT`（亦支持中缀 `&& || !`）、比较 `> < >= <= == !=`，操作数含表单字段标识符/数字/字符串/true·false。示例 `IF(days>3, ROLE("总经理"), DEPT_LEADER(1))`。**另可调用后端可扩展的 `@FormulaFunction` 函数**（`workDays/deptLeader/dictLabel` 及业务自定义，与计算/条件公式共享同一批），如 `IF(workDays(startDate,endDate) > 3, ROLE("总经理"), DEPT_LEADER(1))`；见「Tier 1 公式引擎」。求值失败降级空集 + 日志。
         - **已下线**：`GROUP / UNIT / SERVICE_API / ROLE_POST`——收到时按空/退化处理不报错（refs 自带 kind 仍可展开），前端不再产出。
         - **来源** `source:RELATED_TO_APPLICANT` + `sourceValue:APPLICANT|APPLICANT_DEPT|APPLICANT_DEPT_LEADER|APPLICANT_DEPT_LEADER_2...` 仍兼容，置 source 后优先于 kind/refs
       - **多人模式统一**：以基础属性 `multiMode`(ANY 或签/ALL 会签/SEQUENCE 依次/VOTE 票签) 为准；旧高级「办理选项签署模式」`handleOptions.signMode` 已删，后端不再读取
@@ -328,6 +328,13 @@ NotifyItem = {id,type,title,content,procInstId,readFlag,createdAt}
 - 触发 `{type:"trigger",name,triggerType:"IMMEDIATE"|"TIMER",handler?,webhookUrl?,config?,timer?}` → serviceTask delegateExpression `wfTriggerDelegate`：handler 命中注册的 `WfTrigger` bean(可写流程变量影响路由)，否则 webhookUrl 异步 POST；TIMER 前置一个 timer 事件。内置示例触发器 bean `wfEchoTrigger`。SPI：实现 `WfTrigger` 注册 bean，节点 handler 指向 bean 名
 - AI 审批 `{type:"ai",name,model?,systemPrompt?,formContext?:[字段],outputMap?:{approve/reject/route→变量}}` → serviceTask delegateExpression `wfAiApprovalDelegate`：组装表单上下文交 `AiApprovalProvider` 决策 → 写 wf_operation(actor=AI,action=AI_APPROVE,意见) + 按 outputMap 设流程变量(供后续排它网关路由)。**AI SPI**：默认实现 enabled 且有 key 走 OpenAI 兼容 chat completions；无 key 降级规则模拟并在意见明示「AI模拟」。配置 `oa.ai.{enabled,base-url,api-key,model,timeout-seconds}`(默认 enabled=false)
 - 节点表单字段权限 `approval` 节点 `formPerms:{field:"HIDDEN"|"READ"|"EDIT"}` → 存扩展元素，详情/待办按当前节点返回 nodeFormPerms，前端 FormRenderer 按此显隐/只读
+
+### Tier 1 公式引擎（Aviator 安全表达式，N-B-04；两套公式共享同一批可扩展函数）
+公式 = 安全、无副作用、白名单纯函数。**两套公式共用同一批 `@FormulaFunction` 扩展函数**：
+- **计算/条件公式**：跑 Aviator `ExpressionService`（内置运算 + 全部 `@FormulaFunction`）。
+- **取人办理人公式**（assignee `FORMULA` 来源）：跑工作流受限求值器 `FormulaEvaluator`（取人 `USER/ROLE/DEPT/POST/DEPT_LEADER/INITIATOR` + 逻辑 `IF/AND/OR/NOT` + 比较），**它不认识的函数名（如 `workDays/deptLeader/dictLabel` 及任意业务自定义 `@FormulaFunction`）委托到 Aviator 引擎求值**。故 `IF(workDays(startDate,endDate) > 3, ROLE("总经理"), DEPT_LEADER(1))` 可求值；自定义函数直接返回用户 id（Long）时，顶层归约为单人办理人。业务方新增一个 `@FormulaFunction` Bean → 两套公式皆自动可用。
+- POST `/api/wf/expression/eval` {expr,context?:{字段:值},asBoolean?}【P:wf:instance:admin】→ 求值结果（asBoolean=true 按真值语义返回 boolean）；表达式沙箱（禁 new/反射/静态/循环）。
+- GET `/api/wf/expression/functions`【登录即可】→ `R<List<FnMeta>>`，`FnMeta={name,signature,category,description}`。合并「取人公式专属项」（category=`ASSIGNEE`/`LOGIC`/`COMPARE`，静态镜像 `FormulaEvaluator` 内置函数）与「后端可扩展函数」（category=`CUSTOM`，遍历 `@FormulaFunction` 注册表：name 取 `AbstractFunction#getName()`，signature/description 拆自注解 `value` 的 `→` 前后）。供前端「取人公式」与「计算/条件公式」两个编辑器动态展示函数面板。
 
 ### Tier 2 脚本引擎（LiteFlow，N-B-05/06/07；GRAPH 设计器 scriptTask）
 后端脚本 = 完整应用权限、可有副作用，**非沙箱**（诚实标注）。治理：作者权限收口 `wf:script:write`（仅管理员）+ 脚本是部署态工件（不接受运行时用户注入）+ 每次执行落审计 `wf_script_exec_log`（V18）+ 执行超时看护。

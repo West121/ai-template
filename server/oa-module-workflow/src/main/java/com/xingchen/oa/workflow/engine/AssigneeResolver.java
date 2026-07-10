@@ -10,6 +10,8 @@ import com.xingchen.oa.system.repository.SysPostRepository;
 import com.xingchen.oa.system.repository.SysRoleRepository;
 import com.xingchen.oa.system.repository.SysUserAssignmentRepository;
 import com.xingchen.oa.system.repository.SysUserRepository;
+import com.xingchen.oa.workflow.engine.expression.ExpressionService;
+import com.xingchen.oa.workflow.engine.expression.FormulaFunctionRegistrar;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.flowable.bpmn.model.BpmnModel;
@@ -48,6 +50,10 @@ public class AssigneeResolver {
     private final SysRoleRepository roleRepository;
     private final SysPostRepository postRepository;
     private final ObjectMapper objectMapper;
+    // 取人公式共享后端可扩展函数：registrar 判定名称是否为 @FormulaFunction 扩展函数，
+    // expressionService 实际求值（与计算/条件公式同一引擎、同一批函数）。
+    private final FormulaFunctionRegistrar formulaFunctionRegistrar;
+    private final ExpressionService expressionService;
 
     /**
      * 由 BPMN 多实例 collection 表达式调用：{@code ${wfAssigneeResolver.resolve(execution,'nodeId')}}。
@@ -393,6 +399,17 @@ public class AssigneeResolver {
                         out.add(initiatorId);
                     }
                     return out;
+                }
+
+                @Override
+                public Object customFunction(String name, List<Object> args) {
+                    // 非取人/逻辑内置函数：委托给后端可扩展的 @FormulaFunction 注册表求值
+                    // （workDays/deptLeader/dictLabel 及业务自定义函数，与计算/条件公式共享）。
+                    // 未注册者按未知函数抛出（保持原「未知公式函数」失败语义）。
+                    if (!formulaFunctionRegistrar.hasFunction(name)) {
+                        throw new IllegalStateException("未知公式函数: " + name);
+                    }
+                    return expressionService.callFunction(name, args);
                 }
             });
         } catch (Exception e) {

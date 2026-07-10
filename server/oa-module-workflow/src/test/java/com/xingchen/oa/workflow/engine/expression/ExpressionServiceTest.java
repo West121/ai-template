@@ -9,6 +9,7 @@ import com.xingchen.oa.workflow.engine.expression.functions.WorkDaysFunction;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -93,6 +94,22 @@ class ExpressionServiceTest {
         assertEquals(15L, svc.eval("triple(5)", Map.of()));
         // 自定义函数可与内置运算/context 组合
         assertEquals(21L, svc.eval("triple(days) + 6", Map.of("days", 5)));
+    }
+
+    /* ---------- callFunction：按名调用（取人公式委托入口，实参为已求值 Java 值） ---------- */
+
+    @Test
+    void callFunctionInvokesRegisteredFunction() {
+        // 取人公式把它不认识的 workDays 委托到本引擎：实参已是 Java 值（String 日期）
+        assertEquals(5L, svc.callFunction("workDays", List.of("2026-07-06", "2026-07-10")));
+        assertEquals(15L, svc.callFunction("triple", List.of(5)));
+        // 与计算/条件公式（svc.eval("workDays(...)")）为同一函数实例——共享同一批可扩展函数
+    }
+
+    @Test
+    void callFunctionUnknownThrows() {
+        assertThrows(BusinessException.class, () -> svc.callFunction("noSuchFn", List.of(1)));
+        assertThrows(BusinessException.class, () -> svc.callFunction(null, List.of()));
     }
 
     /* ---------- 沙箱：new / 反射被拒 ---------- */

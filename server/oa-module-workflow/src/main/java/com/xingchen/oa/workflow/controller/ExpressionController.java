@@ -2,13 +2,17 @@ package com.xingchen.oa.workflow.controller;
 
 import com.xingchen.oa.common.core.R;
 import com.xingchen.oa.workflow.engine.expression.ExpressionService;
+import com.xingchen.oa.workflow.engine.expression.FnMeta;
+import com.xingchen.oa.workflow.engine.expression.FormulaCatalog;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -21,6 +25,17 @@ import java.util.Map;
 public class ExpressionController {
 
     private final ExpressionService expressionService;
+    private final FormulaCatalog formulaCatalog;
+
+    /**
+     * 公式函数列表（登录即可）：取人/逻辑/比较内置项 + 后端可扩展的 {@code @FormulaFunction} 函数（CUSTOM），
+     * 供前端「取人公式」与「计算/条件公式」两个编辑器动态展示。两套公式共享同一批 CUSTOM 函数。
+     */
+    @GetMapping("/functions")
+    @PreAuthorize("isAuthenticated()")
+    public R<List<FnMeta>> functions() {
+        return R.ok(formulaCatalog.listFunctions());
+    }
 
     /**
      * 求值表达式。请求体：{@code {expr:"...", context:{字段:值,...}, asBoolean?:true}}。

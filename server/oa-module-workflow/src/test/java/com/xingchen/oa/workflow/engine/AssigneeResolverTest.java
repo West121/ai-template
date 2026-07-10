@@ -10,6 +10,8 @@ import com.xingchen.oa.system.repository.SysPostRepository;
 import com.xingchen.oa.system.repository.SysRoleRepository;
 import com.xingchen.oa.system.repository.SysUserAssignmentRepository;
 import com.xingchen.oa.system.repository.SysUserRepository;
+import com.xingchen.oa.workflow.engine.expression.ExpressionService;
+import com.xingchen.oa.workflow.engine.expression.FormulaFunctionRegistrar;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.ExtensionElement;
 import org.flowable.bpmn.model.Process;
@@ -67,16 +69,22 @@ class AssigneeResolverTest {
     @Mock SysUserAssignmentRepository assignmentRepository;
     @Mock SysRoleRepository roleRepository;
     @Mock SysPostRepository postRepository;
+    @Mock FormulaFunctionRegistrar formulaFunctionRegistrar;
 
     private final ObjectMapper realMapper = new ObjectMapper();
     private final JsonMapper jsonMapper = JsonMapper.builder().build();
+    // 真实 Aviator 引擎（沙箱）；本测试的 FORMULA 用例仅用内置取人函数（ROLE 等），
+    // 不触发自定义函数委托，故引擎无需注册扩展函数（扩展函数路径由 ExpressionServiceTest/
+    // FormulaEvaluatorTest 覆盖）。
+    private final ExpressionService expressionService = new ExpressionService();
 
     private AssigneeResolver resolver;
 
     @BeforeEach
     void setUp() {
         resolver = new AssigneeResolver(repositoryService, historyService, userRepository,
-                deptRepository, assignmentRepository, roleRepository, postRepository, realMapper);
+                deptRepository, assignmentRepository, roleRepository, postRepository, realMapper,
+                formulaFunctionRegistrar, expressionService);
     }
 
     private JsonNode json(String s) {

@@ -2,8 +2,11 @@ package com.xingchen.oa.workflow.engine;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.DayOfWeek;
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -65,6 +68,32 @@ class FormulaEvaluatorTest {
         @Override
         public Set<Long> initiator() {
             return set(1L);
+        }
+
+        /**
+         * 模拟「委托给后端可扩展 @FormulaFunction 求值」：仅认得 workDays（纯计算，与真实
+         * WorkDaysFunction 同语义）与 deptLeader（返回单个用户 id）；其余未知函数抛异常，
+         * 等价于运行时 registrar.hasFunction 为 false 的路径。
+         */
+        @Override
+        public Object customFunction(String name, List<Object> args) {
+            if ("workDays".equals(name) && args.size() == 2) {
+                LocalDate s = LocalDate.parse(String.valueOf(args.get(0)));
+                LocalDate e = LocalDate.parse(String.valueOf(args.get(1)));
+                long count = 0;
+                for (LocalDate d = s; !d.isAfter(e); d = d.plusDays(1)) {
+                    DayOfWeek dow = d.getDayOfWeek();
+                    if (dow != DayOfWeek.SATURDAY && dow != DayOfWeek.SUNDAY) {
+                        count++;
+                    }
+                }
+                return count;
+            }
+            if ("deptLeader".equals(name) && args.size() == 1) {
+                // 返回单个用户 id（Long），验证自定义函数可直接返回人
+                return 77L;
+            }
+            throw new IllegalStateException("未知公式函数: " + name);
         }
     }
 
@@ -226,6 +255,38 @@ class FormulaEvaluatorTest {
         assertEquals(set(1L), FormulaEvaluator.eval("IF(AND(true, true), INITIATOR(), ROLE(\"总经理\"))", c));
         assertEquals(set(100L), FormulaEvaluator.eval("IF(OR(false, false), INITIATOR(), ROLE(\"总经理\"))", c));
         assertEquals(set(1L), FormulaEvaluator.eval("IF(NOT(false), INITIATOR(), ROLE(\"总经理\"))", c));
+    }
+
+    /* ---------- 取人公式接入后端可扩展 @FormulaFunction（workDays/deptLeader/自定义） ---------- */
+
+    @Test
+    void customFunctionInIfCondition() {
+        // 目标用例：IF 条件里调用后端扩展函数 workDays，> 3 命中 true 分支 ROLE("总经理")
+        StubContext c = ctx();
+        Set<Long> r = FormulaEvaluator.eval(
+                "IF(workDays('2026-07-06','2026-07-10') > 3, ROLE(\"总经理\"), DEPT_LEADER(1))", c);
+        assertEquals(set(100L), r); // 2026-07-06~10 = 5 工作日 > 3 → 总经理(100)
+    }
+
+    @Test
+    void customFunctionConditionFalseTakesElseBranch() {
+        StubContext c = ctx();
+        Set<Long> r = FormulaEvaluator.eval(
+                "IF(workDays('2026-07-06','2026-07-08') > 3, ROLE(\"总经理\"), DEPT_LEADER(1))", c);
+        assertEquals(set(50L), r); // 07-06~08 = 3 工作日，不 > 3 → DEPT_LEADER(1)=50
+    }
+
+    @Test
+    void customFunctionReturningUserIdIsAssignee() {
+        // 自定义函数直接返回单个用户 id（Long）→ 顶层归约为单人集合
+        StubContext c = ctx();
+        assertEquals(set(77L), FormulaEvaluator.eval("deptLeader(1)", c));
+    }
+
+    @Test
+    void unknownCustomFunctionThrows() {
+        // 既非取人/逻辑内置、又非已注册扩展 → 抛异常（AssigneeResolver 降级空集）
+        assertThrows(RuntimeException.class, () -> FormulaEvaluator.eval("FOO(1)", ctx()));
     }
 
     /* ---------- 解析错误抛异常（由调用方 try/catch 降级） ---------- */

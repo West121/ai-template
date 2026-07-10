@@ -90,6 +90,39 @@ public class ExpressionService {
     }
 
     /**
+     * 按名调用一个已注册函数（含所有 {@code @FormulaFunction} 扩展函数），实参为已求值的 Java 值。
+     * 用于「取人公式」把它不认识的函数名委托到本引擎求值——两套公式（取人 / 计算·条件）由此
+     * 共享同一批可扩展函数：业务新增一个 {@code @FormulaFunction} Bean，两处皆可用。
+     *
+     * <p>实现：把实参放入上下文变量（{@code __arg0..__argN}），拼成 {@code fn(__arg0,...)} 交
+     * {@link #eval} 求值——表达式串稳定，复用编译缓存；实参作为变量传入，绝无表达式注入面。
+     *
+     * @param functionName 函数名（大小写敏感，与 {@code AbstractFunction#getName()} 一致）
+     * @param args         已求值实参（Long/Double/Boolean/String/LocalDate/…）
+     * @return 函数返回值（原始 Java 对象）
+     * @throws BusinessException 函数名为空、函数未注册或求值异常
+     */
+    public Object callFunction(String functionName, java.util.List<Object> args) {
+        if (functionName == null || functionName.isBlank()) {
+            throw new BusinessException(400, "函数名为空");
+        }
+        StringBuilder expr = new StringBuilder(functionName).append('(');
+        Map<String, Object> ctx = new java.util.HashMap<>();
+        if (args != null) {
+            for (int i = 0; i < args.size(); i++) {
+                if (i > 0) {
+                    expr.append(',');
+                }
+                String key = "__arg" + i;
+                expr.append(key);
+                ctx.put(key, args.get(i));
+            }
+        }
+        expr.append(')');
+        return eval(expr.toString(), ctx);
+    }
+
+    /**
      * 求值并按「真值」语义归约为 boolean（供高级网关条件判定）：
      * Boolean 直用；Number 非 0 为真；String 非空白为真；null 为假；其余非 null 为真。
      */

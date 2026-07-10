@@ -36,6 +36,14 @@ public final class FormulaEvaluator {
         Set<Long> deptLeader(int level);
 
         Set<Long> initiator();
+
+        /**
+         * 未知函数（非取人/逻辑内置函数）委托求值：交由后端可扩展的 {@code @FormulaFunction} 注册表
+         * （与计算/条件公式共用同一批函数，如 {@code workDays/deptLeader/dictLabel} 及业务自定义函数）。
+         * 参数在调用前已全部求值为 Java 值传入。若该名称未注册为自定义函数应抛异常
+         * （由调用方按未知函数处理），求值失败亦抛异常（由 AssigneeResolver 统一降级空集）。
+         */
+        Object customFunction(String name, List<Object> args);
     }
 
     private final Context ctx;
@@ -61,20 +69,26 @@ public final class FormulaEvaluator {
         return toUserSet(v);
     }
 
-    @SuppressWarnings("unchecked")
     private static Set<Long> toUserSet(Object v) {
-        if (v instanceof Set<?> s) {
-            Set<Long> out = new LinkedHashSet<>();
-            for (Object o : s) {
-                if (o instanceof Long l) {
-                    out.add(l);
-                } else if (o instanceof Number n) {
-                    out.add(n.longValue());
-                }
+        Set<Long> out = new LinkedHashSet<>();
+        collectIds(v, out);
+        return out;
+    }
+
+    /**
+     * 归约为用户 id 集合：集合/可迭代逐项归约；单个数字（如自定义函数 {@code deptLeader(user)} 直接返回
+     * 负责人 id）视为单人。非数字/非集合（布尔比较结果、字符串等）不产人 → 空集（由调用方再降级）。
+     */
+    private static void collectIds(Object v, Set<Long> out) {
+        if (v instanceof Long l) {
+            out.add(l);
+        } else if (v instanceof Number n) {
+            out.add(n.longValue());
+        } else if (v instanceof Iterable<?> it) {
+            for (Object o : it) {
+                collectIds(o, out);
             }
-            return out;
         }
-        return new LinkedHashSet<>();
     }
 
     /* ------------ 递归下降 ------------ */
@@ -242,7 +256,11 @@ public final class FormulaEvaluator {
             case "NOT" -> {
                 return !(args.size() == 1 && truthy(args.get(0)));
             }
-            default -> throw new IllegalStateException("未知公式函数: " + name);
+            // 非取人/逻辑内置函数：委托给后端可扩展的 @FormulaFunction 注册表求值
+            // （与计算/条件公式共享同一批函数）。未注册者由 Context 抛异常，按未知函数处理。
+            default -> {
+                return ctx.customFunction(name, args);
+            }
         }
     }
 
