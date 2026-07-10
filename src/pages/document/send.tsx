@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Plus } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
@@ -22,9 +22,21 @@ export default function SendPage() {
   const [filter, setFilter] = useState<GwFilterState>(EMPTY_FILTER)
   const [createOpen, setCreateOpen] = useState(false)
 
+  const [searchParams, setSearchParams] = useSearchParams()
+
   const offline = useAuthStore((s) => s.offline)
   const activeAssignmentId = useAuthStore((s) => s.activeAssignmentId)
   const canDraft = useHasPerm("office:doc:send")
+
+  // 从「发起申请」跳转（formSubmitPath=/document/send?new=1）：自动打开拟稿弹窗并清掉 query，避免刷新/返回重复弹
+  useEffect(() => {
+    if (searchParams.get("new") === "1") {
+      setCreateOpen(true)
+      const next = new URLSearchParams(searchParams)
+      next.delete("new")
+      setSearchParams(next, { replace: true })
+    }
+  }, [searchParams, setSearchParams])
 
   const load = useCallback(async () => {
     setLoading(true)

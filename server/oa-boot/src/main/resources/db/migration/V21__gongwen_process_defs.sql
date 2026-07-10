@@ -19,7 +19,10 @@
 --   仅 wf_*。ddl-auto=validate 不涉本表结构变更。
 -- ============================================================
 
-INSERT INTO wf_process_ext (def_code, name, category, designer_type, designer_json, status, form_type, created_at)
+-- form_type=CUSTOM + form_submit_path：发起页(start.tsx)对 CUSTOM 表单不弹动态表单，
+-- 而是 navigate 到 form_submit_path（公文拟稿/登记单），经 /api/office/doc/* 正确建 oa_document + 占号。
+-- startable() 映射 StartableItem.formSubmitPath <- 本表 form_submit_path 列。
+INSERT INTO wf_process_ext (def_code, name, category, designer_type, designer_json, status, form_type, form_submit_path, created_at)
 VALUES
 ('gw_send', '发文办理单', '公文', 'GRAPH',
 '{"schemaVersion":1,"key":"gw_send","name":"发文办理单","nodes":[
@@ -41,7 +44,7 @@ VALUES
 {"id":"se7","source":"seal","target":"publish"},
 {"id":"se8","source":"publish","target":"end"}
 ]}',
-'DRAFT', 'DYNAMIC', now()),
+'DRAFT', 'CUSTOM', '/document/send?new=1', now()),
 
 ('gw_recv', '收文办理单', '公文', 'GRAPH',
 '{"schemaVersion":1,"key":"gw_recv","name":"收文办理单","nodes":[
@@ -63,4 +66,4 @@ VALUES
 {"id":"re7","source":"circulate","target":"finish"},
 {"id":"re8","source":"finish","target":"end"}
 ]}',
-'DRAFT', 'DYNAMIC', now());
+'DRAFT', 'CUSTOM', '/document/receive?new=1', now());
