@@ -1,51 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Hand, ShieldAlert } from "lucide-react"
 import { toast } from "sonner"
-import { api, NetworkError, type PageResult } from "@/lib/api"
+import { api } from "@/lib/api"
 import { DataTable } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { BackendDownCard } from "@/pages/approval/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { useAuthStore } from "@/stores/auth-store"
 import { wfFormatTime, wfInstancePath, type WfTaskItem } from "@/types/workflow"
+import { useServerPage } from "./use-server-page"
 
 /** 待办列表（我的审批「待办」Tab 内容）；onCount 上报待办总数供徽标 / 小红点 */
 export function TodoList({ onCount }: { onCount?: (n: number) => void }) {
   const navigate = useNavigate()
-  const offline = useAuthStore((s) => s.offline)
-  const activeAssignmentId = useAuthStore((s) => s.activeAssignmentId)
-  const [rows, setRows] = useState<WfTaskItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
   const [claimingId, setClaimingId] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setLoadError(null)
-    try {
-      const page = await api<PageResult<WfTaskItem>>("/api/wf/tasks/todo?pageNum=1&pageSize=100")
-      setRows(page.list)
-      onCount?.(page.total)
-    } catch (err) {
-      if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
-    } finally {
-      setLoading(false)
-    }
-  }, [onCount])
-
-  useEffect(() => {
-    if (offline) {
-      setLoading(false)
-      setLoadError("network")
-      return
-    }
-    void load()
-  }, [load, offline, activeAssignmentId])
+  // 服务端分页：徽标用响应 total（不受当前页影响）
+  const page = useServerPage<WfTaskItem>(
+    (pageNum, pageSize) => `/api/wf/tasks/todo?pageNum=${pageNum}&pageSize=${pageSize}`,
+    { onPage: (p) => onCount?.(p.total) },
+  )
+  const { rows, loading, loadError, reload } = page
 
   const claim = useCallback(
     async (task: WfTaskItem) => {
@@ -53,14 +31,14 @@ export function TodoList({ onCount }: { onCount?: (n: number) => void }) {
       try {
         await api(`/api/wf/tasks/${task.taskId}/claim`, { method: "POST" })
         toast.success("已认领")
-        void load()
+        reload()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "认领失败")
       } finally {
         setClaimingId(null)
       }
     },
-    [load],
+    [reload],
   )
 
   const columns = useMemo<ColumnDef<WfTaskItem, unknown>[]>(
@@ -141,13 +119,13 @@ export function TodoList({ onCount }: { onCount?: (n: number) => void }) {
   return (
     <div className="space-y-4">
       {loadError === "network" ? (
-        <BackendDownCard onRetry={() => void load()} />
+        <BackendDownCard onRetry={reload} />
       ) : loadError ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
             <ShieldAlert className="size-8 text-rose-500/60" />
             <div className="text-sm">{loadError}</div>
-            <Button size="sm" variant="outline" onClick={() => void load()}>
+            <Button size="sm" variant="outline" onClick={reload}>
               重试
             </Button>
           </CardContent>
@@ -158,10 +136,16 @@ export function TodoList({ onCount }: { onCount?: (n: number) => void }) {
           data={rows}
           loading={loading}
           searchKeys={["instanceTitle", "defName", "initiatorName"]}
-          searchPlaceholder="搜索标题 / 流程 / 发起人"
+          searchPlaceholder="搜索当前页标题 / 流程 / 发起人"
           onRowClick={(row) => navigate(row.viewPath ?? wfInstancePath(row))}
-          onRefresh={() => void load()}
+          onRefresh={reload}
           exportFileName="我的待办"
+          serverPagination={{
+            pageIndex: page.pageIndex,
+            pageSize: page.pageSize,
+            rowCount: page.total,
+            onPaginationChange: page.onPaginationChange,
+          }}
         />
       )}
     </div>

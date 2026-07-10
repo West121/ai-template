@@ -62,6 +62,11 @@ export default function WorkflowTasksPage() {
     [setBadge],
   )
 
+  // 待阅打开一条未读 → 未读数递减（服务端分页后不再从当前页统计未读总数）
+  const handleCcRead = useCallback(() => {
+    setCcUnread((n) => (n == null ? n : Math.max(0, n - 1)))
+  }, [])
+
   // 未激活的 Tab 不会挂载，故进入页时主动预取待办数 / 待阅未读数，保证小红点与徽标即时呈现
   useEffect(() => {
     if (offline) return
@@ -118,7 +123,7 @@ export default function WorkflowTasksPage() {
           <TodoList onCount={handleTodoCount} />
         </TabsContent>
         <TabsContent value="cc" className="mt-4">
-          <CcList onUnread={setCcUnread} />
+          <CcList onRead={handleCcRead} />
         </TabsContent>
         <TabsContent value="done" className="mt-4">
           <DoneList />

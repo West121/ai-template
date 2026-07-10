@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import type { ColumnDef } from "@tanstack/react-table"
 import { FileEdit, ShieldAlert, Trash2 } from "lucide-react"
 import { toast } from "sonner"
-import { api, NetworkError, type PageResult } from "@/lib/api"
+import { api, NetworkError } from "@/lib/api"
 import { Modal } from "@/components/modal"
 import { FormRenderer } from "@/components/form-renderer"
 import { DataTable } from "@/components/data-table/data-table"
@@ -14,7 +14,6 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useAuthStore } from "@/stores/auth-store"
 import {
   parseFormData,
   parseFormSchema,
@@ -24,14 +23,10 @@ import {
   type WfFormData,
   type WfInstanceDetail,
 } from "@/types/workflow"
+import { useServerPage } from "./use-server-page"
 
 /** 草稿列表（我的审批「草稿」Tab 内容） */
 export function DraftList() {
-  const offline = useAuthStore((s) => s.offline)
-  const [rows, setRows] = useState<WfDraftItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
-
   // 继续编辑弹窗
   const [editing, setEditing] = useState<WfDraftItem | null>(null)
   const [editLoading, setEditLoading] = useState(false)
@@ -46,28 +41,10 @@ export function DraftList() {
   const [deleting, setDeleting] = useState<WfDraftItem | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setLoadError(null)
-    try {
-      const page = await api<PageResult<WfDraftItem>>("/api/wf/instances/drafts?pageNum=1&pageSize=100")
-      setRows(page.list)
-    } catch (err) {
-      if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (offline) {
-      setLoading(false)
-      setLoadError("network")
-      return
-    }
-    void load()
-  }, [load, offline])
+  const page = useServerPage<WfDraftItem>(
+    (pageNum, pageSize) => `/api/wf/instances/drafts?pageNum=${pageNum}&pageSize=${pageSize}`,
+  )
+  const { rows, loading, loadError, reload } = page
 
   const openEdit = useCallback((row: WfDraftItem) => {
     setEditing(row)
@@ -102,14 +79,14 @@ export function DraftList() {
         })
         toast.success(`「${title.trim() || editing.title || "草稿"}」已提交`)
         setEditing(null)
-        void load()
+        reload()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "提交失败")
       } finally {
         setSubmitting(false)
       }
     },
-    [editing, title, load],
+    [editing, title, reload],
   )
 
   // 保存草稿修改（不激活）
@@ -124,14 +101,14 @@ export function DraftList() {
         })
         toast.success("草稿已保存")
         setEditing(null)
-        void load()
+        reload()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "保存失败")
       } finally {
         setSavingDraft(false)
       }
     },
-    [editing, title, load],
+    [editing, title, reload],
   )
 
   const remove = useCallback(async () => {
@@ -141,13 +118,13 @@ export function DraftList() {
       await api(`/api/wf/instances/${deleting.id}/draft`, { method: "DELETE" })
       toast.success("草稿已删除")
       setDeleting(null)
-      void load()
+      reload()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "删除失败")
     } finally {
       setDeleteBusy(false)
     }
-  }, [deleting, load])
+  }, [deleting, reload])
 
   const columns = useMemo<ColumnDef<WfDraftItem, unknown>[]>(
     () => [
@@ -214,13 +191,13 @@ export function DraftList() {
   return (
     <div className="space-y-4">
       {loadError === "network" ? (
-        <BackendDownCard onRetry={() => void load()} />
+        <BackendDownCard onRetry={reload} />
       ) : loadError ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
             <ShieldAlert className="size-8 text-rose-500/60" />
             <div className="text-sm">{loadError}</div>
-            <Button size="sm" variant="outline" onClick={() => void load()}>
+            <Button size="sm" variant="outline" onClick={reload}>
               重试
             </Button>
           </CardContent>
@@ -231,10 +208,16 @@ export function DraftList() {
           data={rows}
           loading={loading}
           searchKeys={["title", "defName"]}
-          searchPlaceholder="搜索标题 / 流程"
+          searchPlaceholder="搜索当前页标题 / 流程"
           onRowClick={(row) => openEdit(row)}
-          onRefresh={() => void load()}
+          onRefresh={reload}
           exportFileName="我的草稿"
+          serverPagination={{
+            pageIndex: page.pageIndex,
+            pageSize: page.pageSize,
+            rowCount: page.total,
+            onPaginationChange: page.onPaginationChange,
+          }}
         />
       )}
 

@@ -1,59 +1,36 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useMemo } from "react"
 import { useNavigate } from "react-router-dom"
 import type { ColumnDef } from "@tanstack/react-table"
 import { ShieldAlert } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { api, NetworkError, type PageResult } from "@/lib/api"
 import { DataTable } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { BackendDownCard } from "@/pages/approval/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { useAuthStore } from "@/stores/auth-store"
 import { wfFormatTime, wfInstancePath, type WfCcItem } from "@/types/workflow"
+import { useServerPage } from "./use-server-page"
 
-/** 待阅列表（我的审批「待阅」Tab 内容）；onUnread 上报未读数供小红点 */
-export function CcList({ onUnread }: { onUnread?: (n: number) => void }) {
+/**
+ * 待阅列表（我的审批「待阅」Tab 内容）。
+ * 服务端分页后未读总数不再从当前页推（只会算到一页），改由父级（tasks.tsx）预取维护；
+ * 本组件在打开未读项时经 `onRead` 通知父级递减小红点。
+ */
+export function CcList({ onRead }: { onRead?: () => void }) {
   const navigate = useNavigate()
-  const offline = useAuthStore((s) => s.offline)
-  const [rows, setRows] = useState<WfCcItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
+  const page = useServerPage<WfCcItem>(
+    (pageNum, pageSize) => `/api/wf/instances/cc?pageNum=${pageNum}&pageSize=${pageSize}`,
+  )
+  const { rows, loading, loadError, reload } = page
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setLoadError(null)
-    try {
-      const page = await api<PageResult<WfCcItem>>("/api/wf/instances/cc?pageNum=1&pageSize=100")
-      setRows(page.list)
-      onUnread?.(page.list.filter((r) => !r.readFlag).length)
-    } catch (err) {
-      if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
-    } finally {
-      setLoading(false)
-    }
-  }, [onUnread])
-
-  useEffect(() => {
-    if (offline) {
-      setLoading(false)
-      setLoadError("network")
-      return
-    }
-    void load()
-  }, [load, offline])
-
-  /** 打开详情即记已读（后端 GET /instances/{id} 会自动标记 wf_cc 已读，这里仅乐观更新本地状态） */
+  /** 打开详情即记已读（后端 GET /instances/{id} 会自动标记 wf_cc 已读；未读数由父级递减） */
   const open = useCallback(
     (row: WfCcItem) => {
-      if (!row.readFlag) {
-        setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, readFlag: true } : r)))
-      }
+      if (!row.readFlag) onRead?.()
       navigate(wfInstancePath({ procInstId: row.procInstId }))
     },
-    [navigate],
+    [navigate, onRead],
   )
 
   const columns = useMemo<ColumnDef<WfCcItem, unknown>[]>(
@@ -113,13 +90,13 @@ export function CcList({ onUnread }: { onUnread?: (n: number) => void }) {
   return (
     <div className="space-y-4">
       {loadError === "network" ? (
-        <BackendDownCard onRetry={() => void load()} />
+        <BackendDownCard onRetry={reload} />
       ) : loadError ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
             <ShieldAlert className="size-8 text-rose-500/60" />
             <div className="text-sm">{loadError}</div>
-            <Button size="sm" variant="outline" onClick={() => void load()}>
+            <Button size="sm" variant="outline" onClick={reload}>
               重试
             </Button>
           </CardContent>
@@ -130,10 +107,16 @@ export function CcList({ onUnread }: { onUnread?: (n: number) => void }) {
           data={rows}
           loading={loading}
           searchKeys={["title", "defName", "initiatorName"]}
-          searchPlaceholder="搜索标题 / 流程 / 发起人"
+          searchPlaceholder="搜索当前页标题 / 流程 / 发起人"
           onRowClick={open}
-          onRefresh={() => void load()}
+          onRefresh={reload}
           exportFileName="抄送我的"
+          serverPagination={{
+            pageIndex: page.pageIndex,
+            pageSize: page.pageSize,
+            rowCount: page.total,
+            onPaginationChange: page.onPaginationChange,
+          }}
         />
       )}
     </div>

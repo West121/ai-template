@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useMemo } from "react"
 import { useNavigate } from "react-router-dom"
 import type { ColumnDef } from "@tanstack/react-table"
 import { ShieldAlert } from "lucide-react"
-import { api, NetworkError, type PageResult } from "@/lib/api"
 import { DataTable } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { BackendDownCard } from "@/pages/approval/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { useAuthStore } from "@/stores/auth-store"
 import { wfFormatTime, wfInstancePath, type WfDoneItem } from "@/types/workflow"
+import { useServerPage } from "./use-server-page"
 
 const ACTION_META: Record<string, { label: string; className: string }> = {
   APPROVE: { label: "同意", className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600" },
@@ -20,34 +19,10 @@ const ACTION_META: Record<string, { label: string; className: string }> = {
 /** 已办列表（我的审批「已办」Tab 内容） */
 export function DoneList() {
   const navigate = useNavigate()
-  const offline = useAuthStore((s) => s.offline)
-  const activeAssignmentId = useAuthStore((s) => s.activeAssignmentId)
-  const [rows, setRows] = useState<WfDoneItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    setLoadError(null)
-    try {
-      const page = await api<PageResult<WfDoneItem>>("/api/wf/instances/done-by-me?pageNum=1&pageSize=100")
-      setRows(page.list)
-    } catch (err) {
-      if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (offline) {
-      setLoading(false)
-      setLoadError("network")
-      return
-    }
-    void load()
-  }, [load, offline, activeAssignmentId])
+  const page = useServerPage<WfDoneItem>(
+    (pageNum, pageSize) => `/api/wf/instances/done-by-me?pageNum=${pageNum}&pageSize=${pageSize}`,
+  )
+  const { rows, loading, loadError, reload } = page
 
   const columns = useMemo<ColumnDef<WfDoneItem, unknown>[]>(
     () => [
@@ -113,13 +88,13 @@ export function DoneList() {
   return (
     <div className="space-y-4">
       {loadError === "network" ? (
-        <BackendDownCard onRetry={() => void load()} />
+        <BackendDownCard onRetry={reload} />
       ) : loadError ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
             <ShieldAlert className="size-8 text-rose-500/60" />
             <div className="text-sm">{loadError}</div>
-            <Button size="sm" variant="outline" onClick={() => void load()}>
+            <Button size="sm" variant="outline" onClick={reload}>
               重试
             </Button>
           </CardContent>
@@ -130,10 +105,16 @@ export function DoneList() {
           data={rows}
           loading={loading}
           searchKeys={["instanceTitle", "defName", "nodeName"]}
-          searchPlaceholder="搜索标题 / 流程"
+          searchPlaceholder="搜索当前页标题 / 流程"
           onRowClick={(row) => navigate(wfInstancePath(row))}
-          onRefresh={() => void load()}
+          onRefresh={reload}
           exportFileName="我的已办"
+          serverPagination={{
+            pageIndex: page.pageIndex,
+            pageSize: page.pageSize,
+            rowCount: page.total,
+            onPaginationChange: page.onPaginationChange,
+          }}
         />
       )}
     </div>

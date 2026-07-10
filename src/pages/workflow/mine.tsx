@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import type { ColumnDef } from "@tanstack/react-table"
 import { ShieldAlert, SquarePen, Undo2 } from "lucide-react"
 import { toast } from "sonner"
-import { api, NetworkError, type PageResult } from "@/lib/api"
+import { api } from "@/lib/api"
 import { Modal } from "@/components/modal"
 import { DataTable } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
@@ -11,41 +11,19 @@ import { BackendDownCard } from "@/pages/approval/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { useAuthStore } from "@/stores/auth-store"
 import { WF_STATUS_META, wfFormatTime, wfInstancePath, type WfMyInstance } from "@/types/workflow"
+import { useServerPage } from "./use-server-page"
 
 /** 我发起的列表（我的审批「我发起」Tab 内容） */
 export function MineList() {
   const navigate = useNavigate()
-  const offline = useAuthStore((s) => s.offline)
-  const [rows, setRows] = useState<WfMyInstance[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
   const [canceling, setCanceling] = useState<WfMyInstance | null>(null)
   const [cancelSubmitting, setCancelSubmitting] = useState(false)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setLoadError(null)
-    try {
-      const page = await api<PageResult<WfMyInstance>>("/api/wf/instances/my?pageNum=1&pageSize=100")
-      setRows(page.list)
-    } catch (err) {
-      if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (offline) {
-      setLoading(false)
-      setLoadError("network")
-      return
-    }
-    void load()
-  }, [load, offline])
+  const page = useServerPage<WfMyInstance>(
+    (pageNum, pageSize) => `/api/wf/instances/my?pageNum=${pageNum}&pageSize=${pageSize}`,
+  )
+  const { rows, loading, loadError, reload } = page
 
   const cancel = useCallback(async () => {
     if (!canceling) return
@@ -54,13 +32,13 @@ export function MineList() {
       await api(`/api/wf/instances/${canceling.id}/cancel`, { method: "POST" })
       toast.success(`「${canceling.title}」已撤销`)
       setCanceling(null)
-      void load()
+      reload()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "撤销失败")
     } finally {
       setCancelSubmitting(false)
     }
-  }, [canceling, load])
+  }, [canceling, reload])
 
   const columns = useMemo<ColumnDef<WfMyInstance, unknown>[]>(
     () => [
@@ -150,13 +128,13 @@ export function MineList() {
       </div>
 
       {loadError === "network" ? (
-        <BackendDownCard onRetry={() => void load()} />
+        <BackendDownCard onRetry={reload} />
       ) : loadError ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
             <ShieldAlert className="size-8 text-rose-500/60" />
             <div className="text-sm">{loadError}</div>
-            <Button size="sm" variant="outline" onClick={() => void load()}>
+            <Button size="sm" variant="outline" onClick={reload}>
               重试
             </Button>
           </CardContent>
@@ -167,10 +145,16 @@ export function MineList() {
           data={rows}
           loading={loading}
           searchKeys={["title", "defName"]}
-          searchPlaceholder="搜索标题 / 流程"
+          searchPlaceholder="搜索当前页标题 / 流程"
           onRowClick={(row) => navigate(wfInstancePath(row))}
-          onRefresh={() => void load()}
+          onRefresh={reload}
           exportFileName="我发起的"
+          serverPagination={{
+            pageIndex: page.pageIndex,
+            pageSize: page.pageSize,
+            rowCount: page.total,
+            onPaginationChange: page.onPaginationChange,
+          }}
         />
       )}
 
