@@ -1,5 +1,6 @@
 package com.xingchen.oa.workflow.engine;
 
+import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.workflow.engine.script.ScriptContext;
 import com.xingchen.oa.workflow.engine.script.ScriptService;
 import com.xingchen.oa.workflow.entity.WfInstanceExt;
@@ -16,6 +17,9 @@ import org.flowable.engine.delegate.DelegateExecution;
 import org.flowable.engine.delegate.ExecutionListener;
 import org.flowable.engine.delegate.TaskListener;
 import org.flowable.task.service.delegate.DelegateTask;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
+import org.springframework.beans.factory.BeanNotOfRequiredTypeException;
+import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -51,12 +55,26 @@ import java.util.function.BiConsumer;
  *       执行，脚本对 {@code vars} 的增改回写为流程变量。</li>
  *   <li><b>API</b>：按 {@code api{method,url,headers,body}} 发完整 HTTP（headers 文本逐行 {@code Name: Value} 解析、
  *       body 原样发），异步 fire-and-forget。</li>
+ *   <li><b>DELEGATE</b>：读 {@code delegate.bean}，按名 {@code applicationContext.getBean(bean, WfEventHandler.class)}
+ *       取<b>自定义监听器</b>（{@link WfEventHandler}）并调 {@code handle(ctx)}——插业务方自己的 Spring bean。
+ *       bean 不存在/类型不符抛清晰错误。</li>
  * </ul>
  *
- * <p><b>容错</b>：单个事件动作失败（脚本异常/超时、HTTP 失败、通知失败）只记日志/审计（脚本审计落
- * {@code wf_script_exec_log}），不让监听器异常炸掉主流程；每个事件独立 try/catch，互不影响。
- * 节点 SCRIPT 走 taskListener 无独立 {@link DelegateExecution}（{@code execution} 绑定为 null，脚本用 vars/form），
- * 变量回写经 {@code task.setVariable}；流程 SCRIPT 有 execution，绑定完整。
+ * <p><b>阻断 vs 不阻断（fire-and-forget）</b>：事件配置增 {@code blocking?:boolean}。
+ * <ul>
+ *   <li>{@code blocking=false}（默认，现状）：走 {@link #safeDispatch} 吞异常——动作失败（脚本异常/超时、HTTP 失败、
+ *       通知失败、handler 异常）只记日志/审计（脚本审计落 {@code wf_script_exec_log}），不打断办理；每个事件独立
+ *       try/catch，互不影响。</li>
+ *   <li>{@code blocking=true} <b>仅在前置触发点</b>（{@code TASK_BEFORE_COMPLETE}/{@code TASK_BEFORE_UNDO}/
+ *       {@code PROCESS_START}，见 {@link #BLOCKING_TRIGGERS}）生效：<b>不</b>走 safeDispatch，让异常上抛。
+ *       SCRIPT 返回 {@code Boolean.FALSE} 或抛异常、API 响应非 2xx、DELEGATE handler 抛异常 → 抛
+ *       {@link BusinessException}(400,"办理被拦截：…") → 经 Flowable 任务/执行监听器上抛 → completeTask/
+ *       startProcessInstance 事务回滚 → 办理被打断 → approve/reject 端点返回该错误。AFTER 类触发点 blocking
+ *       无意义（动作已发生），一律按 fire-and-forget 忽略。</li>
+ * </ul>
+ *
+ * <p>节点 SCRIPT/DELEGATE 走 taskListener 无独立 {@link DelegateExecution}（{@code execution} 绑定为 null，
+ * 脚本/handler 用 vars/form），变量回写经 {@code task.setVariable}；流程 SCRIPT/DELEGATE 有 execution，绑定完整。
  */
 @Slf4j
 @Component("wfEventDelegate")
@@ -66,38 +84,56 @@ public class OaEventDelegate implements TaskListener, ExecutionListener {
     private static final HttpClient CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(3)).build();
 
+    /** blocking 仅在前置触发点有意义（AFTER 类动作已发生，忽略 blocking）。 */
+    private static final Set<String> BLOCKING_TRIGGERS = Set.of(
+            "TASK_BEFORE_COMPLETE", "TASK_BEFORE_UNDO", "PROCESS_START");
+
     private final RepositoryService repositoryService;
     private final WfInstanceExtRepository instanceRepository;
     private final AssigneeResolver assigneeResolver;
     private final WfAudit audit;
     private final ObjectMapper objectMapper;
     private final ScriptService scriptService;
+    private final ApplicationContext applicationContext;
 
     /* ==================== 节点事件（taskListener create/complete/delete） ==================== */
 
     @Override
     public void notify(DelegateTask task) {
+        Set<String> triggers = triggersFor(task.getEventName());
+        if (triggers.isEmpty()) {
+            return;
+        }
+        JsonNode events;
+        String pid;
+        String title;
+        Map<String, Object> vars;
+        String label = task.getTaskDefinitionKey();
+        // 读取阶段的异常只记日志不上抛（事件配置读不出不该炸主流程）；真正的动作分发在 for 循环里按 blocking 决定是否上抛。
         try {
-            Set<String> triggers = triggersFor(task.getEventName());
-            if (triggers.isEmpty()) {
-                return;
-            }
-            JsonNode events = nodeEvents(task.getProcessDefinitionId(), task.getTaskDefinitionKey());
+            events = nodeEvents(task.getProcessDefinitionId(), label);
             if (events == null || !events.isArray()) {
                 return;
             }
-            String pid = task.getProcessInstanceId();
-            String title = titleOf(pid, task.getName());
-            Map<String, Object> vars = safeVars(task.getVariables());
-            String label = task.getTaskDefinitionKey();
-            for (JsonNode ev : events) {
-                if (triggers.contains(ev.path("trigger").asString(""))) {
-                    // taskListener 无独立 DelegateExecution：execution=null，变量回写走 task.setVariable
-                    safeDispatch(ev, pid, label, title, vars, task::setVariable, null);
-                }
-            }
+            pid = task.getProcessInstanceId();
+            title = titleOf(pid, task.getName());
+            vars = safeVars(task.getVariables());
         } catch (Exception e) {
-            log.warn("节点事件分发异常 task={}: {}", task.getId(), e.getMessage());
+            log.warn("节点事件读取异常 task={}: {}", task.getId(), e.getMessage());
+            return;
+        }
+        for (JsonNode ev : events) {
+            String trigger = ev.path("trigger").asString("");
+            if (!triggers.contains(trigger)) {
+                continue;
+            }
+            // taskListener 无独立 DelegateExecution：execution=null，变量回写走 task.setVariable
+            if (isBlocking(ev, trigger)) {
+                // 阻断监听器：不走 safeDispatch，异常上抛 → completeTask/deleteTask 事务回滚 → 办理被打断
+                dispatch(ev, pid, label, title, vars, task::setVariable, null, task, true);
+            } else {
+                safeDispatch(ev, pid, label, title, vars, task::setVariable, null, task);
+            }
         }
     }
 
@@ -105,37 +141,54 @@ public class OaEventDelegate implements TaskListener, ExecutionListener {
 
     @Override
     public void notify(DelegateExecution execution) {
+        Set<String> triggers = processTriggersFor(execution.getEventName());
+        if (triggers.isEmpty()) {
+            return;
+        }
+        JsonNode events;
+        String pid;
+        String title;
+        Map<String, Object> vars;
         try {
-            Set<String> triggers = processTriggersFor(execution.getEventName());
-            if (triggers.isEmpty()) {
-                return;
-            }
-            JsonNode events = processEvents(execution.getProcessDefinitionId());
+            events = processEvents(execution.getProcessDefinitionId());
             if (events == null || !events.isArray()) {
                 return;
             }
-            String pid = execution.getProcessInstanceId();
+            pid = execution.getProcessInstanceId();
             Object varTitle = execution.getVariable("wfInstanceTitle");
-            String title = titleOf(pid, varTitle != null ? varTitle.toString() : pid);
-            Map<String, Object> vars = safeVars(execution.getVariables());
-            for (JsonNode ev : events) {
-                if (triggers.contains(ev.path("trigger").asString(""))) {
-                    safeDispatch(ev, pid, "PROCESS", title, vars, execution::setVariable, execution);
-                }
-            }
+            title = titleOf(pid, varTitle != null ? varTitle.toString() : pid);
+            vars = safeVars(execution.getVariables());
         } catch (Exception e) {
-            log.warn("流程事件分发异常 pid={}: {}", execution.getProcessInstanceId(), e.getMessage());
+            log.warn("流程事件读取异常 pid={}: {}", execution.getProcessInstanceId(), e.getMessage());
+            return;
         }
+        for (JsonNode ev : events) {
+            String trigger = ev.path("trigger").asString("");
+            if (!triggers.contains(trigger)) {
+                continue;
+            }
+            if (isBlocking(ev, trigger)) {
+                // PROCESS_START 阻断：异常上抛 → startProcessInstance 事务回滚 → 发起失败
+                dispatch(ev, pid, "PROCESS", title, vars, execution::setVariable, execution, null, true);
+            } else {
+                safeDispatch(ev, pid, "PROCESS", title, vars, execution::setVariable, execution, null);
+            }
+        }
+    }
+
+    /** 事件配置 {@code blocking=true} 且触发点为前置类才阻断；AFTER 类忽略 blocking（动作已发生）。 */
+    private boolean isBlocking(JsonNode ev, String trigger) {
+        return ev.path("blocking").asBoolean(false) && BLOCKING_TRIGGERS.contains(trigger);
     }
 
     /* ==================== 动作分发 ==================== */
 
-    /** 单事件动作独立容错：一条失败只记日志，不影响其余事件、不炸主流程。 */
+    /** 单事件动作独立容错（{@code blocking=false} 路径）：一条失败只记日志，不影响其余事件、不炸主流程。 */
     private void safeDispatch(JsonNode ev, String pid, String label, String title,
                               Map<String, Object> vars, BiConsumer<String, Object> writer,
-                              DelegateExecution execution) {
+                              DelegateExecution execution, DelegateTask task) {
         try {
-            dispatch(ev, pid, label, title, vars, writer, execution);
+            dispatch(ev, pid, label, title, vars, writer, execution, task, false);
         } catch (Exception e) {
             log.warn("事件动作执行失败 action={} label={} pid={}: {}",
                     ev.path("action").asString(""), label, pid, e.getMessage());
@@ -144,7 +197,7 @@ public class OaEventDelegate implements TaskListener, ExecutionListener {
 
     private void dispatch(JsonNode ev, String pid, String label, String title,
                           Map<String, Object> vars, BiConsumer<String, Object> writer,
-                          DelegateExecution execution) {
+                          DelegateExecution execution, DelegateTask task, boolean blocking) {
         String action = ev.path("action").asString("").toUpperCase();
         switch (action) {
             case "NOTIFY" -> {
@@ -157,6 +210,7 @@ public class OaEventDelegate implements TaskListener, ExecutionListener {
                 log.info("事件 NOTIFY 触发 {} 目标{}人", label, targets.size());
             }
             case "WEBHOOK" -> {
+                // WEBHOOK 恒为异步 fire-and-forget（简单回调，不参与阻断语义）
                 String url = ev.path("webhookUrl").asString(null);
                 if (url != null && !url.isBlank()) {
                     Map<String, Object> payload = new LinkedHashMap<>();
@@ -168,10 +222,48 @@ public class OaEventDelegate implements TaskListener, ExecutionListener {
                     postAsync(url, toJson(payload));
                 }
             }
-            case "SCRIPT" -> runScript(ev, pid, label, vars, writer, execution);
-            case "API" -> runApi(ev, label);
+            case "SCRIPT" -> runScript(ev, pid, label, vars, writer, execution, blocking);
+            case "API" -> runApi(ev, label, blocking);
+            case "DELEGATE" -> runDelegate(ev, pid, label, title, vars, writer, execution, task, blocking);
             default -> log.warn("未知/不支持事件 action: {}", action);
         }
+    }
+
+    /**
+     * DELEGATE 动作：自定义监听器。按 {@code delegate.bean} 名取 {@link WfEventHandler} bean 并调 {@code handle(ctx)}。
+     * bean 不存在/类型不符抛清晰 {@link BusinessException}。blocking=true 时 handler 异常<b>原样上抛</b>（打断办理）；
+     * blocking=false 时异常由 {@link #safeDispatch} 兜底吞掉（fire-and-forget）。handler 对 {@code vars} 的增改回写为流程变量。
+     */
+    private void runDelegate(JsonNode ev, String pid, String label, String title,
+                             Map<String, Object> vars, BiConsumer<String, Object> writer,
+                             DelegateExecution execution, DelegateTask task, boolean blocking) {
+        String beanName = ev.path("delegate").path("bean").asString("");
+        if (beanName.isBlank()) {
+            throw new BusinessException(400, "自定义监听器(DELEGATE) 缺少 delegate.bean");
+        }
+        WfEventHandler handler;
+        try {
+            handler = applicationContext.getBean(beanName, WfEventHandler.class);
+        } catch (NoSuchBeanDefinitionException e) {
+            throw new BusinessException(400, "自定义监听器 bean 不存在: " + beanName);
+        } catch (BeanNotOfRequiredTypeException e) {
+            throw new BusinessException(400, "自定义监听器 bean 类型不符（需实现 WfEventHandler）: " + beanName);
+        }
+        Map<String, Object> handlerVars = new HashMap<>(vars);
+        Map<String, Object> form = new HashMap<>(vars);
+        WfEventContext ctx = new WfEventContext(ev.path("trigger").asString(""), "DELEGATE",
+                pid, label, title, blocking, handlerVars, form, execution, task, ev);
+        try {
+            handler.handle(ctx);
+        } catch (RuntimeException re) {
+            // 阻断=原样上抛（含 BusinessException，其 code/msg 直达前端）；非阻断由 safeDispatch 吞
+            throw re;
+        } catch (Exception e) {
+            // 受检异常无法原样上抛，包装为 BusinessException（阻断时打断办理）
+            throw new BusinessException(400, blocking ? "办理被拦截：" + e.getMessage() : e.getMessage());
+        }
+        writeBackVars(vars, handlerVars, writer);
+        log.info("事件 DELEGATE 执行完成 {} pid={} bean={} blocking={}", label, pid, beanName, blocking);
     }
 
     /**
@@ -180,40 +272,72 @@ public class OaEventDelegate implements TaskListener, ExecutionListener {
      * BusinessException（已落审计），在 {@link #safeDispatch} 兜底记录，不炸主流程。
      */
     private void runScript(JsonNode ev, String pid, String label, Map<String, Object> vars,
-                           BiConsumer<String, Object> writer, DelegateExecution execution) {
+                           BiConsumer<String, Object> writer, DelegateExecution execution, boolean blocking) {
         JsonNode s = ev.path("script");
         String lang = s.path("lang").asString("");
         String code = s.path("code").asString("");
         if (lang.isBlank() || code.isBlank()) {
+            if (blocking) {
+                throw new BusinessException(400, "办理被拦截：事件脚本缺少 lang/code");
+            }
             log.warn("事件 SCRIPT 缺少 lang/code，跳过 {} pid={}", label, pid);
             return;
         }
         Map<String, Object> scriptVars = new HashMap<>(vars);
         Map<String, Object> form = new HashMap<>(vars);
         String scriptRef = pid + "#" + label + "#event";
-        scriptService.run(lang, code, new ScriptContext(scriptVars, form, execution, scriptRef));
-        // 回写脚本对 vars 的增改为流程变量（影响后续网关/表单）
-        for (Map.Entry<String, Object> e : scriptVars.entrySet()) {
-            Object before = vars.get(e.getKey());
-            if (before == null ? e.getValue() != null : !before.equals(e.getValue())) {
-                writer.accept(e.getKey(), e.getValue());
+        Object result;
+        try {
+            result = scriptService.run(lang, code, new ScriptContext(scriptVars, form, execution, scriptRef));
+        } catch (BusinessException e) {
+            // 脚本抛异常/超时：阻断→包装为「办理被拦截」上抛；非阻断→原样上抛由 safeDispatch 吞（已落 wf_script_exec_log）
+            if (blocking) {
+                throw new BusinessException(400, "办理被拦截：" + e.getMessage());
             }
+            throw e;
         }
-        log.info("事件 SCRIPT 执行完成 {} pid={} lang={}", label, pid, lang);
+        // 回写脚本对 vars 的增改为流程变量（影响后续网关/表单）
+        writeBackVars(vars, scriptVars, writer);
+        // 阻断：脚本返回 Boolean.FALSE 视为校验未通过 → 打断办理
+        if (blocking && Boolean.FALSE.equals(result)) {
+            throw new BusinessException(400, "办理被拦截：脚本校验未通过（返回 false）");
+        }
+        log.info("事件 SCRIPT 执行完成 {} pid={} lang={} blocking={}", label, pid, lang, blocking);
     }
 
-    /** API 动作：按 {@code {method,url,headers,body}} 发完整 HTTP，异步 fire-and-forget，失败记日志。 */
-    private void runApi(JsonNode ev, String label) {
+    /**
+     * API 动作：按 {@code {method,url,headers,body}} 发完整 HTTP。
+     * blocking=false→异步 fire-and-forget，失败记日志；blocking=true→同步发送，响应非 2xx / 失败 → 抛打断办理。
+     */
+    private void runApi(JsonNode ev, String label, boolean blocking) {
         JsonNode api = ev.path("api");
         String url = api.path("url").asString(null);
         if (url == null || url.isBlank()) {
+            if (blocking) {
+                throw new BusinessException(400, "办理被拦截：事件 API 缺少 url");
+            }
             log.warn("事件 API 缺少 url，跳过 {}", label);
             return;
         }
         String method = api.path("method").asString("POST");
         String headers = api.path("headers").asString("");
         String body = api.path("body").asString(null);
-        sendApi(method, url, headers, body, label);
+        if (blocking) {
+            sendApiBlocking(method, url, headers, body, label);
+        } else {
+            sendApi(method, url, headers, body, label);
+        }
+    }
+
+    /** 回写 handler/脚本对 vars 的增改为流程变量（影响后续网关/表单）。 */
+    private void writeBackVars(Map<String, Object> before, Map<String, Object> after,
+                               BiConsumer<String, Object> writer) {
+        for (Map.Entry<String, Object> e : after.entrySet()) {
+            Object prev = before.get(e.getKey());
+            if (prev == null ? e.getValue() != null : !prev.equals(e.getValue())) {
+                writer.accept(e.getKey(), e.getValue());
+            }
+        }
     }
 
     /* ==================== trigger 映射 ==================== */
@@ -319,26 +443,9 @@ public class OaEventDelegate implements TaskListener, ExecutionListener {
      * GET/无 body 的 DELETE 不带请求体，PUT/POST 带 body。异步 fire-and-forget，失败记日志（容错）。
      */
     private void sendApi(String method, String url, String headersText, String body, String label) {
+        String m = method == null ? "POST" : method.trim().toUpperCase();
         try {
-            HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(5));
-            applyHeaders(b, headersText);
-            HttpRequest.BodyPublisher pub = (body == null || body.isEmpty())
-                    ? HttpRequest.BodyPublishers.noBody()
-                    : HttpRequest.BodyPublishers.ofString(body);
-            String m = method == null ? "POST" : method.trim().toUpperCase();
-            switch (m) {
-                case "GET" -> b.GET();
-                case "DELETE" -> {
-                    if (body == null || body.isEmpty()) {
-                        b.DELETE();
-                    } else {
-                        b.method("DELETE", pub);
-                    }
-                }
-                case "PUT" -> b.PUT(pub);
-                default -> b.POST(pub); // POST 及未知回退 POST
-            }
-            HttpRequest req = b.build();
+            HttpRequest req = buildApiRequest(m, url, headersText, body);
             CLIENT.sendAsync(req, HttpResponse.BodyHandlers.discarding())
                     .whenComplete((resp, ex) -> {
                         if (ex != null) {
@@ -350,6 +457,44 @@ public class OaEventDelegate implements TaskListener, ExecutionListener {
         } catch (Exception e) {
             log.warn("事件 API 构造失败 url={}: {}", url, e.getMessage());
         }
+    }
+
+    /** 阻断 API：同步发送并检查状态码，非 2xx / 失败 → 抛 {@link BusinessException} 打断办理。 */
+    private void sendApiBlocking(String method, String url, String headersText, String body, String label) {
+        String m = method == null ? "POST" : method.trim().toUpperCase();
+        int status;
+        try {
+            HttpRequest req = buildApiRequest(m, url, headersText, body);
+            status = CLIENT.send(req, HttpResponse.BodyHandlers.discarding()).statusCode();
+        } catch (Exception e) {
+            throw new BusinessException(400, "办理被拦截：事件 API 调用失败 " + url + "：" + e.getMessage());
+        }
+        if (status < 200 || status >= 300) {
+            throw new BusinessException(400, "办理被拦截：事件 API 响应非 2xx（HTTP " + status + "）" + url);
+        }
+        log.info("事件 API(阻断) 调用完成 {} {} url={} status={}", label, m, url, status);
+    }
+
+    /** 构造完整 HTTP 请求（method/url/headers/body）；async 与 blocking 两路复用。 */
+    private HttpRequest buildApiRequest(String m, String url, String headersText, String body) {
+        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(5));
+        applyHeaders(b, headersText);
+        HttpRequest.BodyPublisher pub = (body == null || body.isEmpty())
+                ? HttpRequest.BodyPublishers.noBody()
+                : HttpRequest.BodyPublishers.ofString(body);
+        switch (m) {
+            case "GET" -> b.GET();
+            case "DELETE" -> {
+                if (body == null || body.isEmpty()) {
+                    b.DELETE();
+                } else {
+                    b.method("DELETE", pub);
+                }
+            }
+            case "PUT" -> b.PUT(pub);
+            default -> b.POST(pub); // POST 及未知回退 POST
+        }
+        return b.build();
     }
 
     /** 逐行解析 headers 文本（首个 {@code :} 或 {@code =} 分隔）；JDK 受限头名抛异常时跳过该行不中断。 */

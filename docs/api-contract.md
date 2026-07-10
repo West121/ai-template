@@ -1,6 +1,6 @@
 # OA 平台 API 契约（前后端开发共同遵守）
 
-> 最后更新：2026-07-10（含 B-17：文件下载业务放行 SPI—电子章/审批附件；B-10：首节点 webhook 时序修复，内部无契约变更）。前次 2026-07-09 修复批次 1。变更历史见 `CHANGELOG.md`。
+> 最后更新：2026-07-10（工作流事件监听器增强：events 增 `blocking?:boolean` 阻断办理 + `action:DELEGATE` 自定义监听器 `WfEventHandler` SPI；同批订正 events 契约含 SCRIPT/API action。见「工作流域→节点级 nodeConfig→events」。前次含 B-17：文件下载业务放行 SPI—电子章/审批附件；B-10：首节点 webhook 时序修复）。变更历史见 `CHANGELOG.md`。
 
 - 基址：前端经 Vite 代理 `/api` → `http://localhost:8081`
 - 统一响应：`R<T> = { code: 0成功|其他失败, message, data }`；分页 `PageResult<T> = { list, total, pageNum, pageSize }`
@@ -201,8 +201,9 @@ ProcessDef = {id,defCode,name,category,icon,formCode,formVersion,designerType:DI
         （**已下线空壳**：accountSort/limitRange/includeSelf/includeConcurrent/completeLimit/warnLimit——前端不再产出，后端不再作为契约）
       - `auditMenu`：简化为 `{allowJump:bool,allowReturn:bool}`（是否允许跳转/退回），随详情 `auditMenu` 透传，前端据此展示按钮（复用 P2 jump/reject 能力）。（旧 `special` 的 JUMP_WAIT_*/RETURN 细分已下线）
       - `commentRequired:bool`：审批意见必填，approve 无 comment → 400
-      - `events:[{trigger,action:NOTIFY|WEBHOOK,notify:{to:[OrgRef],template},webhookUrl}]`：**6 种真触发**节点事件（trigger=ACTIVITY_CONFIRM_PARTICIPANTS/TASK_AFTER_CREATED/TASK_BEFORE_COMPLETE/TASK_AFTER_COMPLETE/TASK_BEFORE_UNDO/TASK_AFTER_UNDO；其余 FORM_*/SUSPEND/RESUME/TIMEOUT 等已下线）。
-        转换器按 trigger 挂 taskListener（create/complete/delete），运行时由 `wfEventDelegate` 统一分发：**NOTIFY**=站内通知目标人（template 为内容）、**WEBHOOK**=异步 POST 外部 URL。（**SCRIPT action 已下线**）
+      - `events:[{trigger,action:NOTIFY|WEBHOOK|SCRIPT|API|DELEGATE,blocking?:boolean,notify:{to:[OrgRef],template},webhookUrl,script:{lang,code},api:{method,url,headers?,body?},delegate:{bean}}]`：**6 种真触发**节点事件（trigger=ACTIVITY_CONFIRM_PARTICIPANTS/TASK_AFTER_CREATED/TASK_BEFORE_COMPLETE/TASK_AFTER_COMPLETE/TASK_BEFORE_UNDO/TASK_AFTER_UNDO；其余 FORM_*/SUSPEND/RESUME/TIMEOUT 等已下线）。
+        转换器按 trigger 挂 taskListener（create/complete/delete）+ 整条 events blob 随 `oa:events` 落库（`BpmnToGraph` 对称读回），运行时由 `wfEventDelegate` 统一分发：**NOTIFY**=站内通知目标人（template 为内容）、**WEBHOOK**=异步 POST 外部 URL、**SCRIPT**=交 `ScriptService` 执行（lang∈groovy|js|python，注入 vars/form/execution，vars 增改回写流程变量；同 `wf:script:write` 治理）、**API**=完整 HTTP（headers 每行 `Name: Value`）、**DELEGATE**=自定义监听器（按 `delegate.bean` 取实现 `WfEventHandler` 的 Spring bean 调 `handle(ctx)`；bean 不存在/类型不符→清晰 400；同 `wf:script:write` 治理，前端配置入口 gate 该权限）。
+      - **阻断办理 `blocking?:boolean`（默认 false）**：**仅在前置触发点生效**——`TASK_BEFORE_COMPLETE`/`TASK_BEFORE_UNDO`（及流程 `PROCESS_START`）；AFTER 类触发点 blocking 无意义（动作已发生）被忽略。`blocking=true` 不走 safeDispatch，异常上抛 → completeTask 事务回滚 → **approve/reject 端点返回 400「办理被拦截：…」、任务仍在**。映射：**SCRIPT** 脚本返回 `Boolean false` 或抛异常 → 400「办理被拦截：…」；**API** 响应非 2xx（或调用失败）→ 400；**DELEGATE** handler 抛异常 → 原样上抛（其 BusinessException code/msg 直达前端）。`blocking=false`=现状（safeDispatch 吞异常、记 `wf_script_exec_log`/日志，不打断办理）。内置示例监听器 bean `demoBudgetGuard`（预算超限 `budget>10000` 抛异常拦截，可 `delegate.limit` 覆盖上限）。
       - `formPerms:{field:HIDDEN|READ|EDIT}`（P3 节点表单字段权限，详情 nodeFormPerms 返回）、`timeout:{hours|seconds,action:REMIND|AUTO_PASS|AUTO_REJECT,remindEvery}`（P2 超时基建；**TRANSFER action 已下线**，扫描器未实现，落到 REMIND 默认）
   - **P1-C/P3 顶层 flowConfig（designerJson.flowConfig，写入 process extensionElements oa:flowConfig；亦可经请求体 flowConfig 存 wf_process_ext.flow_config 列）**：
     `{operations:{terminate,retrieve,urge,cancel},start:{scope:[OrgRef],taskTitle},variables:[{name,type,defaultValue}]}`
