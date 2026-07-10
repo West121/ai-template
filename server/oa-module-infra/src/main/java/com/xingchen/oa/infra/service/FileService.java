@@ -18,6 +18,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -127,7 +128,11 @@ public class FileService {
     /**
      * 下载前的归属校验（B-04 IDOR 修复 + B-17 业务放行）：
      * 上传者本人、持有 system:file:list、数据权限为 ALL，
-     * 或该文件被当前用户可合法查看的业务对象引用（{@link FileAccessGrant}）时可下载；其余返回 403。
+     * 或该文件被当前用户可合法查看的业务对象引用（{@link FileAccessGrant}）时可下载；其余拒绝。
+     *
+     * <p>B-19：鉴权拒绝抛 {@link AccessDeniedException}（经 {@code SecurityExceptionAdvice} 统一映射为
+     * <b>HTTP 403</b>），与 {@code @PreAuthorize} 等其它「鉴权失败」保持一致；不再用 {@code BusinessException(403)}
+     * ——后者经全局兜底走 HTTP 200 + 信封 code，使基于 HTTP 状态码的安全检测把「已拒绝」误判为「放行」。</p>
      */
     @Transactional(readOnly = true)
     public SysFile getReadableOrThrow(Long id) {
@@ -135,7 +140,7 @@ public class FileService {
         UserContext user = currentUser();
         boolean owner = file.getUploaderId() != null && file.getUploaderId().equals(user.getUserId());
         if (!owner && !canViewAll(user) && !grantedByBusiness(id, user)) {
-            throw new BusinessException(403, "无权访问该文件");
+            throw new AccessDeniedException("无权访问该文件");
         }
         return file;
     }
