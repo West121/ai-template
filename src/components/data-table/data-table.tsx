@@ -14,8 +14,10 @@ import {
   type ColumnFiltersState,
   type ExpandedState,
   type GroupingState,
+  type PaginationState,
   type RowData,
   type SortingState,
+  type Updater,
   type Table as TableInstance,
   type VisibilityState,
 } from "@tanstack/react-table"
@@ -311,13 +313,18 @@ export function DataTable<TData>({
     onColumnFiltersChange: setColumnFilters,
     onGroupingChange: setGrouping,
     onExpandedChange: setExpanded,
-    onPaginationChange: serverPagination
-      ? (updater) => {
-          const current = { pageIndex: serverPagination.pageIndex, pageSize: serverPagination.pageSize }
-          const next = typeof updater === "function" ? updater(current) : updater
-          serverPagination.onPaginationChange(next.pageIndex, next.pageSize)
+    // 注意：本地模式**不能**显式传 onPaginationChange: undefined —— TanStack v8 的 setPagination 是
+    // options.onPaginationChange?.(updater)，显式 undefined 会覆盖默认的内部状态更新器(makeStateUpdater)，
+    // 导致翻页/改每页条数全部无效（曾致所有表格分页失灵）。仅服务端模式才提供受控回调。
+    ...(serverPagination
+      ? {
+          onPaginationChange: (updater: Updater<PaginationState>) => {
+            const current = { pageIndex: serverPagination.pageIndex, pageSize: serverPagination.pageSize }
+            const next = typeof updater === "function" ? updater(current) : updater
+            serverPagination.onPaginationChange(next.pageIndex, next.pageSize)
+          },
         }
-      : undefined,
+      : {}),
     globalFilterFn: (row, _columnId, filterValue) => matchesKeyword(row.original, String(filterValue)),
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
