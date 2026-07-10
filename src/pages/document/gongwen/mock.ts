@@ -318,6 +318,8 @@ interface RawDetail {
   currentTask?: { taskId?: string; taskKey?: string; taskName?: string; assignee?: string }
   timeline?: RawTimeline[]
   circulations?: RawCirc[]
+  /** 流程图高亮（节点 id）：completed 已完成 / active 当前 */
+  highlight?: { completed?: string[]; active?: string[] }
 }
 interface RawListItem {
   id: number
@@ -402,6 +404,64 @@ function mapDetail(r: RawDetail): GwDoc {
       readAt: c.readAt,
       opinion: c.opinion,
     })),
+    // 后端流程图高亮（节点 id）：present 则用之，缺省留空由前端 deriveHighlight 兜底
+    highlight: r.highlight ? { completed: r.highlight.completed ?? [], active: r.highlight.active ?? [] } : undefined,
+  }
+}
+
+/* --------------------- 流程图高亮派生（按环节推） --------------------- */
+// 节点 id 与 gw_send/gw_recv 种子 designerJson 对齐（关键回写节点 id：见 locked 节点契约）。
+// 后端返回 highlight 时优先用后端；无 highlight（未就绪）时按 currentTask 推算，best-effort：
+// id 命不中真实流程图也无副作用（FlowViewer 只对命中的 id 高亮）。
+
+interface FlowNodeStep {
+  id: string
+  /** 对应中文环节名（currentTask） */
+  task: string
+}
+
+const SEND_FLOW_NODES: FlowNodeStep[] = [
+  { id: "start", task: "" },
+  { id: "draft", task: "拟稿" },
+  { id: "review", task: "核稿" },
+  { id: "countersign", task: "会签" },
+  { id: "issue", task: "签发" },
+  { id: "seal", task: "用印" },
+  { id: "publish", task: "分发" },
+  { id: "end", task: "" },
+]
+
+const RECV_FLOW_NODES: FlowNodeStep[] = [
+  { id: "start", task: "" },
+  { id: "register", task: "签收登记" },
+  { id: "propose", task: "拟办" },
+  { id: "approve", task: "批办" },
+  { id: "handle", task: "承办" },
+  { id: "circulate", task: "传阅" },
+  { id: "finish", task: "办结" },
+  { id: "end", task: "" },
+]
+
+/** 别名：成文=分发，登记=签收登记 */
+const TASK_ALIAS: Record<string, string> = { 成文: "分发", 成文分发: "分发", 登记: "签收登记", 已归档: "" }
+
+/**
+ * 按 currentTask + 状态派生流程图高亮：当前环节 active，之前环节 completed。
+ * 归档/办结/成文态 → 全部 completed、无 active。缺 currentTask 亦回落全 completed。
+ */
+export function deriveHighlight(doc: GwDoc): { completed: string[]; active: string[] } {
+  const nodes = doc.direction === "SEND" ? SEND_FLOW_NODES : RECV_FLOW_NODES
+  const terminal = doc.archived || ["ARCHIVED", "PUBLISHED", "FINISHED"].includes(doc.status)
+  const task = TASK_ALIAS[doc.currentTask ?? ""] ?? doc.currentTask ?? ""
+  const idx = terminal ? -1 : nodes.findIndex((n) => n.task && n.task === task)
+
+  if (idx < 0) {
+    // 终态或未匹配到环节：整链已完成（end 也点亮），无进行中
+    return { completed: nodes.map((n) => n.id), active: [] }
+  }
+  return {
+    completed: nodes.slice(0, idx).map((n) => n.id),
+    active: [nodes[idx].id],
   }
 }
 

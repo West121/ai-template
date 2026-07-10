@@ -4,6 +4,7 @@
  * 契约来源：docs/design/gongwen-advanced.md（第 2 节数据模型 / 第 5 节 API / 第 7 节 GB/T 9704 版式）。
  * 后端前缀 `/api/office/doc`。字段命名与迁移 V20 扩列对齐（copy_no→copyNo 等驼峰）。
  */
+import type { WfHighlight } from "@/types/workflow"
 
 /** 办文方向 */
 export type GwDirection = "SEND" | "RECEIVE"
@@ -111,6 +112,11 @@ export interface GwDoc {
   opinions?: GwOpinion[]
   /** 传阅单 */
   circulations?: GwCirculation[]
+  /**
+   * 流程图运行时高亮：completed=已完成节点、active=当前节点（节点 id == BPMN 元素 id）。
+   * 后端 GET /api/office/doc/{id} 返回；缺省时前端按 currentTask 派生（deriveHighlight）。
+   */
+  highlight?: WfHighlight
 }
 
 /** 文号台账行（oa_doc_number_ledger） */

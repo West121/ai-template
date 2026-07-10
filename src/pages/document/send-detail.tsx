@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react"
 import { useNavigate, useParams } from "react-router-dom"
-import { ArrowLeft, FileText, History, Paperclip, RotateCw, ShieldAlert, Stamp } from "lucide-react"
+import { ArrowLeft, FileText, GitBranch, History, Paperclip, RotateCw, ShieldAlert, Stamp } from "lucide-react"
 import { sanitizeHtml } from "@/lib/sanitize"
 import { useAuthStore } from "@/stores/auth-store"
 import { Button } from "@/components/ui/button"
@@ -12,6 +12,7 @@ import { fetchDoc } from "./gongwen/mock"
 import { gwFormatDate, type GwDoc } from "./gongwen/types"
 import { DocTypeBadge, GwStatusBadge, SecretBadge, UrgencyBadge } from "./gongwen/badges"
 import { OpinionActionBar, OpinionTimeline } from "./gongwen/handling"
+import { DocFlowTrack } from "./gongwen/flow-track"
 import { DemoBanner } from "./gongwen/shared"
 
 function MetaRow({ label, children }: { label: string; children: ReactNode }) {
@@ -171,6 +172,9 @@ export default function SendDetailPage() {
                   <TabsTrigger value="content" className="gap-1.5">
                     <FileText className="size-3.5" /> 正文
                   </TabsTrigger>
+                  <TabsTrigger value="flow" className="gap-1.5">
+                    <GitBranch className="size-3.5" /> 流程图
+                  </TabsTrigger>
                 </TabsList>
               </div>
               <TabsContent value="timeline" className="m-0 px-4 py-3">
@@ -186,6 +190,9 @@ export default function SendDetailPage() {
                 ) : (
                   <div className="py-6 text-center text-sm text-muted-foreground">暂无正文</div>
                 )}
+              </TabsContent>
+              <TabsContent value="flow" className="m-0 p-3">
+                <DocFlowTrack doc={doc} />
               </TabsContent>
             </Tabs>
           </Card>
