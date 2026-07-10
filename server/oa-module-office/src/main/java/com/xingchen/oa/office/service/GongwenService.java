@@ -32,8 +32,11 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
+import org.flowable.engine.HistoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
+import org.flowable.engine.history.HistoricActivityInstance;
+import org.flowable.engine.runtime.Execution;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
 import org.springframework.data.domain.Page;
@@ -49,8 +52,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 中国式公文办文编排：发文 gw_send / 收文 gw_recv 两条 Flowable 流程，
@@ -75,6 +80,7 @@ public class GongwenService {
     private final DeptNameResolver deptNameResolver;
     private final RuntimeService runtimeService;
     private final TaskService taskService;
+    private final HistoryService historyService;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -346,12 +352,14 @@ public class GongwenService {
         String deptName = d.getDeptId() != null ? deptNameResolver.name(d.getDeptId()) : null;
 
         DocDetailResponse.CurrentTask currentTask = null;
+        DocDetailResponse.Highlight highlight = new DocDetailResponse.Highlight(List.of(), List.of());
         if (StringUtils.hasText(d.getProcessInstanceId())) {
             Task t = activeTask(d);
             if (t != null) {
                 currentTask = new DocDetailResponse.CurrentTask(
                         t.getId(), t.getTaskDefinitionKey(), t.getName(), t.getAssignee());
             }
+            highlight = computeHighlight(d.getProcessInstanceId());
         }
 
         List<DocDetailResponse.TimelineItem> timeline = opinionRepository
@@ -372,7 +380,40 @@ public class GongwenService {
                 d.getDrafter(), d.getSigner(), d.getContent(), d.getDocDate(), d.getSealStatus(),
                 d.getSealedBy(), d.getSealedAt(), d.getArchived(), d.getArchiveNo(), d.getTemplateId(),
                 d.getDeptId(), deptName, d.getProcessInstanceId(), d.getCreatedAt(),
-                currentTask, timeline, circulations);
+                currentTask, highlight, timeline, circulations);
+    }
+
+    /**
+     * 流程图高亮（节点 id 原值，与 designerJson/BPMN 元素 id 对齐）：
+     * completed=已结束活动(endTime!=null)；active=未结束活动 + 当前运行时执行的 activityId。
+     * 实例已办结（无运行时）时 active 空、completed 覆盖全程。与 workflow 侧实例详情算法一致。
+     */
+    private DocDetailResponse.Highlight computeHighlight(String pid) {
+        Set<String> completed = new LinkedHashSet<>();
+        Set<String> active = new LinkedHashSet<>();
+        try {
+            for (HistoricActivityInstance a : historyService.createHistoricActivityInstanceQuery()
+                    .processInstanceId(pid).list()) {
+                if (a.getActivityId() == null) {
+                    continue;
+                }
+                if (a.getEndTime() != null) {
+                    completed.add(a.getActivityId());
+                } else {
+                    active.add(a.getActivityId());
+                }
+            }
+            for (Execution ex : runtimeService.createExecutionQuery().processInstanceId(pid).list()) {
+                if (ex.getActivityId() != null) {
+                    active.add(ex.getActivityId());
+                }
+            }
+        } catch (Exception ignored) {
+            // 高亮为尽力而为，失败不影响详情主体
+        }
+        // 当前活动节点从 completed 移除（多实例/重入场景避免同一节点既亮完成又亮进行）
+        completed.removeAll(active);
+        return new DocDetailResponse.Highlight(new ArrayList<>(completed), new ArrayList<>(active));
     }
 
     public PageResult<GongwenListItem> list(String direction, String status, String docType,

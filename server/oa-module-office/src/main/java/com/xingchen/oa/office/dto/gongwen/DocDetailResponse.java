@@ -39,9 +39,17 @@ public record DocDetailResponse(
         String processInstanceId,
         LocalDateTime createdAt,
         CurrentTask currentTask,
+        Highlight highlight,
         List<TimelineItem> timeline,
         List<Circulation> circulations
 ) {
+    /**
+     * 流程图高亮（只读 FlowViewer 用）：元素为 designerJson 的节点 id（= BPMN 元素 id），
+     * 与节点 id 原值对齐（review/issue…），非中文名。已办结实例 active 空、completed 覆盖全程。
+     */
+    public record Highlight(List<String> completed, List<String> active) {
+    }
+
     /** 当前待办环节。 */
     public record CurrentTask(String taskId, String taskKey, String taskName, String assignee) {
     }

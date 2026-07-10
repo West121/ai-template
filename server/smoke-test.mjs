@@ -238,6 +238,12 @@ const aId = drA.body?.data?.id
 check("发文拟稿起流程(status=REVIEWING,当前核稿)", drA.body?.data?.status === "REVIEWING" && drA.body?.data?.currentTask?.taskKey === "review", JSON.stringify(drA.body?.data?.currentTask))
 check("核稿办理人=真实取人(部门主管,非硬编 initiator)", !!drA.body?.data?.currentTask?.assignee, drA.body?.data?.currentTask?.assignee)
 check("发文拟稿占位号=待编号", drA.body?.data?.code === "待编号", drA.body?.data?.code)
+// 流程图高亮（节点 id 原值：completed 含 start/review，active 含当前核稿）
+const hlDraft = drA.body?.data?.highlight
+check("发文详情返回 highlight(completed 含 start, active 含 review)",
+  !!hlDraft && Array.isArray(hlDraft.completed) && Array.isArray(hlDraft.active) &&
+    hlDraft.completed.includes("start") && hlDraft.active.includes("review") && !hlDraft.active.includes("start"),
+  JSON.stringify(hlDraft))
 const rvA = await call(admin.token, "POST", `/api/office/doc/${aId}/opinion`, { decision: "APPROVE", opinion: "核稿通过" })
 check("核稿后=签发, 办理人=部门经理(单位领导,id 2)≠发起人(admin,id 1)", rvA.body?.data?.currentTask?.taskKey === "issue" && rvA.body?.data?.currentTask?.assignee === "2", JSON.stringify(rvA.body?.data?.currentTask))
 const gwMgrTodo = await call(manager.token, "GET", "/api/wf/tasks/todo?pageNum=1&pageSize=100")
@@ -268,6 +274,9 @@ const arch = await call(admin.token, "POST", `/api/office/doc/${a.id}/archive`, 
 check("发文归档(ARCHIVED,卷宗号)", arch.body?.data?.status === "ARCHIVED" && /^\d{4}-.+-\d{4}$/.test(arch.body?.data?.archiveNo ?? ""), arch.body?.data?.archiveNo)
 // 时间线留痕：至少 拟稿/核稿/签发/用印/成文
 check("办文时间线留痕(≥5 条意见)", (arch.body?.data?.timeline?.length ?? 0) >= 5, String(arch.body?.data?.timeline?.length))
+// 办结/成文后流程结束：highlight.active 空、completed 覆盖全程(含 publish)
+const hlDone = arch.body?.data?.highlight
+check("成文后 highlight active 空 + completed 含 publish", !!hlDone && (hlDone.active?.length ?? 0) === 0 && hlDone.completed.includes("publish"), JSON.stringify(hlDone))
 
 // —— 文号防跳：连续两次占号序号 +1 ——
 const b = await draftAndIssue("冒烟测试发文B：工作安排")
