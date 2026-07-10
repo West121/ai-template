@@ -3,7 +3,7 @@
  * 复用共享元数据（ASSIGNEE_KIND_META / OPERATOR_META），与属性面板口径一致。
  */
 import { ASSIGNEE_KIND_META } from "../shared/config"
-import { OPERATOR_META, type AssigneeRule, type BranchCondition, type WfNodeProps } from "../types"
+import { OPERATOR_META, type AssigneeKind, type AssigneeRule, type BranchCondition, type WfNodeProps } from "../types"
 import type {
   AiConfig,
   CallActivityConfig,
@@ -20,12 +20,21 @@ export function summarizeAssignees(props?: WfNodeProps): string {
 }
 
 function ruleLabel(rule: AssigneeRule): string {
-  if (rule.kind === "LEADER") return `第 ${rule.level ?? 1} 级主管`
-  if (rule.kind === "INITIATOR") return "发起人本人"
-  const kind = ASSIGNEE_KIND_META[rule.kind]?.label ?? rule.kind
-  if (rule.source && rule.source !== "FIXED") return `${kind}·动态`
+  // 防御：归一化后 kind 应存在；仍缺失时回退旧 `type` 判别字段，绝不吐 "undefined"
+  const kindKey = (rule.kind ?? (rule as { type?: string }).type) as AssigneeKind | undefined
+  if (kindKey === "LEADER") return `第 ${rule.level ?? 1} 级主管`
+  if (kindKey === "INITIATOR") return "发起人本人"
+  const kindLabel = (kindKey && ASSIGNEE_KIND_META[kindKey]?.label) ?? kindKey ?? "办理人"
+  // 动态来源（非固定：表单字段 / 变量 / 公式 / 与申请人或办理人相关）
+  if (rule.source && rule.source !== "FIXED") return `${kindLabel}·动态`
+  // 固定来源：优先展示引用名（refs[].name），如「角色·部门经理」；岗位用 postName
+  const names = (rule.refs ?? []).map((r) => r.name).filter((n): n is string => !!n)
+  if (names.length > 0) {
+    return names.length === 1 ? `${kindLabel}·${names[0]}` : `${kindLabel}·${names[0]} 等 ${names.length}`
+  }
+  if (rule.postName) return `${kindLabel}·${rule.postName}`
   const count = rule.refs?.length ?? 0
-  return count > 0 ? `${kind}（${count}）` : kind
+  return count > 0 ? `${kindLabel}（${count}）` : kindLabel
 }
 
 /** 抄送人摘要 */

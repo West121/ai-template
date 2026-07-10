@@ -38,40 +38,60 @@ interface FloatingAnchors {
   targetPosition: Position
 }
 
+/** 节点包围盒（中心 + 半宽半高）；measured 缺失（首帧）时回退 node.width/height 或类型默认，绝不返回 0 */
+function nodeBox(n: InternalNode): { cx: number; cy: number; hw: number; hh: number } {
+  const nn = n as InternalNode & { width?: number; height?: number }
+  const w = n.measured.width || nn.width || 100
+  const h = n.measured.height || nn.height || 60
+  const x = n.internals.positionAbsolute.x
+  const y = n.internals.positionAbsolute.y
+  return { cx: x + w / 2, cy: y + h / 2, hw: w / 2, hh: h / 2 }
+}
+
 /**
- * 依 source/target 节点几何挑最近边、取各自「边中点」作入/出锚，供 getSmoothStepPath 出正交线。
- * 竖直位差占优走上/下、水平位差占优走左/右；尺寸未测量出（首帧）时回退调用方给的锚点。
+ * 从节点中心朝目标中心的射线与该节点**包围盒边界**的交点 + 所在边朝向。
+ * 保证连线端点恰好落在节点边界上（不进入节点体），并给出对应的 Position 供正交路由定向。
  */
-function floatingAnchors(
-  s: InternalNode,
-  t: InternalNode,
-): FloatingAnchors | null {
-  const sw = s.measured.width
-  const sh = s.measured.height
-  const tw = t.measured.width
-  const th = t.measured.height
-  if (!sw || !sh || !tw || !th) return null
+function boundaryPoint(
+  cx: number,
+  cy: number,
+  hw: number,
+  hh: number,
+  towardX: number,
+  towardY: number,
+): { x: number; y: number; pos: Position } {
+  const dx = towardX - cx
+  const dy = towardY - cy
+  if (dx === 0 && dy === 0) return { x: cx, y: cy, pos: Position.Top }
+  // 沿射线缩放到最先触及的一条边：scaleX 触左右边、scaleY 触上下边，取较小者
+  const scaleX = dx !== 0 ? hw / Math.abs(dx) : Number.POSITIVE_INFINITY
+  const scaleY = dy !== 0 ? hh / Math.abs(dy) : Number.POSITIVE_INFINITY
+  const scale = Math.min(scaleX, scaleY)
+  const x = cx + dx * scale
+  const y = cy + dy * scale
+  const pos =
+    scaleX < scaleY ? (dx > 0 ? Position.Right : Position.Left) : dy > 0 ? Position.Bottom : Position.Top
+  return { x, y, pos }
+}
 
-  const sx = s.internals.positionAbsolute.x
-  const sy = s.internals.positionAbsolute.y
-  const tx = t.internals.positionAbsolute.x
-  const ty = t.internals.positionAbsolute.y
-  const scx = sx + sw / 2
-  const scy = sy + sh / 2
-  const tcx = tx + tw / 2
-  const tcy = ty + th / 2
-  const dx = tcx - scx
-  const dy = tcy - scy
-
-  // 竖直位差 >= 水平位差 → 走上/下边（对齐时同横坐标即成竖直直线）；否则走左/右边。
-  if (Math.abs(dy) >= Math.abs(dx)) {
-    return dy >= 0
-      ? { sourceX: scx, sourceY: sy + sh, sourcePosition: Position.Bottom, targetX: tcx, targetY: ty, targetPosition: Position.Top }
-      : { sourceX: scx, sourceY: sy, sourcePosition: Position.Top, targetX: tcx, targetY: ty + th, targetPosition: Position.Bottom }
+/**
+ * 依 source/target 节点几何求各自「中心连线 × 包围盒」的边界交点作入/出锚，供 getSmoothStepPath 出正交线。
+ * 端点始终落在节点边界（含箭头），绝不插入节点体——即便种子边无 sourceHandle/targetHandle、
+ * 或自动布局后坐标偏移/重叠也稳健。竖直对齐时退化为上/下边中点 → 竖直直线（与旧观感一致）。
+ */
+function floatingAnchors(s: InternalNode, t: InternalNode): FloatingAnchors {
+  const S = nodeBox(s)
+  const T = nodeBox(t)
+  const a = boundaryPoint(S.cx, S.cy, S.hw, S.hh, T.cx, T.cy)
+  const b = boundaryPoint(T.cx, T.cy, T.hw, T.hh, S.cx, S.cy)
+  return {
+    sourceX: a.x,
+    sourceY: a.y,
+    sourcePosition: a.pos,
+    targetX: b.x,
+    targetY: b.y,
+    targetPosition: b.pos,
   }
-  return dx >= 0
-    ? { sourceX: sx + sw, sourceY: scy, sourcePosition: Position.Right, targetX: tx, targetY: tcy, targetPosition: Position.Left }
-    : { sourceX: sx, sourceY: scy, sourcePosition: Position.Left, targetX: tx + tw, targetY: tcy, targetPosition: Position.Right }
 }
 
 export function SequenceFlowEdge({

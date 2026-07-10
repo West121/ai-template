@@ -19,6 +19,7 @@
 import type { Edge, Node } from "@xyflow/react"
 import type { BranchCondition, WfNodeProps } from "../types"
 import type { FlowConfig } from "../shared/config"
+import { normalizeAssigneeRules } from "../shared/assignee-compat"
 import type { NodeHighlightState } from "./nodes/node-chrome"
 import type {
   AiConfig,
@@ -256,9 +257,18 @@ export function fromProcessModel(pm: ProcessModel): { nodes: WfRfNode[]; edges: 
   }
 }
 
+/** 归一化节点 props 的办理人规则（仅在含 assigneeRules 时重建，其余字段原样透传） */
+function normalizeProps(props: WfNodeProps): WfNodeProps {
+  if (!props.assigneeRules) return props
+  return { ...props, assigneeRules: normalizeAssigneeRules(props.assigneeRules) }
+}
+
 function flowNodeToRfNode(node: FlowNode): WfRfNode {
   const data: WfNodeData = { name: node.name }
-  if (node.props) data.props = node.props
+  // 载入即归一化办理人规则（旧 type→kind / 废弃 kind / RELATED_TO_APPLICANT 兼容），
+  // 与 dingtalk 载入路径口径一致；否则含旧 `type` 判别的种子（如公文 designerJson）进设计器后
+  // summarizeAssignees 会吐 "undefined（N）"。对新契约规则幂等，往返不变形。
+  if (node.props) data.props = normalizeProps(node.props)
   if (node.size) data.size = node.size
   if (node.locked) data.locked = true
 
