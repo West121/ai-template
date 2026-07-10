@@ -19,6 +19,7 @@ export function InclusiveGatewayNode({ id, data, selected }: NodeProps<WfRfNode>
       selected={selected}
       validation={data.validation}
       highlight={data.highlight}
+      locked={data.locked}
     />
   )
 }

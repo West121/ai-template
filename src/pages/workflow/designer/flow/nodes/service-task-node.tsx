@@ -37,6 +37,7 @@ export function ServiceTaskNode({ id, data, selected }: NodeProps<WfRfNode>) {
       selected={selected}
       validation={data.validation}
       highlight={data.highlight}
+      locked={data.locked}
     >
       {summarizeService(data.service)}
     </ActivityCard>

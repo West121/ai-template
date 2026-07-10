@@ -4,9 +4,12 @@
  */
 import { createContext, Fragment, useContext, type ComponentType, type ReactNode } from "react"
 import { Handle, NodeToolbar, Position } from "@xyflow/react"
-import { Copy, Trash2, type LucideProps } from "lucide-react"
+import { Copy, Lock, Trash2, type LucideProps } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { FormFieldOption } from "../../shared/config"
+
+/** 系统锁定节点提示文案（复用于删除按钮 title、锁标记 title） */
+export const LOCKED_NODE_HINT = "系统节点：关键回写节点，删除或改 id 会破坏公文回写（占号 / 用印 / 成文 / 归档）"
 
 /**
  * 表单字段清单上下文（W-07）：供边/节点摘要把字段 **key** 映射为表单 **label** 展示
@@ -94,8 +97,9 @@ export const NodeActionsContext = createContext<NodeActions | null>(null)
 /**
  * 节点选中时右上角浮出的操作条（react-flow 官方 NodeToolbar，零新依赖）。
  * 亮/暗走 popover/accent/destructive token。
+ * `locked` 为系统锁定节点：删除按钮禁用（关键回写节点不可删），复制仍可用（副本剥离锁定）。
  */
-export function NodeToolbarActions({ id }: { id: string }) {
+export function NodeToolbarActions({ id, locked }: { id: string; locked?: boolean }) {
   const actions = useContext(NodeActionsContext)
   if (!actions) return null
   return (
@@ -113,20 +117,46 @@ export function NodeToolbarActions({ id }: { id: string }) {
         >
           <Copy className="size-3.5" />
         </button>
-        <button
-          type="button"
-          aria-label="删除节点"
-          title="删除"
-          className="rounded p-1 text-destructive hover:bg-accent"
-          onClick={(e) => {
-            e.stopPropagation()
-            actions.remove(id)
-          }}
-        >
-          <Trash2 className="size-3.5" />
-        </button>
+        {locked ? (
+          <span
+            aria-label="系统节点不可删除"
+            title={LOCKED_NODE_HINT}
+            className="rounded p-1 text-muted-foreground/50"
+          >
+            <Lock className="size-3.5" />
+          </span>
+        ) : (
+          <button
+            type="button"
+            aria-label="删除节点"
+            title="删除"
+            className="rounded p-1 text-destructive hover:bg-accent"
+            onClick={(e) => {
+              e.stopPropagation()
+              actions.remove(id)
+            }}
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        )}
       </div>
     </NodeToolbar>
+  )
+}
+
+/**
+ * 系统锁定标记：嵌在节点标题条右侧的小锁图标（标题条为彩色底 + 白字，锁图标随之为白色）。
+ * 深浅两态自适应（继承标题条前景色）。悬停展示删除/改 id 会破坏回写的提示。
+ */
+export function SystemLockMark({ className }: { className?: string }) {
+  return (
+    <Lock
+      aria-label="系统节点"
+      className={cn("size-3 shrink-0 opacity-90", className)}
+      // title 走原生 SVG tooltip，零依赖
+    >
+      <title>{LOCKED_NODE_HINT}</title>
+    </Lock>
   )
 }
 
@@ -152,6 +182,7 @@ export function ActivityCard({
   selected,
   validation,
   highlight,
+  locked,
   children,
   className,
 }: {
@@ -164,6 +195,8 @@ export function ActivityCard({
   selected?: boolean
   validation?: ValidationRingState
   highlight?: NodeHighlightState
+  /** 系统锁定节点：标题条加锁标记 + 操作条禁用删除 */
+  locked?: boolean
   children?: ReactNode
   className?: string
 }) {
@@ -171,14 +204,16 @@ export function ActivityCard({
     <div
       className={cn(
         "group w-52 overflow-hidden rounded-lg border bg-card shadow-sm transition-shadow hover:shadow-md",
+        locked && "ring-1 ring-amber-500/40",
         nodeRing(selected, validation, highlight),
         className,
       )}
     >
-      {id && <NodeToolbarActions id={id} />}
+      {id && <NodeToolbarActions id={id} locked={locked} />}
       <div className={cn("flex h-8 items-center gap-1.5 px-3 text-xs font-medium text-white", headerClass)}>
         <Icon className="size-3.5 shrink-0" />
         <span className="min-w-0 flex-1 truncate">{title}</span>
+        {locked && <SystemLockMark />}
       </div>
       {children && <div className="truncate px-3 py-2 text-xs text-muted-foreground">{children}</div>}
       <NodeHandles color={handleColor} />
@@ -200,6 +235,7 @@ export function GatewayShell({
   selected,
   validation,
   highlight,
+  locked,
 }: {
   /** 节点 id（用于悬浮操作条）；缺省则不渲染操作条 */
   id?: string
@@ -214,10 +250,12 @@ export function GatewayShell({
   selected?: boolean
   validation?: ValidationRingState
   highlight?: NodeHighlightState
+  /** 系统锁定节点：操作条禁用删除（网关一般不锁，保留以防后端锁定） */
+  locked?: boolean
 }) {
   return (
     <div className="group relative size-12">
-      {id && <NodeToolbarActions id={id} />}
+      {id && <NodeToolbarActions id={id} locked={locked} />}
       <div
         className={cn(
           "flex size-12 rotate-45 items-center justify-center rounded-md border-2 shadow-sm",

@@ -18,6 +18,7 @@ export function CcNode({ id, data, selected }: NodeProps<WfRfNode>) {
       selected={selected}
       validation={data.validation}
       highlight={data.highlight}
+      locked={data.locked}
     >
       {summarizeCc(data.props)}
     </ActivityCard>

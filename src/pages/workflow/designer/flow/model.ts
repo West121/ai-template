@@ -98,6 +98,13 @@ export interface FlowNodeBase {
   /** 尺寸；省略时后端按类型给默认 */
   size?: Size
   /**
+   * 系统锁定节点（公文 gw_send/gw_recv 的关键回写节点）。为 true 时设计器：
+   * 禁止删除、禁止改节点 id（保存原样保留），但允许改显示名/办理人/其它 props。
+   * 后端按 node id 触发回写（占号〔〕/用印/成文/归档），误删或改 id 会导致回写失联。
+   * 由磐石在种子 designerJson 给这些节点打 true；序列化往返必须原样 passthrough（见 serialize.ts）。
+   */
+  locked?: boolean
+  /**
    * 审批域属性（assigneeRules / multiMode / voteConfig / emptyStrategy / ccUsers / formPerms /
    * timeout / events / handleOptions …）——复用现有 WfNodeProps，共享 PropertyPanel 原样消费。
    * 注意：**分支条件不再放这里**（旧钉钉挂在 nodeProps[branchId].condition），改由 edge.condition 承载。

@@ -244,11 +244,15 @@ export function FlowDesigner({
         const src = nodes.find((n) => n.id === id)
         if (!src?.type) return
         const newId = genId(src.type)
+        // 副本是全新节点（新 id，无后端回写绑定）：剥离系统锁定，成为可编辑普通节点
+        const clonedData = structuredClone(src.data)
+        delete clonedData.locked
         const clone: WfRfNode = {
           id: newId,
           type: src.type,
           position: { x: src.position.x + 24, y: src.position.y + 24 },
-          data: structuredClone(src.data),
+          data: clonedData,
+          deletable: true,
         }
         setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), { ...clone, selected: true }])
         setSelection({ kind: "node", id: newId })
@@ -257,6 +261,13 @@ export function FlowDesigner({
         const node = nodes.find((n) => n.id === id)
         if (node?.type === "startEvent") {
           toast.warning("开始事件不可删除")
+          return
+        }
+        // 系统锁定节点（公文关键回写节点）：禁止删除，否则占号/用印/成文/归档回写会失联
+        if (node?.data.locked) {
+          toast.warning("系统节点不可删除", {
+            description: "该节点绑定后端公文回写（按节点 id 触发），删除会破坏发文/收文流转",
+          })
           return
         }
         setNodes((ns) => ns.filter((n) => n.id !== id))

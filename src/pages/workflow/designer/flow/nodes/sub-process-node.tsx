@@ -8,7 +8,7 @@ import type { NodeProps } from "@xyflow/react"
 import { ChevronDown, ChevronRight, Layers } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { WfRfNode } from "../serialize"
-import { NodeHandles, NodeToolbarActions, nodeRing } from "./node-chrome"
+import { NodeHandles, NodeToolbarActions, SystemLockMark, nodeRing } from "./node-chrome"
 
 export function SubProcessNode({ id, data, selected }: NodeProps<WfRfNode>) {
   const [expanded, setExpanded] = useState(true)
@@ -19,10 +19,11 @@ export function SubProcessNode({ id, data, selected }: NodeProps<WfRfNode>) {
     <div
       className={cn(
         "group w-52 overflow-hidden rounded-lg border-2 border-indigo-500/70 bg-card shadow-sm transition-shadow hover:shadow-md",
+        data.locked && "ring-1 ring-amber-500/40",
         nodeRing(selected, data.validation, data.highlight),
       )}
     >
-      <NodeToolbarActions id={id} />
+      <NodeToolbarActions id={id} locked={data.locked} />
       <div className="flex h-8 items-center gap-1.5 bg-indigo-600 px-2.5 text-xs font-medium text-white">
         <button
           type="button"
@@ -37,6 +38,7 @@ export function SubProcessNode({ id, data, selected }: NodeProps<WfRfNode>) {
         </button>
         <Layers className="size-3.5 shrink-0" />
         <span className="min-w-0 flex-1 truncate">{data.name || "子流程"}</span>
+        {data.locked && <SystemLockMark />}
       </div>
       {expanded && (
         <div className="p-2">

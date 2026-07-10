@@ -67,6 +67,11 @@ export interface WfNodeData extends Record<string, unknown> {
   props?: WfNodeProps
   /** 尺寸；省略时后端按类型给默认（对应 FlowNode.size） */
   size?: Size
+  /**
+   * 系统锁定节点（对应 FlowNode.locked）：公文关键回写节点，设计器禁删/禁改 id。
+   * 序列化往返 passthrough；载入时同步设 rf 节点 deletable=false 以拦截键盘/deleteElements 删除。
+   */
+  locked?: boolean
   /** endEvent 专属：terminate 型（整实例终止） */
   terminate?: boolean
   /** userTask 专属：覆盖流程级 formKey */
@@ -167,9 +172,11 @@ function rfNodeToFlowNode(node: WfRfNode): FlowNode {
     position: { x: node.position.x, y: node.position.y },
   } satisfies { id: string; name: string; position: Point }
 
-  const common: { size?: Size; props?: WfNodeProps } = {}
+  const common: { size?: Size; props?: WfNodeProps; locked?: boolean } = {}
   if (node.data.size) common.size = node.data.size
   if (node.data.props) common.props = node.data.props
+  // 系统锁定标记 passthrough（保存时写回，保证往返不丢，后端回写绑定不失联）
+  if (node.data.locked) common.locked = true
 
   const d = node.data
 
@@ -253,6 +260,7 @@ function flowNodeToRfNode(node: FlowNode): WfRfNode {
   const data: WfNodeData = { name: node.name }
   if (node.props) data.props = node.props
   if (node.size) data.size = node.size
+  if (node.locked) data.locked = true
 
   switch (node.type) {
     case "endEvent":
@@ -289,12 +297,15 @@ function flowNodeToRfNode(node: FlowNode): WfRfNode {
       break
   }
 
-  return {
+  const rf: WfRfNode = {
     id: node.id,
     type: node.type,
     position: { x: node.position.x, y: node.position.y },
     data,
   }
+  // 锁定节点：禁止 react-flow 键盘/deleteElements 删除（节点悬浮删除按钮由 flow-designer 另行拦截）
+  if (node.locked) rf.deletable = false
+  return rf
 }
 
 function sequenceFlowToRfEdge(edge: SequenceFlow): WfRfEdge {
