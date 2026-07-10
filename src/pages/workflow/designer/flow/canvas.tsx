@@ -41,6 +41,8 @@ export interface FlowCanvasApi {
   focus: (target: { nodeId?: string; edgeId?: string }) => void
   /** 当前视口中心对应的画布坐标（点击新增落点用） */
   toFlowCenter: () => Point
+  /** 全览适配（自动布局后重新框选全图） */
+  fitView: () => void
 }
 
 export interface FlowCanvasProps {
@@ -78,7 +80,7 @@ function FlowCanvasInner(props: FlowCanvasProps) {
     onReady,
   } = props
   const dark = isDarkMode(useAppStore((s) => s.themeMode))
-  const { screenToFlowPosition, getNode, getEdge, setCenter } = useReactFlow<WfRfNode, WfRfEdge>()
+  const { screenToFlowPosition, getNode, getEdge, setCenter, fitView } = useReactFlow<WfRfNode, WfRfEdge>()
   const wrapperRef = useRef<HTMLDivElement>(null)
   const [dragOver, setDragOver] = useState(false)
 
@@ -138,9 +140,14 @@ function FlowCanvasInner(props: FlowCanvasProps) {
     return screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
   }, [screenToFlowPosition])
 
+  // 自动布局回写坐标后，等 react-flow 应用新 position 再全览适配（rAF 让测量到新位置）
+  const doFitView = useCallback(() => {
+    requestAnimationFrame(() => void fitView({ padding: 0.25, maxZoom: 1.2, duration: 400 }))
+  }, [fitView])
+
   useEffect(() => {
-    onReady?.({ focus, toFlowCenter })
-  }, [onReady, focus, toFlowCenter])
+    onReady?.({ focus, toFlowCenter, fitView: doFitView })
+  }, [onReady, focus, toFlowCenter, doFitView])
 
   return (
     <div

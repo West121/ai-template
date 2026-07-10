@@ -21,6 +21,11 @@ import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth-store"
 import { api, NetworkError } from "@/lib/api"
 import { FormRenderer } from "@/components/form-renderer"
+import { HostedForm } from "@/components/hosted-form"
+import { buildFieldPolicyMap } from "@/components/field-perms-editor"
+import { getForm, isCodeForm } from "@/lib/form-registry"
+import type { FieldPolicyMap } from "@/lib/form-manifest"
+import "@/pages/workflow/forms" // 触发 CODE 表单登记（registerForm 副作用）
 import { Modal } from "@/components/modal"
 import { Drawer } from "@/components/drawer"
 import { WfOpBar } from "@/components/wf-op-dialogs"
@@ -368,6 +373,21 @@ export default function WorkflowInstanceDetailPage() {
     .filter(Boolean)
     .join("、")
 
+  /* ---------- 表单来源分流（设计文档 2.4）：CODE（registry 命中）→ HostedForm；ONLINE → FormRenderer ---------- */
+  // 节点绑定的是本仓库手写 CODE 表单时，把 nodeFormPerms(tri-state) + 清单 required 合成 FieldPolicyMap 交 HostedForm。
+  const codeFormKey = detail.formKey && isCodeForm(detail.formKey) ? detail.formKey : undefined
+  const codeFieldPolicy: FieldPolicyMap | undefined = (() => {
+    if (!codeFormKey) return undefined
+    const manifest = getForm(codeFormKey)?.manifest
+    if (!manifest) return undefined
+    const policy = buildFieldPolicyMap(manifest.fields, detail.nodeFormPerms)
+    // 详情区为只读查看：在策略基础上强制不可编辑（visible/required 仍按 nodeFormPerms/清单）。
+    // 办理页 / 重新提交的可编辑 + 提交接线属较大改动，见收尾报告说明。
+    const view: FieldPolicyMap = {}
+    for (const [k, p] of Object.entries(policy)) view[k] = { ...p, editable: false }
+    return view
+  })()
+
   return (
     <div className="space-y-4">
       {/* 顶部：标题行 / 元信息行 / 操作栏行 —— 分层避免拥挤 */}
@@ -430,7 +450,10 @@ export default function WorkflowInstanceDetailPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {detail.formType === "CUSTOM" ? (
+            {codeFormKey ? (
+              // CODE 表单：registry 命中 → HostedForm 渲染，套用 nodeFormPerms 合成的字段策略（只读查看）
+              <HostedForm formKey={codeFormKey} formData={formData} fieldPolicy={codeFieldPolicy} />
+            ) : detail.formType === "CUSTOM" ? (
               <div className="space-y-3">
                 <div className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-2.5 text-sm">
                   <FileCode2 className="size-4 shrink-0 text-primary" />

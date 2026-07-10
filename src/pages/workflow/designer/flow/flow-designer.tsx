@@ -15,9 +15,9 @@
  * 节点专属 config（ai/webhook/timer/service…）的深度编辑面板、elkjs 自动布局、
  * 旧 designerJson 迁移、只读运行时高亮、表单字段清单接入 —— 推迟到后续切片。
  */
-import { useCallback, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react"
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react"
 import { addEdge, useEdgesState, useNodesState, type Connection, type Edge } from "@xyflow/react"
-import { AlertTriangle, CircleCheck, Info } from "lucide-react"
+import { AlertTriangle, CircleCheck, Info, LayoutDashboard } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
@@ -32,6 +32,7 @@ import { defaultFlowConfig, type FormFieldOption, type ProcessBase, type Process
 import type { BranchCondition, WfNodeProps } from "../types"
 import type { FlowNodeType, Point, ProcessModel, ScriptConfig, ServiceTaskConfig } from "./model"
 import { FlowCanvas, type FlowCanvasApi } from "./canvas"
+import { layoutFlow, needsLayout } from "./layout"
 import { FlowPalette } from "./flow-palette"
 import { PALETTE_INDEX } from "./node-catalog"
 import { FormFieldsContext, NodeActionsContext, type NodeActions } from "./nodes/node-chrome"
@@ -352,6 +353,23 @@ export function FlowDesigner({
     setRoundTripOk(ok)
   }, [buildModel])
 
+  /* ---- 自动整理布局（dagre）：仅回写各节点 position，data/边不动，往返仍一致 ---- */
+  const handleAutoLayout = useCallback(() => {
+    setNodes((ns) => layoutFlow(ns, edges))
+    canvasApiRef.current?.fitView()
+  }, [edges, setNodes])
+
+  // 导入 .bpmn / 迁移旧定义后坐标退化（挤在兜底位、相互重叠）→ 挂载时自动整理一次
+  const didAutoLayout = useRef(false)
+  useEffect(() => {
+    if (didAutoLayout.current) return
+    didAutoLayout.current = true
+    if (needsLayout(seed.nodes)) {
+      setNodes((ns) => layoutFlow(ns, seed.edges))
+      canvasApiRef.current?.fitView()
+    }
+  }, [seed, setNodes])
+
   const nodeOptions = useMemo(
     () => nodes.filter((n) => n.type === "userTask").map((n) => ({ id: n.id, name: n.data.name })),
     [nodes],
@@ -431,6 +449,15 @@ export function FlowDesigner({
               {roundTripOk ? "往返一致 ✓" : "往返不一致 ✗"}
             </span>
           )}
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 gap-1.5 text-xs"
+            onClick={handleAutoLayout}
+            title="按有向图自动排布节点坐标（仅整理布局，不改配置）"
+          >
+            <LayoutDashboard className="size-3.5" /> 整理布局
+          </Button>
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleValidate}>
             校验
           </Button>

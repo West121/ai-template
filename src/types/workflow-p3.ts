@@ -50,6 +50,13 @@ export interface WfInstanceDetailP3 extends WfInstanceDetail {
   bizTime?: string
   /** 当前节点字段权限（透传给 FormRenderer 的 perms：HIDDEN/READ/EDIT） */
   nodeFormPerms?: Record<string, FieldPerm>
+  /**
+   * 绑定表单 key（formCode:version 或 CODE 表单 registry key）。
+   * 后端下发；当其命中前端 registry（`isCodeForm(formKey)`）时，详情表单区改用 CODE 表单
+   * 包裹层 `HostedForm` 渲染，`nodeFormPerms` 合成 `FieldPolicyMap` 套用（设计文档 2.4）。
+   * 缺省或非 CODE → 走原 ONLINE FormRenderer 路径（现状不变）。
+   */
+  formKey?: string
 }
 
 /* ================= P3-A 运行时端点入参 / 返回 ================= */

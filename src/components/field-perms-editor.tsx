@@ -16,7 +16,7 @@ import { AlertTriangle } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Skeleton } from "@/components/ui/skeleton"
 import { getFormManifest } from "@/lib/form-registry"
-import type { FieldDescriptor, FormFieldManifest } from "@/lib/form-manifest"
+import type { FieldDescriptor, FieldPolicyMap, FormFieldManifest } from "@/lib/form-manifest"
 import type { FormPerm, FormPerms } from "@/pages/workflow/designer/types"
 
 /* ---------------- FormPerm(tri-state) ↔ 可见/可编辑 双列（纯函数，供单测） ---------------- */
@@ -38,6 +38,25 @@ export function visibleEditableToPerm(ve: VisibleEditable): FormPerm {
   if (!ve.visible) return "HIDDEN"
   if (!ve.editable) return "READ"
   return "EDIT"
+}
+
+/**
+ * 运行时接线（设计文档 2.4）：把节点级 tri-state `formPerms`（HIDDEN/READ/EDIT）+ 表单清单
+ * 合成 CODE 表单包裹层（`HostedForm`）消费的 `FieldPolicyMap`。
+ *  - visible/editable：由 `permToVisibleEditable` 从 tri-state 派生（缺省字段 → 全放行 EDIT）。
+ *  - required：取字段清单自身声明（`FieldDescriptor.required`，CODE 表单可标注；节点侧不改必填）。
+ * 只覆盖清单内字段；供任务办理 / 实例详情按 formKey 命中 CODE 表单时渲染。
+ */
+export function buildFieldPolicyMap(
+  fields: FieldDescriptor[],
+  perms: FormPerms | undefined,
+): FieldPolicyMap {
+  const map: FieldPolicyMap = {}
+  for (const f of fields) {
+    const ve = permToVisibleEditable(perms?.[f.key])
+    map[f.key] = { visible: ve.visible, editable: ve.editable, required: f.required ?? false }
+  }
+  return map
 }
 
 /** 在 formPerms 上写入某字段的三态（编辑器读写 formPerms 的核心，供单测）。 */
