@@ -123,6 +123,17 @@ describe("formula-eval · 错误表达式", () => {
     expect(validate("SUM(items.amount) > 1000 && days > 3").ok).toBe(true)
   })
 
+  it("validate 放行 extraFns（后端 CUSTOM 函数）不判为未知函数", () => {
+    // 默认未知
+    expect(validate("workDays(startDate, endDate) > 3").ok).toBe(false)
+    // 传入 CUSTOM 名单后放行（交后端 Aviator 求值）
+    expect(validate("workDays(startDate, endDate) > 3", ["workDays"]).ok).toBe(true)
+    // 名单外的仍判未知
+    const r = validate("workDays(a) && ghost(b)", ["workDays"])
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain("ghost")
+  })
+
   it("evaluate 对未知函数抛 FormulaError", () => {
     expect(() => evaluate("FOO(1)")).toThrow(FormulaError)
   })

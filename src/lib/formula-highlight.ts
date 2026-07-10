@@ -67,6 +67,8 @@ export interface EvaluateResult {
   ok: boolean
   value?: unknown
   error?: string
+  /** 表达式含后端 CUSTOM 函数：前端引擎不认，跳过预览、交后端 Aviator 求值（非错误态） */
+  backendOnly?: boolean
 }
 
 export interface TokenizeOptions {

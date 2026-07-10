@@ -15,6 +15,7 @@ import { AdvancedFormulaEditor } from "@/components/advanced-formula-editor"
 import type { EvaluateResult, FnDoc, ValidateResult } from "@/components/advanced-formula-editor"
 import { locateError } from "@/lib/formula-highlight"
 import { FUNCTION_CATALOG, evaluate, validate, type FormulaContext } from "@/lib/formula-eval"
+import { customFnDocs, referencesFunction, useCustomFunctions } from "@/lib/wf-functions"
 
 /** 可引用字段（结构与设计器 `FormFieldOption` 兼容：至少含 key/label） */
 export interface FormulaField {
@@ -48,9 +49,15 @@ const CALC_FN_DOCS: FnDoc[] = FUNCTION_CATALOG.flatMap((cat) =>
 /** 计算公式字面量 / 关键字（高亮着色用） */
 const CALC_KEYWORDS = ["true", "false", "null"] as const
 
-/** formula-eval.validate 的「带错误位置」适配版。 */
-function validateCalcFormula(expr: string): ValidateResult {
-  const r = validate(expr)
+/** 内置计算函数名集合（用于与后端 CUSTOM 去重，内置优先）。 */
+const CALC_BUILTIN_NAMES = new Set(CALC_FN_DOCS.map((f) => f.name))
+
+/**
+ * formula-eval.validate 的「带错误位置」适配版。
+ * `extraFns`：后端 CUSTOM 扩展函数——前端引擎不认，但边条件由后端 Aviator 求值，故放行不红线。
+ */
+function validateCalcFormula(expr: string, extraFns: readonly string[]): ValidateResult {
+  const r = validate(expr, extraFns)
   if (r.ok) return { ok: true }
   const message = r.error ?? "语法有误"
   return { ok: false, message, ...locateError(expr, message) }
@@ -64,26 +71,43 @@ export function FormulaDesigner({
   placeholder = "点击函数 / 字段插入，或直接输入。例：SUM(items.amount) > 1000 && days > 3",
   className,
 }: FormulaDesignerProps) {
+  // 后端 CUSTOM 扩展函数（workDays 等，会话内缓存 + 降级为空）——并进函数目录 / 补全，标注「后端函数」
+  const custom = useCustomFunctions()
+  const extDocs = useMemo(
+    () => customFnDocs(custom.filter((f) => !CALC_BUILTIN_NAMES.has(f.name)), "扩展函数", "后端函数，前端不预览"),
+    [custom],
+  )
+  const functions = useMemo(() => [...CALC_FN_DOCS, ...extDocs], [extDocs])
+  const extNameSet = useMemo(() => new Set(extDocs.map((f) => f.name)), [extDocs])
+
+  // 校验：把 CUSTOM 名单放行，前端不认的后端函数不再红线报错（交后端 Aviator 求值）
+  const validateAdapter = useMemo(() => {
+    const extNames = [...extNameSet]
+    return (expr: string) => validateCalcFormula(expr, extNames)
+  }, [extNameSet])
+
   // 仅在提供样例上下文时挂 evaluate（→ 实时预览求值结果）；否则退化为「解析结构」摘要。
   const evaluateAdapter = useMemo(() => {
     if (!sampleContext) return undefined
     return (expr: string): EvaluateResult => {
+      // 含 CUSTOM 函数：前端预览引擎不认，标注为后端求值（非错误态），不判错
+      if (referencesFunction(expr, extNameSet)) return { ok: true, backendOnly: true }
       try {
         return { ok: true, value: evaluate(expr, sampleContext) }
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
     }
-  }, [sampleContext])
+  }, [sampleContext, extNameSet])
 
   return (
     <AdvancedFormulaEditor
       className={className}
       value={value}
       onChange={onChange}
-      functions={CALC_FN_DOCS}
+      functions={functions}
       fields={fields}
-      validate={validateCalcFormula}
+      validate={validateAdapter}
       evaluate={evaluateAdapter}
       sampleContext={sampleContext}
       keywords={CALC_KEYWORDS}

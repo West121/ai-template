@@ -595,8 +595,11 @@ export function evaluate(expr: string, context: FormulaContext = {}): unknown {
 /**
  * 校验：解析并静态遍历 AST，检查函数是否在白名单内。
  * 返回 `{ ok, error? }`（不求值，故不需要上下文）。空表达式视为「未通过」（携带 error）。
+ *
+ * `extraFns`：额外放行的函数名（如后端 CUSTOM 扩展函数）——前端 `formula-eval` 不认它们，
+ * 但边条件由后端 Aviator 求值可用，故校验不应把它们判为「未知函数」而红线报错。
  */
-export function validate(expr: string): FormulaValidation {
+export function validate(expr: string, extraFns: readonly string[] = []): FormulaValidation {
   const src = expr.trim()
   if (!src) return { ok: false, error: "表达式为空" }
   let ast: AstNode
@@ -605,7 +608,8 @@ export function validate(expr: string): FormulaValidation {
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
-  const unknownFn = findUnknownFunction(ast)
+  const allowed = extraFns.length ? new Set(extraFns) : null
+  const unknownFn = findUnknownFunction(ast, allowed)
   if (unknownFn) return { ok: false, error: `未知函数：${unknownFn}（不在白名单）` }
   return { ok: true }
 }
@@ -615,25 +619,25 @@ export interface FormulaValidation {
   error?: string
 }
 
-/** 遍历 AST 找到首个不在白名单的函数名（无则返回 null） */
-function findUnknownFunction(node: AstNode): string | null {
+/** 遍历 AST 找到首个不在白名单（且不在 `allowed` 放行集）的函数名（无则返回 null） */
+function findUnknownFunction(node: AstNode, allowed: ReadonlySet<string> | null): string | null {
   switch (node.t) {
     case "call": {
-      if (!FUNCTIONS[node.name]) return node.name
+      if (!FUNCTIONS[node.name] && !allowed?.has(node.name)) return node.name
       for (const a of node.args) {
-        const found = findUnknownFunction(a)
+        const found = findUnknownFunction(a, allowed)
         if (found) return found
       }
       return null
     }
     case "member":
-      return findUnknownFunction(node.obj)
+      return findUnknownFunction(node.obj, allowed)
     case "unary":
-      return findUnknownFunction(node.arg)
+      return findUnknownFunction(node.arg, allowed)
     case "bin": {
-      const l = findUnknownFunction(node.left)
+      const l = findUnknownFunction(node.left, allowed)
       if (l) return l
-      return findUnknownFunction(node.right)
+      return findUnknownFunction(node.right, allowed)
     }
     default:
       return null

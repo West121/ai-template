@@ -310,7 +310,9 @@ export function AdvancedFormulaEditor({
         {/* 实时预览 / 解析结构 */}
         {preview?.mode === "eval" && (
           <div className="rounded-md border bg-muted/40 px-2 py-1.5 text-[11px]">
-            {preview.result.ok ? (
+            {preview.result.backendOnly ? (
+              <span className="text-muted-foreground">含后端函数，前端不预览——提交后由后端求值</span>
+            ) : preview.result.ok ? (
               <span>
                 预览结果：
                 <span className="font-mono text-foreground">{formatValue(preview.result.value)}</span>

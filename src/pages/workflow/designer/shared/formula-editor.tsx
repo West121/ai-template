@@ -8,12 +8,13 @@
  *   { kind:"FORMULA", formula:"IF(days>3, ROLE('总经理'), DEPT_LEADER(1))" }
  * 后端公式求值引擎按同一白名单解析求值出办理人集合（见 docs 校准节 A）。
  */
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { Modal } from "@/components/modal"
 import { Button } from "@/components/ui/button"
 import { AdvancedFormulaEditor } from "@/components/advanced-formula-editor"
 import type { FnDoc, ValidateResult } from "@/components/advanced-formula-editor"
 import { locateError } from "@/lib/formula-highlight"
+import { customFnDocs, useCustomFunctions } from "@/lib/wf-functions"
 import type { FormFieldOption } from "./config"
 
 /** 函数定义：名称 / 插入模板（含光标占位）/ 说明 / 示例 */
@@ -73,8 +74,11 @@ export interface FormulaValidation {
   message: string
 }
 
-/** 基础语法校验：括号匹配 + 函数名白名单 */
-export function validateFormula(formula: string): FormulaValidation {
+/**
+ * 基础语法校验：括号匹配 + 函数名白名单。
+ * `extraFns`：额外放行的函数名（后端 CUSTOM 扩展函数），避免把它们误判为「未知函数」。
+ */
+export function validateFormula(formula: string, extraFns: readonly string[] = []): FormulaValidation {
   const src = formula.trim()
   if (!src) return { ok: false, message: "公式为空" }
 
@@ -89,12 +93,13 @@ export function validateFormula(formula: string): FormulaValidation {
   }
   if (depth !== 0) return { ok: false, message: "括号不匹配：缺少 )" }
 
-  // 函数名白名单：形如 NAME( 的标识符必须在白名单内
+  // 函数名白名单：形如 NAME( 的标识符必须在白名单（含 CUSTOM 扩展）内
+  const allowed = new Set([...FORMULA_FN_WHITELIST, ...extraFns])
   const callRe = /([A-Za-z_][A-Za-z0-9_]*)\s*\(/g
   let m: RegExpExecArray | null
   while ((m = callRe.exec(src))) {
     const name = m[1]
-    if (!FORMULA_FN_WHITELIST.includes(name)) {
+    if (!allowed.has(name)) {
       return { ok: false, message: `未知函数：${name}（不在白名单）` }
     }
   }
@@ -118,11 +123,14 @@ const ASSIGNEE_FN_DOCS: FnDoc[] = FORMULA_CATEGORIES.flatMap((cat) =>
 const ASSIGNEE_KEYWORDS = ["true", "false", "null"] as const
 
 /** validateFormula 的「带错误位置」适配版：ok 时通过，否则用 locateError 还原区间。 */
-function validateAssigneeFormula(expr: string): ValidateResult {
-  const r = validateFormula(expr)
+function validateAssigneeFormula(expr: string, extraFns: readonly string[]): ValidateResult {
+  const r = validateFormula(expr, extraFns)
   if (r.ok) return { ok: true, message: r.message }
   return { ok: false, message: r.message, ...locateError(expr, r.message) }
 }
+
+/** 内置取人函数名集合（用于与后端 CUSTOM 去重，内置优先）。 */
+const ASSIGNEE_BUILTIN_NAMES = new Set(ASSIGNEE_FN_DOCS.map((f) => f.name))
 
 export function FormulaEditor({
   value,
@@ -133,13 +141,25 @@ export function FormulaEditor({
   onChange: (formula: string) => void
   fields: FormFieldOption[]
 }) {
+  // 后端 CUSTOM 扩展函数（workDays/deptLeader/dictLabel + 业务新增，会话内缓存 + 降级为空）
+  const custom = useCustomFunctions()
+
+  // 「扩展函数」分类：按 name 与内置去重（内置优先），排在取人 / 逻辑 / 比较之后
+  const extDocs = useMemo(
+    () => customFnDocs(custom.filter((f) => !ASSIGNEE_BUILTIN_NAMES.has(f.name)), "扩展函数"),
+    [custom],
+  )
+  const functions = useMemo(() => [...ASSIGNEE_FN_DOCS, ...extDocs], [extDocs])
+  const extNames = useMemo(() => extDocs.map((f) => f.name), [extDocs])
+  const validate = useMemo(() => (expr: string) => validateAssigneeFormula(expr, extNames), [extNames])
+
   return (
     <AdvancedFormulaEditor
       value={value}
       onChange={onChange}
-      functions={ASSIGNEE_FN_DOCS}
+      functions={functions}
       fields={fields}
-      validate={validateAssigneeFormula}
+      validate={validate}
       keywords={ASSIGNEE_KEYWORDS}
       placeholder="点击左侧函数 / 下方字段插入，或直接输入。例：IF(days>3, ROLE('总经理'), DEPT_LEADER(1))"
     />
