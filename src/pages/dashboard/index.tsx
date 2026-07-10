@@ -21,9 +21,9 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
-import { api, NetworkError } from "@/lib/api"
+import { api, NetworkError, type PageResult } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
-import { typeLabel } from "@/pages/approval/shared"
+import { type WfTaskItem } from "@/types/workflow"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 
@@ -133,6 +133,9 @@ export default function DashboardPage() {
   const [checkIn, setCheckIn] = useState<string | null>(null)
   const [checkOut, setCheckOut] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
+  // 「待我审批」口径 = wf 引擎待办（与「我的审批」页 / 菜单角标一致）；
+  // office dashboard 的 pendingCount 是旧审批(oa_approval)口径，已不用于此展示。
+  const [wfTodo, setWfTodo] = useState<{ total: number; list: WfTaskItem[] }>({ total: 0, list: [] })
 
   const load = useCallback(async () => {
     if (useAuthStore.getState().offline) {
@@ -144,11 +147,16 @@ export default function DashboardPage() {
       setData(d)
       setDegraded(false)
       setCheckIn(d.todayCheckIn ?? null)
-      // 注意：工作台 pendingCount 是 office 旧审批(oa_approval)口径，与「我的审批」(wf 待办)不同，
-      // 不能用它驱动 /workflow/tasks 菜单角标——角标由 app-layout/tasks 页按 wf 待办真实数设置。
     } catch (err) {
       if (err instanceof NetworkError) setDegraded(true)
       else toast.error(err instanceof Error ? err.message : "工作台数据加载失败")
+    }
+    // 「待我审批」走 wf 引擎待办（同「我的审批」页）；单独拉取，失败不影响其它卡片
+    try {
+      const page = await api<PageResult<WfTaskItem>>("/api/wf/tasks/todo?pageNum=1&pageSize=5")
+      setWfTodo({ total: page.total, list: page.list })
+    } catch {
+      /* 待办拉取失败：保持 0，不影响工作台其它数据 */
     }
   }, [])
 
@@ -182,7 +190,7 @@ export default function DashboardPage() {
   const stats = [
     {
       label: "待我审批",
-      value: degraded ? mockStats.pendingCount : (data?.pendingCount ?? 0),
+      value: degraded ? mockStats.pendingCount : wfTodo.total,
       unit: "项",
       icon: FileCheck2,
       color: "text-blue-600 bg-blue-500/10",
@@ -214,14 +222,15 @@ export default function DashboardPage() {
     },
   ]
 
+  // 「待我审批」预览列表同样走 wf 待办（与卡片数、我的审批页一致）
   const pendingList: PendingItem[] = degraded
     ? mockPendingList
-    : (data?.pendingList ?? []).map((item) => ({
-        id: item.id,
-        title: item.title,
-        type: typeLabel(item.type),
-        applicant: item.applicant,
-        time: relativeTime(item.createdAt),
+    : wfTodo.list.map((t) => ({
+        id: t.taskId,
+        title: t.instanceTitle,
+        type: t.defName,
+        applicant: t.initiatorName,
+        time: relativeTime(t.createdAt),
       }))
 
   const announcements: AnnouncementItem[] = degraded
