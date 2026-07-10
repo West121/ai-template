@@ -110,8 +110,10 @@ public class GongwenService {
         d.setCreatorId(ctx.getUserId());
         d = documentRepository.save(d);
 
+        // AssigneeResolver 取人上下文：initiatorId/initiatorDeptId 供 LEADER/INITIATOR/ROLE 等规则运行时求值。
         Map<String, Object> vars = new HashMap<>();
-        vars.put("initiator", String.valueOf(ctx.getUserId()));
+        vars.put("initiatorId", ctx.getUserId());
+        vars.put("initiatorDeptId", ctx.getActiveDeptId());
         vars.put("needCountersign", Boolean.TRUE.equals(req.needCountersign()));
         if (req.numberRuleId() != null) {
             vars.put("numberRuleId", req.numberRuleId());
@@ -150,7 +152,8 @@ public class GongwenService {
         d = documentRepository.save(d);
 
         Map<String, Object> vars = new HashMap<>();
-        vars.put("initiator", String.valueOf(ctx.getUserId()));
+        vars.put("initiatorId", ctx.getUserId());
+        vars.put("initiatorDeptId", ctx.getActiveDeptId());
         vars.put("needCirculate", Boolean.TRUE.equals(req.needCirculate()));
         ProcessInstance pi = runtimeService.startProcessInstanceByKey(
                 RECV_KEY, BIZ_PREFIX + d.getId(), vars);
@@ -514,9 +517,15 @@ public class GongwenService {
         }
     }
 
+    /**
+     * 当前活动任务：多实例(会签/多人角色)节点可能有多个并行任务，取最早创建的一个。
+     * multiMode=ANY 时办理任一即推进节点，故取首个即可；避免 singleResult 在多任务时抛错。
+     */
     private Task activeTask(Document d) {
-        return taskService.createTaskQuery()
-                .processInstanceId(d.getProcessInstanceId()).active().singleResult();
+        List<Task> tasks = taskService.createTaskQuery()
+                .processInstanceId(d.getProcessInstanceId()).active()
+                .orderByTaskCreateTime().asc().list();
+        return tasks.isEmpty() ? null : tasks.get(0);
     }
 
     private void recordOpinion(Long documentId, String taskKey, UserContext ctx,

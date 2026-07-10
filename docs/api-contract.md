@@ -40,8 +40,11 @@ RECEIVE status: TO_SIGN(待签收)/PROCESSING(办理中)/FINISHED(已办结)；S
 - POST `/api/office/documents/{id}/review` DRAFT→REVIEWING；POST `/{id}/issue` REVIEWING→ISSUED（signer=当前人）
 - DELETE `/api/office/documents/{id}`【P:office:document:edit】
 
-## 中国式公文高级化（oa-module-office，前缀 `/api/office/doc`，V20）
+## 中国式公文高级化（oa-module-office，前缀 `/api/office/doc`，V20 + V21）
 > 复用平台 Flowable 引擎：发文 `gw_send`（拟稿→核稿→会签(可选)→签发→用印→成文/分发）、收文 `gw_recv`（登记→拟办→批办→承办→传阅(可选)→办结归档）。businessKey=`GW:{documentId}`。文号用**六角括号〔〕**，签发节点占号且幂等，作废不回收（台账连续）。红头正文渲染输出 `.gw-*` class 片段（见 `docs/design/gongwen-format-spec.md`）。
+>
+> **流程注册（V21）**：两流程以 `designer_type=GRAPH` + `designer_json(ProcessModel)` 种子入 `wf_process_ext`（status=DRAFT），由既有 `WorkflowInitializer` 走 `GraphToBpmnConverter` 部署——① 出现在 `GET /api/wf/process-defs`；② 可在 react-flow 设计器打开编辑（defCode 稳定，幂等不堆叠版本）；③ 办理人走真实 OA 取人规则（`AssigneeResolver`：核稿/拟办/承办=部门主管 LEADER lv1；会签/签发/批办=部门经理角色；用印=系统管理员角色；成文/传阅/办结=发起人本人；emptyStrategy=TO_ADMIN）。office 起实例时注入 `initiatorId`/`initiatorDeptId` 供取人求值。
+> **锁定节点 key（回写 hook 绑定 taskDefinitionKey==节点 id，设计器改名不改 id）**：发文 `review/countersign/issue/seal/publish`、收文 `propose/approve/handle/circulate/finish`。改流程结构时须保留这些 id。
 >
 > Document 扩字段：copyNo(份号)/issuer(签发人,上行文)/issuingOrg(红头文字)/docType(文种)/mainRecipients/ccRecipients/attachments/annotation(附注)/templateId/sealStatus(NONE|PENDING|SEALED)/sealedBy/sealedAt/processInstanceId/archived/archiveNo/archivedAt/secretExpire。
 > 发文 status：DRAFT→REVIEWING→ISSUED→SEALED→PUBLISHED→ARCHIVED（作废 VOIDED）；收文 status：REGISTERED→ASSIGNING→APPROVING→HANDLING→CIRCULATING→FINISHED→ARCHIVED。

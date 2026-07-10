@@ -14,7 +14,7 @@ const BASE = process.env.OA_BASE ?? "http://localhost:8081"
  * 保留种子 leave_approval 及手动测试样例 purchase_approval（复杂 BPMN 定义，表单 purchase_form）。
  * 通过 docker psql 直连（本地环境）；不可用时静默跳过。设 OA_SMOKE_KEEP=1 可保留全部测试数据（调试用）。
  */
-const KEEP_DEF_CODES = ["leave_approval", "purchase_approval"]
+const KEEP_DEF_CODES = ["leave_approval", "purchase_approval", "gw_send", "gw_recv"]
 function cleanupTestData() {
   if (process.env.OA_SMOKE_KEEP === "1") {
     console.log("🧪 OA_SMOKE_KEEP=1，保留测试数据")
@@ -197,12 +197,30 @@ async function draftAndIssue(title) {
   const is = await call(admin.token, "POST", `/api/office/doc/${id}/opinion`, { decision: "APPROVE", opinion: "同意签发" })
   return { id, draft: dr.body, issued: is.body }
 }
+
+// gw_send/gw_recv 已注册为 wf 流程定义（GRAPH，可在设计器打开编辑）
+const pdefs = await call(admin.token, "GET", "/api/wf/process-defs?pageNum=1&pageSize=200")
+const pdCodes = new Set((pdefs.body?.data?.list ?? []).map((p) => p.defCode))
+check("公文流程进入流程定义列表(gw_send/gw_recv)", pdCodes.has("gw_send") && pdCodes.has("gw_recv"), [...pdCodes].join(","))
+
 const sendPrev = await call(admin.token, "POST", "/api/office/doc/number/preview", { docType: "通知" })
 check("文号预览含六角括号〔〕", /〔\d{4}〕/.test(sendPrev.body?.data?.number ?? ""), sendPrev.body?.data?.number)
 
-const a = await draftAndIssue("冒烟测试发文A：情况通报")
-check("发文拟稿起流程(status=REVIEWING,当前核稿)", a.draft?.data?.status === "REVIEWING" && a.draft?.data?.currentTask?.taskKey === "review", JSON.stringify(a.draft?.data?.currentTask))
-check("发文拟稿占位号=待编号", a.draft?.data?.code === "待编号", a.draft?.data?.code)
+// 发文A 显式分步：校验真实取人（核稿=部门主管、签发=部门经理≠发起人）+ 非发起人可见待办
+const drA = await call(admin.token, "POST", "/api/office/doc/send/draft", {
+  title: "冒烟测试发文A：情况通报", docType: "通知", issuingOrg: "星辰科技有限公司文件",
+  mainRecipients: "各部门", ccRecipients: "档案室", secret: "INTERNAL", urgency: "NORMAL", content: "关于测试的通知正文。",
+})
+const aId = drA.body?.data?.id
+check("发文拟稿起流程(status=REVIEWING,当前核稿)", drA.body?.data?.status === "REVIEWING" && drA.body?.data?.currentTask?.taskKey === "review", JSON.stringify(drA.body?.data?.currentTask))
+check("核稿办理人=真实取人(部门主管,非硬编 initiator)", !!drA.body?.data?.currentTask?.assignee, drA.body?.data?.currentTask?.assignee)
+check("发文拟稿占位号=待编号", drA.body?.data?.code === "待编号", drA.body?.data?.code)
+const rvA = await call(admin.token, "POST", `/api/office/doc/${aId}/opinion`, { decision: "APPROVE", opinion: "核稿通过" })
+check("核稿后=签发, 办理人=部门经理(单位领导,id 2)≠发起人(admin,id 1)", rvA.body?.data?.currentTask?.taskKey === "issue" && rvA.body?.data?.currentTask?.assignee === "2", JSON.stringify(rvA.body?.data?.currentTask))
+const gwMgrTodo = await call(manager.token, "GET", "/api/wf/tasks/todo?pageNum=1&pageSize=100")
+check("非发起人(王经理)待办含签发任务", (gwMgrTodo.body?.data?.list ?? []).some((t) => t.nodeName === "签发"), (gwMgrTodo.body?.data?.list ?? []).map((t) => t.nodeName).join(","))
+const isA = await call(admin.token, "POST", `/api/office/doc/${aId}/opinion`, { decision: "APPROVE", opinion: "同意签发" })
+const a = { id: aId, draft: drA.body, issued: isA.body }
 check("签发占正式号(ISSUED)", a.issued?.data?.status === "ISSUED" && a.issued?.data?.currentTask?.taskKey === "seal", JSON.stringify({ s: a.issued?.data?.status, t: a.issued?.data?.currentTask?.taskKey }))
 check("文号六角括号〔〕格式", /^星辰[发办]〔\d{4}〕\d{3}号$/.test(a.issued?.data?.code ?? ""), a.issued?.data?.code)
 // 用印
