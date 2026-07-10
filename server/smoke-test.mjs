@@ -244,6 +244,14 @@ check("发文详情返回 highlight(completed 含 start, active 含 review)",
   !!hlDraft && Array.isArray(hlDraft.completed) && Array.isArray(hlDraft.active) &&
     hlDraft.completed.includes("start") && hlDraft.active.includes("review") && !hlDraft.active.includes("start"),
   JSON.stringify(hlDraft))
+// 流程预测（核稿阶段）：后续应含 签发/用印/成文 + 预计办理人
+const predDraft = await call(admin.token, "POST", `/api/office/doc/${aId}/predict`)
+const predNodeIds = (predDraft.body?.data?.path ?? []).map((n) => n.nodeId)
+check("发文预测(核稿阶段)后续含 签发/用印/成文节点",
+  predNodeIds.includes("issue") && predNodeIds.includes("seal") && predNodeIds.includes("publish") && !predNodeIds.includes("review"),
+  JSON.stringify(predNodeIds))
+const predIssue = (predDraft.body?.data?.path ?? []).find((n) => n.nodeId === "issue")
+check("发文预测 签发预计办理人=王经理(按 assigneeRules 取人)", (predIssue?.assignees ?? []).some((a) => a.name === "王经理"), JSON.stringify(predIssue?.assignees))
 const rvA = await call(admin.token, "POST", `/api/office/doc/${aId}/opinion`, { decision: "APPROVE", opinion: "核稿通过" })
 check("核稿后=签发, 办理人=部门经理(单位领导,id 2)≠发起人(admin,id 1)", rvA.body?.data?.currentTask?.taskKey === "issue" && rvA.body?.data?.currentTask?.assignee === "2", JSON.stringify(rvA.body?.data?.currentTask))
 const gwMgrTodo = await call(manager.token, "GET", "/api/wf/tasks/todo?pageNum=1&pageSize=100")
@@ -277,6 +285,9 @@ check("办文时间线留痕(≥5 条意见)", (arch.body?.data?.timeline?.lengt
 // 办结/成文后流程结束：highlight.active 空、completed 覆盖全程(含 publish)
 const hlDone = arch.body?.data?.highlight
 check("成文后 highlight active 空 + completed 含 publish", !!hlDone && (hlDone.active?.length ?? 0) === 0 && hlDone.completed.includes("publish"), JSON.stringify(hlDone))
+// 流程已结束的预测：path 空 + note
+const predDone = await call(admin.token, "POST", `/api/office/doc/${a.id}/predict`)
+check("办结后预测 path 空 + note(流程已结束)", (predDone.body?.data?.path?.length ?? -1) === 0 && !!predDone.body?.data?.note, JSON.stringify(predDone.body?.data))
 
 // —— 文号防跳：连续两次占号序号 +1 ——
 const b = await draftAndIssue("冒烟测试发文B：工作安排")

@@ -10,12 +10,14 @@ import com.xingchen.oa.office.dto.gongwen.LedgerResponse;
 import com.xingchen.oa.office.dto.gongwen.NumberPreviewRequest;
 import com.xingchen.oa.office.dto.gongwen.NumberRuleResponse;
 import com.xingchen.oa.office.dto.gongwen.OpinionRequest;
+import com.xingchen.oa.office.dto.gongwen.PredictResponse;
 import com.xingchen.oa.office.dto.gongwen.ReadReceiptRequest;
 import com.xingchen.oa.office.dto.gongwen.RecvRegisterRequest;
 import com.xingchen.oa.office.dto.gongwen.RenderResponse;
 import com.xingchen.oa.office.dto.gongwen.SealRequest;
 import com.xingchen.oa.office.dto.gongwen.SendDraftRequest;
 import com.xingchen.oa.office.dto.gongwen.TemplateResponse;
+import com.xingchen.oa.office.service.GongwenPredictService;
 import com.xingchen.oa.office.service.GongwenService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -43,6 +45,7 @@ import java.util.Map;
 public class GongwenController {
 
     private final GongwenService gongwenService;
+    private final GongwenPredictService gongwenPredictService;
 
     // ---------- 发文 / 收文 起单 ----------
 
@@ -98,6 +101,12 @@ public class GongwenController {
     @PostMapping("/{id}/urge")
     public R<DocDetailResponse> urge(@PathVariable Long id) {
         return R.ok(gongwenService.urge(id));
+    }
+
+    /** 流程预测：从当前节点起后续将经过节点 + 预计办理人。 */
+    @PostMapping("/{id}/predict")
+    public R<PredictResponse> predict(@PathVariable Long id) {
+        return R.ok(gongwenPredictService.predict(id));
     }
 
     // ---------- 列表 / 台账 / 归档检索 ----------
