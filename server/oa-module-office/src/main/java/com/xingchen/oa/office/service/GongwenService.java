@@ -118,11 +118,15 @@ public class GongwenService {
         d = documentRepository.save(d);
 
         // AssigneeResolver 取人上下文：initiatorId/initiatorDeptId 供 LEADER/INITIATOR/ROLE 等规则运行时求值。
-        // initiatorName + 实例名(title)写入共享 Flowable 引擎，供通用待办在无 wf_instance_ext 时回退展示。
+        // __wfRegister/__title：workflow 引擎级监听（WfEngineEventListener.PROCESS_STARTED）据此自动注册
+        // wf_instance_ext 行——公文实例成为一等 wf 实例（我发起/已办/流程监控/实例详情可见）。
+        // 纯 Flowable 变量约定，office 不依赖 oa-module-workflow。
         Map<String, Object> vars = new HashMap<>();
         vars.put("initiatorId", ctx.getUserId());
         vars.put("initiatorDeptId", ctx.getActiveDeptId());
         vars.put("initiatorName", SecuritySupport.displayName(ctx));
+        vars.put("__wfRegister", true);
+        vars.put("__title", d.getTitle());
         vars.put("needCountersign", Boolean.TRUE.equals(req.needCountersign()));
         if (req.numberRuleId() != null) {
             vars.put("numberRuleId", req.numberRuleId());
@@ -165,6 +169,8 @@ public class GongwenService {
         vars.put("initiatorId", ctx.getUserId());
         vars.put("initiatorDeptId", ctx.getActiveDeptId());
         vars.put("initiatorName", SecuritySupport.displayName(ctx));
+        vars.put("__wfRegister", true);
+        vars.put("__title", d.getTitle());
         vars.put("needCirculate", Boolean.TRUE.equals(req.needCirculate()));
         ProcessInstance pi = runtimeService.startProcessInstanceByKey(
                 RECV_KEY, BIZ_PREFIX + d.getId(), vars);

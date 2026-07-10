@@ -265,6 +265,18 @@ check("发文预测(核稿阶段)后续含 签发/用印/成文节点",
   JSON.stringify(predNodeIds))
 const predIssue = (predDraft.body?.data?.path ?? []).find((n) => n.nodeId === "issue")
 check("发文预测 签发预计办理人=王经理(按 assigneeRules 取人)", (predIssue?.assignees ?? []).some((a) => a.name === "王经理"), JSON.stringify(predIssue?.assignees))
+// 一等 wf 实例：起单即注册 wf_instance_ext → 我发起/实例详情/流程监控可见
+const gwMy = await call(admin.token, "GET", "/api/wf/instances/my?pageNum=1&pageSize=50")
+const gwMyRow = (gwMy.body?.data?.list ?? []).find((r) => r.title === "冒烟测试发文A：情况通报")
+check("公文实例进「我发起」(defCode=gw_send,RUNNING,发起人)", gwMyRow?.defCode === "gw_send" && gwMyRow?.bizStatus === "RUNNING" && !!gwMyRow?.initiatorName, JSON.stringify(gwMyRow))
+if (gwMyRow) {
+  const gwInstDet = await call(admin.token, "GET", `/api/wf/instances/${gwMyRow.id}`)
+  check("公文 wf 实例详情可打开(不再404)+formViewPath 解析为办文单",
+    gwInstDet.body?.code === 0 && gwInstDet.body?.data?.formViewPath === `/document/send/${aId}` && gwInstDet.body?.data?.formType === "CODE",
+    JSON.stringify({ code: gwInstDet.body?.code, vp: gwInstDet.body?.data?.formViewPath, ft: gwInstDet.body?.data?.formType }))
+}
+const gwMon = await call(admin.token, "GET", "/api/wf/monitor/overview")
+check("流程监控统计含公文实例(byDef 含 gw_send)", (gwMon.body?.data?.byDef ?? []).some((d) => d.defCode === "gw_send" && d.count >= 1), JSON.stringify(gwMon.body?.data?.byDef))
 const rvA = await call(admin.token, "POST", `/api/office/doc/${aId}/opinion`, { decision: "APPROVE", opinion: "核稿通过" })
 check("核稿后=签发, 办理人=部门经理(单位领导,id 2)≠发起人(admin,id 1)", rvA.body?.data?.currentTask?.taskKey === "issue" && rvA.body?.data?.currentTask?.assignee === "2", JSON.stringify(rvA.body?.data?.currentTask))
 const gwMgrTodo = await call(manager.token, "GET", "/api/wf/tasks/todo?pageNum=1&pageSize=100")
@@ -301,6 +313,19 @@ check("成文后 highlight active 空 + completed 含 publish", !!hlDone && (hlD
 // 流程已结束的预测：path 空 + note
 const predDone = await call(admin.token, "POST", `/api/office/doc/${a.id}/predict`)
 check("办结后预测 path 空 + note(流程已结束)", (predDone.body?.data?.path?.length ?? -1) === 0 && !!predDone.body?.data?.note, JSON.stringify(predDone.body?.data))
+// 办结后 wf_instance_ext biz_status 同步（PROCESS_COMPLETED 监听）
+const gwMyDone = await call(admin.token, "GET", "/api/wf/instances/my?pageNum=1&pageSize=50")
+const gwMyDoneRow = (gwMyDone.body?.data?.list ?? []).find((r) => r.title === "冒烟测试发文A：情况通报")
+check("成文后「我发起」实例 bizStatus 同步 APPROVED", gwMyDoneRow?.bizStatus === "APPROVED" && !!gwMyDoneRow?.endedAt, JSON.stringify({ s: gwMyDoneRow?.bizStatus, e: !!gwMyDoneRow?.endedAt }))
+// 「已办」有记录且带 viewPath（admin 办过核稿等环节）
+const gwDone = await call(admin.token, "GET", "/api/wf/tasks/done?pageNum=1&pageSize=50")
+const gwDoneRow = (gwDone.body?.data?.list ?? []).find((t) => t.viewPath === `/document/send/${aId}`)
+check("「已办」公文任务带 viewPath(跳办文单) + 标题", !!gwDoneRow && gwDoneRow.instanceTitle === "冒烟测试发文A：情况通报", JSON.stringify({ vp: gwDoneRow?.viewPath, t: gwDoneRow?.instanceTitle }))
+// 已办页签接口 /instances/done-by-me：200 + 列表（缺 wf_instance_ext 行回退历史，绝不 404 整列表），公文行带 viewPath
+const doneByMe = await call(admin.token, "GET", "/api/wf/instances/done-by-me?pageNum=1&pageSize=100")
+check("done-by-me 返回 200+列表(不再404)", doneByMe.status === 200 && doneByMe.body?.code === 0 && Array.isArray(doneByMe.body?.data?.list), JSON.stringify({ status: doneByMe.status, code: doneByMe.body?.code }))
+const dbmGw = (doneByMe.body?.data?.list ?? []).find((t) => t.viewPath === `/document/send/${aId}`)
+check("done-by-me 公文行带 viewPath+标题+defName", !!dbmGw && dbmGw.instanceTitle === "冒烟测试发文A：情况通报" && dbmGw.defName === "发文办理单", JSON.stringify({ vp: dbmGw?.viewPath, t: dbmGw?.instanceTitle, d: dbmGw?.defName }))
 
 // —— 文号防跳：连续两次占号序号 +1 ——
 const b = await draftAndIssue("冒烟测试发文B：工作安排")

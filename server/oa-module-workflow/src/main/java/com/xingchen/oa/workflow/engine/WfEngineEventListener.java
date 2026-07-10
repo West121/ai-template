@@ -3,9 +3,11 @@ package com.xingchen.oa.workflow.engine;
 import com.xingchen.oa.workflow.entity.WfDelegateRule;
 import com.xingchen.oa.workflow.entity.WfInstanceExt;
 import com.xingchen.oa.workflow.entity.WfNotify;
+import com.xingchen.oa.workflow.entity.WfProcessExt;
 import com.xingchen.oa.workflow.repository.WfDelegateRuleRepository;
 import com.xingchen.oa.workflow.repository.WfInstanceExtRepository;
 import com.xingchen.oa.workflow.repository.WfNotifyRepository;
+import com.xingchen.oa.workflow.repository.WfProcessExtRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.flowable.engine.TaskService;
@@ -15,6 +17,7 @@ import org.flowable.common.engine.api.delegate.event.FlowableEvent;
 import org.flowable.common.engine.api.delegate.event.FlowableEventListener;
 import org.flowable.common.engine.api.delegate.event.FlowableEventType;
 import org.flowable.common.engine.api.delegate.event.FlowableEngineEvent;
+import org.flowable.engine.delegate.event.FlowableProcessStartedEvent;
 import org.flowable.task.api.Task;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
@@ -23,12 +26,17 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
  * 引擎全局事件监听：
+ * - PROCESS_STARTED：带 {@code __wfRegister=true} 流程变量的实例（业务模块直起引擎，如公文办文）
+ *   自动注册 wf_instance_ext 行——公文实例成为一等 wf 实例（我发起/已办/监控/实例详情可见）。
+ *   InstanceService 起单路径自己落行、不带该标记，互不重复。
  * - TASK_CREATED：向任务办理人投递 TODO 通知；
  * - PROCESS_COMPLETED / 终止结束：同步 wf_instance_ext.biz_status = APPROVED 并向发起人投递 RESULT 通知。
+ * - PROCESS_CANCELLED：deleteProcessInstance（退回/撤销）时仍 RUNNING 的行同步 CANCELED（服务层随后可覆写更精确状态）。
  * 在 {@link FlowableEngineConfig} 中注册进 ProcessEngineConfiguration。
  */
 @Slf4j
@@ -36,9 +44,14 @@ import java.util.Objects;
 @RequiredArgsConstructor
 public class WfEngineEventListener implements FlowableEventListener {
 
+    /** 业务模块直起引擎时的注册标记变量：__wfRegister=true → 本监听补 wf_instance_ext；__title=实例标题。 */
+    public static final String VAR_REGISTER = "__wfRegister";
+    public static final String VAR_TITLE = "__title";
+
     private final WfInstanceExtRepository instanceRepository;
     private final WfNotifyRepository notifyRepository;
     private final WfDelegateRuleRepository delegateRuleRepository;
+    private final WfProcessExtRepository processRepository;
     /** 延迟解析，避免 processEngine ↔ 全局事件监听器循环依赖。 */
     private final ObjectProvider<TaskService> taskServiceProvider;
 
@@ -49,14 +62,77 @@ public class WfEngineEventListener implements FlowableEventListener {
         }
         try {
             switch (type) {
+                case PROCESS_STARTED -> onProcessStarted(event);
                 case TASK_CREATED -> onTaskCreated(event);
                 case PROCESS_COMPLETED, PROCESS_COMPLETED_WITH_TERMINATE_END_EVENT -> onProcessCompleted(event);
+                case PROCESS_CANCELLED -> onProcessCancelled(event);
                 default -> {
                 }
             }
         } catch (Exception e) {
             log.warn("工作流事件处理异常 type={}: {}", type, e.getMessage());
         }
+    }
+
+    /**
+     * 引擎级实例注册：业务模块直调 RuntimeService 起的实例（变量带 __wfRegister=true）
+     * 自动补 wf_instance_ext 行，使其在 我发起/已办/流程监控/实例详情 与普通 wf 实例同等可见。
+     */
+    private void onProcessStarted(FlowableEvent event) {
+        if (!(event instanceof FlowableProcessStartedEvent pse) || !(event instanceof FlowableEngineEvent ee)) {
+            return;
+        }
+        Map<String, Object> vars = pse.getVariables();
+        if (vars == null || !Boolean.TRUE.equals(vars.get(VAR_REGISTER))) {
+            return;
+        }
+        String pid = ee.getProcessInstanceId();
+        if (pid == null || instanceRepository.findByProcInstId(pid).isPresent()) {
+            return;
+        }
+        String procDefId = ee.getProcessDefinitionId();
+        String defKey = procDefId != null && procDefId.contains(":")
+                ? procDefId.substring(0, procDefId.indexOf(':')) : procDefId;
+        WfProcessExt def = defKey != null ? processRepository.findByDefCode(defKey).orElse(null) : null;
+
+        WfInstanceExt inst = new WfInstanceExt();
+        inst.setProcInstId(pid);
+        inst.setDefCode(defKey != null ? defKey : "unknown");
+        inst.setDefName(def != null ? def.getName() : defKey);
+        Object title = vars.get(VAR_TITLE);
+        inst.setTitle(title != null && !String.valueOf(title).isBlank()
+                ? String.valueOf(title)
+                : (def != null ? def.getName() : String.valueOf(defKey)));
+        inst.setInitiatorId(asLong(vars.get("initiatorId")));
+        Object initiatorName = vars.get("initiatorName");
+        inst.setInitiatorName(initiatorName != null ? String.valueOf(initiatorName) : null);
+        inst.setInitiatorDeptId(asLong(vars.get("initiatorDeptId")));
+        inst.setFormCode(def != null ? def.getFormCode() : null);
+        inst.setBizStatus(WfInstanceExt.STATUS_RUNNING);
+        instanceRepository.save(inst);
+        log.info("引擎级实例注册：{} ({}) pid={}", inst.getTitle(), inst.getDefCode(), pid);
+    }
+
+    /** deleteProcessInstance（退回/撤销等）：仍 RUNNING 的注册行同步 CANCELED（服务层后续覆写更精确状态不受影响）。 */
+    private void onProcessCancelled(FlowableEvent event) {
+        if (!(event instanceof FlowableEngineEvent ee)) {
+            return;
+        }
+        String pid = ee.getProcessInstanceId();
+        if (pid == null) {
+            return;
+        }
+        WfInstanceExt inst = instanceRepository.findByProcInstId(pid).orElse(null);
+        if (inst == null || !WfInstanceExt.STATUS_RUNNING.equals(inst.getBizStatus())) {
+            return;
+        }
+        inst.setBizStatus(WfInstanceExt.STATUS_CANCELED);
+        inst.setEndedAt(OffsetDateTime.now());
+        instanceRepository.save(inst);
+    }
+
+    private Long asLong(Object v) {
+        return v instanceof Number n ? n.longValue() : null;
     }
 
     private void onTaskCreated(FlowableEvent event) {
@@ -172,8 +248,10 @@ public class WfEngineEventListener implements FlowableEventListener {
 
     @Override
     public Collection<? extends FlowableEventType> getTypes() {
-        return List.of(FlowableEngineEventType.TASK_CREATED,
+        return List.of(FlowableEngineEventType.PROCESS_STARTED,
+                FlowableEngineEventType.TASK_CREATED,
                 FlowableEngineEventType.PROCESS_COMPLETED,
-                FlowableEngineEventType.PROCESS_COMPLETED_WITH_TERMINATE_END_EVENT);
+                FlowableEngineEventType.PROCESS_COMPLETED_WITH_TERMINATE_END_EVENT,
+                FlowableEngineEventType.PROCESS_CANCELLED);
     }
 }

@@ -3,6 +3,7 @@ package com.xingchen.oa.workflow.controller;
 import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.core.R;
 import com.xingchen.oa.workflow.dto.CcItem;
+import com.xingchen.oa.workflow.dto.DoneByMeItem;
 import com.xingchen.oa.workflow.dto.InstanceDetailResponse;
 import com.xingchen.oa.workflow.dto.InstanceListItem;
 import com.xingchen.oa.workflow.dto.P2Requests.AppendNodeRequest;
@@ -56,6 +57,14 @@ public class InstanceController {
             @RequestParam(defaultValue = "1") int pageNum,
             @RequestParam(defaultValue = "10") int pageSize) {
         return R.ok(service.my(pageNum, pageSize));
+    }
+
+    /** 「已办」列表：我办结的历史任务（缺 wf_instance_ext 行回退 Flowable 历史，绝不 404 整个列表）。 */
+    @GetMapping("/instances/done-by-me")
+    public R<PageResult<DoneByMeItem>> doneByMe(
+            @RequestParam(defaultValue = "1") int pageNum,
+            @RequestParam(defaultValue = "10") int pageSize) {
+        return R.ok(service.doneByMe(pageNum, pageSize));
     }
 
     @GetMapping("/instances/admin")

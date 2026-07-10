@@ -4,6 +4,7 @@ import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.common.security.UserContext;
 import com.xingchen.oa.workflow.dto.CcItem;
+import com.xingchen.oa.workflow.dto.DoneByMeItem;
 import com.xingchen.oa.workflow.dto.InstanceDetailResponse;
 import com.xingchen.oa.workflow.dto.InstanceDetailResponse.AssigneeInfo;
 import com.xingchen.oa.workflow.dto.InstanceDetailResponse.CommentItem;
@@ -54,6 +55,7 @@ import org.flowable.engine.history.HistoricProcessInstance;
 import org.flowable.engine.runtime.Execution;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
+import org.flowable.task.api.history.HistoricTaskInstance;
 import org.flowable.engine.TaskService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -213,6 +215,84 @@ public class InstanceService {
                 page.getTotalElements(), pageNum, pageSize);
     }
 
+    /**
+     * 「已办」列表（GET /api/wf/instances/done-by-me）：我办结的历史任务。
+     * 组装原则：wf_instance_ext 有行用行；<b>缺行回退 Flowable 历史数据</b>（defName/title 从
+     * HistoricProcessInstance 取）——绝不因单条缺行 404 整个列表（orElseThrow 只留给单实例详情语义）。
+     * action/comment 从 wf_operation 按任务批量回填（公文经 office 办理无审计行 → null）；
+     * viewPath 按流程定义 form_view_path 模板解析（如公文 /document/send/{docId}）。
+     */
+    public PageResult<DoneByMeItem> doneByMe(int pageNum, int pageSize) {
+        String uid = String.valueOf(WfSupport.currentUser().getUserId());
+        long total = historyService.createHistoricTaskInstanceQuery().taskAssignee(uid).finished().count();
+        List<HistoricTaskInstance> tasks = historyService.createHistoricTaskInstanceQuery()
+                .taskAssignee(uid).finished()
+                .orderByHistoricTaskInstanceEndTime().desc()
+                .listPage(Math.max(pageNum - 1, 0) * pageSize, pageSize);
+
+        // 一页一查：任务操作记录（action/comment，取每任务最新一条）
+        Map<String, WfOperation> opByTask = new LinkedHashMap<>();
+        try {
+            List<String> taskIds = tasks.stream().map(HistoricTaskInstance::getId).toList();
+            if (!taskIds.isEmpty()) {
+                for (WfOperation op : operationRepository.findByTaskIdIn(taskIds)) {
+                    WfOperation prev = opByTask.get(op.getTaskId());
+                    if (prev == null || (op.getCreatedAt() != null && prev.getCreatedAt() != null
+                            && op.getCreatedAt().isAfter(prev.getCreatedAt()))) {
+                        opByTask.put(op.getTaskId(), op);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("已办列表操作记录批查失败（action/comment 置空）: {}", e.getMessage());
+        }
+
+        // 方法内缓存：历史实例 / 流程定义 view 模板，避免同实例重复查
+        Map<String, HistoricProcessInstance> hpiCache = new LinkedHashMap<>();
+        Map<String, String> viewTplCache = new LinkedHashMap<>();
+
+        List<DoneByMeItem> list = tasks.stream().map(t -> {
+            String pid = t.getProcessInstanceId();
+            WfInstanceExt inst = instanceRepository.findByProcInstId(pid).orElse(null);
+            Long instanceId = inst != null ? inst.getId() : null;
+            String title = inst != null ? inst.getTitle() : null;
+            String defName = inst != null ? inst.getDefName() : null;
+            String bizStatus = inst != null ? inst.getBizStatus() : null;
+            if (inst == null) {
+                // 缺行回退：Flowable 历史实例（如遗留直起/被清理过的实例），失败置空不炸列表
+                HistoricProcessInstance hpi = hpiCache.computeIfAbsent(pid, this::historicInstanceSafe);
+                if (hpi != null) {
+                    title = StringUtils.hasText(hpi.getName()) ? hpi.getName() : null;
+                    defName = hpi.getProcessDefinitionName();
+                    bizStatus = hpi.getEndTime() == null
+                            ? WfInstanceExt.STATUS_RUNNING : WfInstanceExt.STATUS_APPROVED;
+                }
+            }
+            String defKey = t.getProcessDefinitionId() != null && t.getProcessDefinitionId().contains(":")
+                    ? t.getProcessDefinitionId().substring(0, t.getProcessDefinitionId().indexOf(':'))
+                    : t.getProcessDefinitionId();
+            String tpl = defKey == null ? null : viewTplCache.computeIfAbsent(defKey,
+                    k -> processRepository.findByDefCode(k).map(WfProcessExt::getFormViewPath).orElse(""));
+            String viewPath = StringUtils.hasText(tpl) ? resolveViewPath(tpl, pid) : null;
+
+            WfOperation op = opByTask.get(t.getId());
+            OffsetDateTime doneAt = t.getEndTime() != null
+                    ? t.getEndTime().toInstant().atZone(java.time.ZoneId.systemDefault()).toOffsetDateTime() : null;
+            return new DoneByMeItem(t.getId(), pid, instanceId, title, defName, t.getName(),
+                    op != null ? op.getAction() : null, op != null ? op.getComment() : null,
+                    bizStatus, doneAt, viewPath);
+        }).toList();
+        return new PageResult<>(list, total, pageNum, pageSize);
+    }
+
+    private HistoricProcessInstance historicInstanceSafe(String pid) {
+        try {
+            return historyService.createHistoricProcessInstanceQuery().processInstanceId(pid).singleResult();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /* ---------------- 详情 ---------------- */
 
     @Transactional
@@ -361,7 +441,8 @@ public class InstanceService {
         }
         // 术语归一：DYNAMIC→ONLINE、CUSTOM→CODE（兼容读旧值）
         String formType = WfProcessExt.canonicalFormType(def != null ? def.getFormType() : null);
-        String formViewPath = def != null ? def.getFormViewPath() : null;
+        // form_view_path 支持 {id} 模板（=businessKey 末段，如公文 GW:67 → 67）：详情返回已解析路径
+        String formViewPath = resolveViewPath(def != null ? def.getFormViewPath() : null, pid);
 
         // 跟踪图分流：DINGTALK 定义额外回传 designerJson（钉钉模型），前端据 designerType 选钉钉跟踪图 / bpmn 图
         String designerType = def != null && StringUtils.hasText(def.getDesignerType())
@@ -998,6 +1079,33 @@ public class InstanceService {
 
     private boolean runtimeEnded(String pid) {
         return runtimeService.createProcessInstanceQuery().processInstanceId(pid).count() == 0;
+    }
+
+    /**
+     * form_view_path 的 {id} 模板解析：{id}=实例 businessKey 末段（如公文 GW:67 → 67）。
+     * 无模板/无 {id} 原样返回；有 {id} 但取不到 businessKey → null（前端回退通用实例详情）。
+     */
+    private String resolveViewPath(String template, String pid) {
+        if (!StringUtils.hasText(template) || !template.contains("{id}")) {
+            return template;
+        }
+        String bk = null;
+        try {
+            ProcessInstance pi = runtimeService.createProcessInstanceQuery().processInstanceId(pid).singleResult();
+            bk = pi != null ? pi.getBusinessKey() : null;
+            if (bk == null) {
+                HistoricProcessInstance hpi = historyService.createHistoricProcessInstanceQuery()
+                        .processInstanceId(pid).singleResult();
+                bk = hpi != null ? hpi.getBusinessKey() : null;
+            }
+        } catch (Exception ignored) {
+            // businessKey 读取失败按无处理
+        }
+        if (!StringUtils.hasText(bk)) {
+            return null;
+        }
+        String id = bk.contains(":") ? bk.substring(bk.lastIndexOf(':') + 1) : bk;
+        return StringUtils.hasText(id) ? template.replace("{id}", id) : null;
     }
 
     /**
