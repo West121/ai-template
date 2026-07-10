@@ -52,6 +52,13 @@ import {
   type ProcessDefItem,
 } from "@/pages/workflow/designer/types"
 
+/** GET /api/wf/forms/code：已登记 CODE（代码）表单，供流程定义绑定下拉 */
+interface CodeFormItem {
+  formKey: string
+  name: string
+  fieldCount?: number
+}
+
 const DESIGNER_META: Record<DesignerType, { label: string; description: string; icon: typeof Workflow }> = {
   DINGTALK: { label: "仿钉钉（简易）", description: "线性步骤 + 条件分支，适合审批场景，零门槛配置", icon: GitBranch },
   GRAPH: { label: "流程图（专业）", description: "react-flow 图设计器，支持网关/子流程/定时/脚本等复杂结构", icon: Workflow },
@@ -89,6 +96,7 @@ export default function WorkflowDefsPage() {
   const [total, setTotal] = useState(0)
 
   const [publishedForms, setPublishedForms] = useState<FormDefItem[]>([])
+  const [codeForms, setCodeForms] = useState<CodeFormItem[]>([])
 
   const [createOpen, setCreateOpen] = useState(false)
   const [createForm, setCreateForm] = useState({
@@ -96,7 +104,7 @@ export default function WorkflowDefsPage() {
     name: "",
     category: "",
     designerType: "DINGTALK" as DesignerType,
-    formType: "DYNAMIC" as FormType,
+    formType: "ONLINE" as FormType,
     formCode: "",
     formSubmitPath: "",
     formViewPath: "",
@@ -146,9 +154,19 @@ export default function WorkflowDefsPage() {
     }
   }, [])
 
+  // 已登记 CODE 表单列表（绑定「代码表单」下拉用）；后端未就绪则降级空
+  const loadCodeForms = useCallback(async () => {
+    try {
+      setCodeForms(await api<CodeFormItem[]>("/api/wf/forms/code"))
+    } catch {
+      setCodeForms([])
+    }
+  }, [])
+
   useEffect(() => {
     void loadForms()
-  }, [loadForms])
+    void loadCodeForms()
+  }, [loadForms, loadCodeForms])
 
   // 关键词/分页变化时查后端（关键词防抖 250ms）
   useEffect(() => {
@@ -162,7 +180,7 @@ export default function WorkflowDefsPage() {
       name: "",
       category: "",
       designerType: "DINGTALK",
-      formType: "DYNAMIC",
+      formType: "ONLINE",
       formCode: "",
       formSubmitPath: "",
       formViewPath: "",
@@ -176,8 +194,8 @@ export default function WorkflowDefsPage() {
       toast.error("请填写流程名称与编码")
       return
     }
-    if (createForm.formType === "CUSTOM" && !createForm.formSubmitPath.trim()) {
-      toast.error("自定义表单需填写发起页路由")
+    if (createForm.formType === "CODE" && !createForm.formCode) {
+      toast.error("请选择一个已登记的代码表单")
       return
     }
     const params = new URLSearchParams()
@@ -186,9 +204,10 @@ export default function WorkflowDefsPage() {
     params.set("name", createForm.name.trim())
     if (createForm.category.trim()) params.set("category", createForm.category.trim())
     params.set("formType", createForm.formType)
-    if (createForm.formType === "DYNAMIC" && createForm.formCode) params.set("formCode", createForm.formCode)
-    if (createForm.formType === "CUSTOM") {
-      params.set("formSubmitPath", createForm.formSubmitPath.trim())
+    // ONLINE 与 CODE 都绑 formCode（ONLINE=在线表单 code / CODE=代码表单 formKey）
+    if (createForm.formCode) params.set("formCode", createForm.formCode)
+    if (createForm.formType === "CODE") {
+      if (createForm.formSubmitPath.trim()) params.set("formSubmitPath", createForm.formSubmitPath.trim())
       if (createForm.formViewPath.trim()) params.set("formViewPath", createForm.formViewPath.trim())
     }
     setCreateOpen(false)
@@ -533,14 +552,14 @@ export default function WorkflowDefsPage() {
               />
             </div>
 
-            {/* 表单绑定：二选一（动态表单 / 自定义表单） */}
+            {/* 表单绑定：二选一（在线表单 / 代码表单） */}
             <div className="space-y-2">
               <Label>表单绑定</Label>
               <div className="grid grid-cols-2 gap-2.5">
                 {(
                   [
-                    { type: "DYNAMIC", label: "动态表单", desc: "选择已发布的表单定义，可视化渲染" },
-                    { type: "CUSTOM", label: "自定义表单", desc: "指定 React 路由页面作发起 / 详情表单" },
+                    { type: "ONLINE", label: "在线表单", desc: "选择已发布的在线设计器表单，字段从 schema 派生" },
+                    { type: "CODE", label: "代码表单", desc: "选择已登记的手写表单，字段从清单识别；可选自定义发起页" },
                   ] as const
                 ).map((opt) => {
                   const active = createForm.formType === opt.type
@@ -548,7 +567,7 @@ export default function WorkflowDefsPage() {
                     <button
                       key={opt.type}
                       type="button"
-                      onClick={() => setCreateForm((f) => ({ ...f, formType: opt.type }))}
+                      onClick={() => setCreateForm((f) => ({ ...f, formType: opt.type, formCode: "" }))}
                       className={cn(
                         "flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors",
                         active ? "border-primary/50 bg-primary/5" : "hover:bg-accent",
@@ -560,7 +579,7 @@ export default function WorkflowDefsPage() {
                   )
                 })}
               </div>
-              {createForm.formType === "DYNAMIC" ? (
+              {createForm.formType === "ONLINE" ? (
                 <Select
                   value={createForm.formCode || undefined}
                   onValueChange={(v) => setCreateForm((f) => ({ ...f, formCode: v }))}
@@ -579,31 +598,38 @@ export default function WorkflowDefsPage() {
               ) : (
                 <div className="grid gap-2">
                   <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">代码表单（formKey）</Label>
+                    <Select
+                      value={createForm.formCode || undefined}
+                      onValueChange={(v) => setCreateForm((f) => ({ ...f, formCode: v }))}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder={codeForms.length ? "选择已登记代码表单" : "暂无已登记代码表单"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {codeForms.map((f) => (
+                          <SelectItem key={f.formKey} value={f.formKey}>
+                            {f.name}（{f.formKey}
+                            {typeof f.fieldCount === "number" ? ` · ${f.fieldCount} 字段` : ""}）
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
                     <Label htmlFor="pd-submit-path" className="text-xs text-muted-foreground">
-                      发起页路由（formSubmitPath）
+                      自定义发起页路由（formSubmitPath，选填）
                     </Label>
                     <Input
                       id="pd-submit-path"
                       value={createForm.formSubmitPath}
                       onChange={(e) => setCreateForm((f) => ({ ...f, formSubmitPath: e.target.value }))}
-                      placeholder="如 /flow/leave/create"
-                      className="font-mono"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="pd-view-path" className="text-xs text-muted-foreground">
-                      详情查看路由（formViewPath）
-                    </Label>
-                    <Input
-                      id="pd-view-path"
-                      value={createForm.formViewPath}
-                      onChange={(e) => setCreateForm((f) => ({ ...f, formViewPath: e.target.value }))}
-                      placeholder="如 /flow/leave/view"
+                      placeholder="如 /document/send?new=1（留空则内嵌登记表单）"
                       className="font-mono"
                     />
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    发起 / 详情由自定义 React 页面渲染（运行时由 C 对齐 formType/路径契约）。
+                    字段清单经统一接口识别，供分支条件 / 按字段取人 / 字段权限使用；填了发起页则从「发起申请」navigate 跳该页起单。
                   </p>
                 </div>
               )}

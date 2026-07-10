@@ -40,8 +40,18 @@ export interface FormDefItem {
  */
 export type DesignerType = "DINGTALK" | "GRAPH" | "BPMN"
 
-/** 表单绑定类型：动态表单（表单定义） / 自定义表单（React 路由页面） */
-export type FormType = "DYNAMIC" | "CUSTOM"
+/**
+ * 表单绑定类型（术语对齐 FormFieldManifest / 后端 ProcessDef.form_type）：
+ *  - `ONLINE`：在线表单，绑一个在线设计器表单 formCode，字段从 schemaJson 派生。
+ *  - `CODE`：代码表单，绑一个已登记 CODE 表单 formKey，字段从登记清单取；可选带 formSubmitPath（自定义发起页）。
+ * 兼容读旧值：`DYNAMIC→ONLINE`、`CUSTOM→CODE`（存量流程不炸）。
+ */
+export type FormType = "ONLINE" | "CODE"
+
+/** 归一化表单类型（兼容旧 DYNAMIC/CUSTOM）；缺省视为 ONLINE */
+export function normalizeFormType(raw?: string | null): FormType {
+  return raw === "CODE" || raw === "CUSTOM" ? "CODE" : "ONLINE"
+}
 
 export interface ProcessDefItem {
   id: number
@@ -49,12 +59,13 @@ export interface ProcessDefItem {
   name: string
   category?: string | null
   icon?: string | null
-  formType?: FormType | null
+  /** 表单类型；后端可能仍下发旧值 DYNAMIC/CUSTOM，读取时用 normalizeFormType 归一 */
+  formType?: FormType | string | null
   formCode?: string | null
   formVersion?: number | null
-  /** CUSTOM：发起页 React 路由 */
+  /** CODE：可选自定义发起页 React 路由 */
   formSubmitPath?: string | null
-  /** CUSTOM：详情查看 React 路由 */
+  /** CODE：可选详情查看 React 路由 */
   formViewPath?: string | null
   designerType: DesignerType
   designerJson?: string | null

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   CalendarDays,
@@ -22,6 +22,10 @@ import { api, NetworkError } from "@/lib/api"
 import { PageHeader } from "@/components/page-header"
 import { Modal } from "@/components/modal"
 import { FormRenderer } from "@/components/form-renderer"
+import { HostedForm } from "@/components/hosted-form"
+import { isCodeForm, type HostedFormHandle } from "@/lib/form-registry"
+import { normalizeFormType } from "@/pages/workflow/designer/types"
+import "@/pages/workflow/forms" // 触发 CODE 表单登记（registerForm 副作用），供内嵌渲染
 import { BackendDownCard } from "@/pages/approval/shared"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -83,6 +87,9 @@ export default function WorkflowStartPage() {
   const [title, setTitle] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [savingDraft, setSavingDraft] = useState(false)
+  // CODE 表单内嵌渲染（无自定义发起页时）：数据 + 受控提交句柄
+  const [codeData, setCodeData] = useState<WfFormData>({})
+  const codeFormRef = useRef<HostedFormHandle>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -107,14 +114,24 @@ export default function WorkflowStartPage() {
     void load()
   }, [load, offline])
 
-  // 打开发起弹窗：拉最新表单定义。CUSTOM 表单跳自定义发起页（React 路由），不弹动态表单。
+  // 打开发起弹窗。CODE（代码表单）：有 formSubmitPath → navigate 跳自定义发起页（如公文拟稿单）；
+  // 无发起页但已登记手写组件 → 内嵌 HostedForm 渲染。ONLINE：拉最新 schema 弹动态表单。
   const openStart = useCallback((def: WfStartableDef) => {
-    if (def.formType === "CUSTOM") {
+    if (normalizeFormType(def.formType) === "CODE") {
       if (def.formSubmitPath) {
         navigate(def.formSubmitPath)
-      } else {
-        toast.error(`「${def.name}」为自定义表单但未配置发起页路径`)
+        return
       }
+      if (def.formCode && isCodeForm(def.formCode)) {
+        setActive(def)
+        setTitle("")
+        setCodeData({})
+        setFormSchema(null)
+        setFormError(null)
+        setFormLoading(false)
+        return
+      }
+      toast.error(`「${def.name}」为代码表单，但既未配置发起页，也未在前端登记表单组件`)
       return
     }
     setActive(def)
@@ -182,6 +199,16 @@ export default function WorkflowStartPage() {
     },
     [active, title, navigate],
   )
+
+  // CODE 表单内嵌提交：经受控句柄校验 + 取值，复用 submit（POST /api/wf/instances）
+  const submitCode = useCallback(async () => {
+    if (!active) return
+    const ok = (await codeFormRef.current?.validate()) ?? true
+    if (!ok) return
+    await submit(codeFormRef.current?.getValues() ?? codeData)
+  }, [active, codeData, submit])
+
+  const codeEmbed = active != null && normalizeFormType(active.formType) === "CODE"
 
   // 按分类分组 + 关键字过滤
   const groups = useMemo(() => {
@@ -300,7 +327,33 @@ export default function WorkflowStartPage() {
         description={active?.remark || "填写表单后提交，将按流程定义自动流转"}
         width={640}
       >
-        {formLoading ? (
+        {codeEmbed && active ? (
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label className="text-sm">标题</Label>
+              <Input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder={`选填，默认为「${active.name}」加发起人`}
+              />
+            </div>
+            <HostedForm
+              key={active.defCode}
+              formKey={active.formCode ?? active.defCode}
+              formData={codeData}
+              onChange={setCodeData}
+              formRef={codeFormRef}
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setActive(null)} disabled={submitting}>
+                取消
+              </Button>
+              <Button onClick={() => void submitCode()} disabled={submitting}>
+                {submitting ? "提交中…" : "提交申请"}
+              </Button>
+            </div>
+          </div>
+        ) : formLoading ? (
           <div className="space-y-4">
             {Array.from({ length: 4 }).map((_, i) => (
               <div key={i} className="space-y-1.5">

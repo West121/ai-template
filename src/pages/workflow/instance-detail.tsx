@@ -24,6 +24,7 @@ import { FormRenderer } from "@/components/form-renderer"
 import { HostedForm } from "@/components/hosted-form"
 import { buildFieldPolicyMap } from "@/components/field-perms-editor"
 import { getForm, isCodeForm } from "@/lib/form-registry"
+import { normalizeFormType } from "@/pages/workflow/designer/types"
 import type { FieldPolicyMap } from "@/lib/form-manifest"
 import "@/pages/workflow/forms" // 触发 CODE 表单登记（registerForm 副作用）
 import { Modal } from "@/components/modal"
@@ -454,7 +455,7 @@ export default function WorkflowInstanceDetailPage() {
             {codeFormKey ? (
               // CODE 表单：registry 命中 → HostedForm 渲染，套用 nodeFormPerms 合成的字段策略（只读查看）
               <HostedForm formKey={codeFormKey} formData={formData} fieldPolicy={codeFieldPolicy} />
-            ) : detail.formType === "CUSTOM" ? (
+            ) : normalizeFormType(detail.formType) === "CODE" ? (
               <div className="space-y-3">
                 <div className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-2.5 text-sm">
                   <FileCode2 className="size-4 shrink-0 text-primary" />

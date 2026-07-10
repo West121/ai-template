@@ -146,8 +146,11 @@ export type WfFormData = Record<string, unknown>
 
 /* ================= 定义 / 发起 ================= */
 
-/** 表单类型：DYNAMIC=动态表单（可视化设计器）；CUSTOM=自定义 React 路由表单 */
-export type WfFormType = "DYNAMIC" | "CUSTOM"
+/**
+ * 表单类型：ONLINE=在线表单（可视化设计器）；CODE=代码表单（登记字段清单，可选自定义发起页）。
+ * 兼容读旧值 DYNAMIC→ONLINE、CUSTOM→CODE（用 normalizeFormType 归一，见 designer/types.ts）。
+ */
+export type WfFormType = "ONLINE" | "CODE"
 
 /** GET /api/wf/startable 可发起流程（卡片墙） */
 export interface WfStartableDef {

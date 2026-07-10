@@ -58,12 +58,15 @@ import {
 import { hasBlockingIssue, validateFlow, type ValidationIssue } from "@/pages/workflow/designer/shared/validate"
 import { widgetsToFields } from "@/pages/workflow/designer/form/fields"
 import { ensureWidgetIdSeq, type FormWidget } from "@/pages/workflow/designer/form/model"
-import type {
-  DesignerType,
-  FormDefItem,
-  FormType,
-  NodePropsMap,
-  ProcessDefItem,
+import { getFormManifest } from "@/lib/form-registry"
+import type { FieldDescriptor } from "@/lib/form-manifest"
+import {
+  normalizeFormType,
+  type DesignerType,
+  type FormDefItem,
+  type FormType,
+  type NodePropsMap,
+  type ProcessDefItem,
 } from "@/pages/workflow/designer/types"
 
 /** .bpmn XML → 归一化 ProcessModel（POST /api/wf/models/import 返回结构） */
@@ -167,7 +170,7 @@ function emptyEditor(): EditorState {
     icon: "",
     category: "",
     designerType: "GRAPH",
-    formType: "DYNAMIC",
+    formType: "ONLINE",
     formCode: "",
     formVersion: null,
     formSubmitPath: "",
@@ -180,18 +183,43 @@ function emptyEditor(): EditorState {
   }
 }
 
-/** 拉表单最新 schema → 字段选项 + 版本 */
+/** FieldDescriptor（统一字段清单）→ 设计器可绑定字段选项 */
+function descriptorToOption(d: FieldDescriptor): FormFieldOption {
+  return { key: d.key, label: d.label, isUser: d.type === "user" }
+}
+
+/**
+ * 解析绑定表单的字段选项 + 版本（ONLINE 才有版本）。
+ *
+ * 字段一律经**统一字段清单接口** `GET /api/wf/forms/{formKey}/fields`（getFormManifest：CODE 命中前端
+ * registry / ONLINE 走后端从 schemaJson 派生）——CODE 表单（gw_send 等）不再返回空字段，条件/取人/字段权限
+ * 都能列出其字段。ONLINE 额外拉一次 form-defs/latest 取版本；统一接口未就绪时回退旧 schema 派生（不回归）。
+ */
 async function resolveFormFields(
   formCode: string,
+  formType: FormType,
 ): Promise<{ fields: FormFieldOption[]; version: number | null }> {
   if (!formCode) return { fields: [], version: null }
+
+  let fields: FormFieldOption[] = []
+  try {
+    const manifest = await getFormManifest(formCode)
+    fields = manifest.fields.map(descriptorToOption)
+  } catch {
+    fields = [] // 后端未连接 / 清单未就绪 → 降级空，下方 ONLINE 再尝试回退
+  }
+
+  if (formType !== "ONLINE") return { fields, version: null }
+
+  // ONLINE：拉版本；统一清单为空时回退旧 schema 派生，保证存量在线表单（leave 等）不回归
   try {
     const detail = await api<FormDefItem & { schemaJson?: unknown; version?: number }>(
       `/api/wf/form-defs/${formCode}/latest`,
     )
-    return { fields: widgetsToFields(parseWidgets(detail.schemaJson)), version: detail.version ?? null }
+    if (fields.length === 0) fields = widgetsToFields(parseWidgets(detail.schemaJson))
+    return { fields, version: detail.version ?? null }
   } catch {
-    return { fields: [], version: null }
+    return { fields, version: null }
   }
 }
 
@@ -243,7 +271,7 @@ export default function WorkflowDesignerPage() {
 
     const loadNew = async () => {
       const type = (searchParams.get("type") as DesignerType | null) ?? "GRAPH"
-      const formType = (searchParams.get("formType") as FormType | null) ?? "DYNAMIC"
+      const formType = normalizeFormType(searchParams.get("formType"))
       const formCode = searchParams.get("formCode") ?? ""
       const next = emptyEditor()
       next.defCode = searchParams.get("code") ?? ""
@@ -251,10 +279,10 @@ export default function WorkflowDesignerPage() {
       next.category = searchParams.get("category") ?? ""
       next.designerType = type
       next.formType = formType
-      next.formCode = formType === "DYNAMIC" ? formCode : ""
+      next.formCode = formCode // ONLINE=在线表单 code / CODE=代码表单 formKey，两者都绑 formCode
       next.formSubmitPath = searchParams.get("formSubmitPath") ?? ""
       next.formViewPath = searchParams.get("formViewPath") ?? ""
-      const { fields, version } = formType === "DYNAMIC" ? await resolveFormFields(formCode) : { fields: [], version: null }
+      const { fields, version } = await resolveFormFields(formCode, formType)
       next.formFields = fields
       next.formVersion = version
       next.graphModel = blankGraphModel(next.defCode, next.name, composeFormKey(next.formCode, version))
@@ -290,7 +318,7 @@ export default function WorkflowDesignerPage() {
       next.icon = row.icon ?? ""
       next.description = row.remark ?? ""
       next.designerType = row.designerType
-      next.formType = row.formType ?? "DYNAMIC"
+      next.formType = normalizeFormType(row.formType)
       next.formCode = row.formCode ?? ""
       next.formSubmitPath = row.formSubmitPath ?? ""
       next.formViewPath = row.formViewPath ?? ""
@@ -353,7 +381,7 @@ export default function WorkflowDesignerPage() {
           migrated ?? blankGraphModel(row.defCode, row.name, composeFormKey(row.formCode, row.formVersion))
       }
 
-      const { fields, version } = await resolveFormFields(row.formCode ?? "")
+      const { fields, version } = await resolveFormFields(row.formCode ?? "", next.formType)
       next.formFields = fields
       next.formVersion = row.formVersion ?? version
       if (cancelled) return
@@ -430,10 +458,12 @@ export default function WorkflowDesignerPage() {
       category: editor.category || undefined,
       designerType: editor.designerType,
       formType: editor.formType,
-      formCode: editor.formType === "DYNAMIC" ? editor.formCode || undefined : undefined,
-      formVersion: editor.formType === "DYNAMIC" ? editor.formVersion ?? undefined : undefined,
-      formSubmitPath: editor.formType === "CUSTOM" ? editor.formSubmitPath || undefined : undefined,
-      formViewPath: editor.formType === "CUSTOM" ? editor.formViewPath || undefined : undefined,
+      // ONLINE 与 CODE 都绑 formCode（ONLINE=在线表单 code / CODE=代码表单 formKey）
+      formCode: editor.formCode || undefined,
+      formVersion: editor.formType === "ONLINE" ? editor.formVersion ?? undefined : undefined,
+      // formSubmitPath / formViewPath 仅 CODE（可选自定义发起 / 详情页）
+      formSubmitPath: editor.formType === "CODE" ? editor.formSubmitPath || undefined : undefined,
+      formViewPath: editor.formType === "CODE" ? editor.formViewPath || undefined : undefined,
     }
     if (editor.designerType === "DINGTALK") {
       base.designerJson = JSON.stringify(serializeDingtalk(editor.steps, editor.nodeProps, editor.flowConfig))
