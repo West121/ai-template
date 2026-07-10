@@ -1,38 +1,35 @@
 /**
- * 高级公式编辑器（飞书 / 宜搭级体验，零重依赖 —— 不引 monaco / codemirror / prism）。
- *
- * 用 React + Tailwind 自造：
- *  1. **语法高亮**：彩色 `<pre>` 高亮层垫底 + 透明 `<textarea>` 盖顶（编辑 / 光标真发生处），滚动同步；
- *     另有一层透明文字的错误层，把校验区间画波浪红下划线。
- *  2. **自动补全**：输入标识符时在光标处弹下拉（模糊匹配函数 + 字段，↑↓ / Enter / Esc）。
- *  3. **参数提示**：光标落在某函数括号内时，底部显示该函数签名并高亮当前参数位。
- *  4. **实时校验**：`validate` 报错则精确标红并显示消息（空表达式中性提示，不报错）。
+ * 高级公式编辑器（飞书 / 宜搭级体验）。编辑区基于 **CodeMirror 6**（通过 `@uiw/react-codemirror`
+ * 承载），全部语言能力由纯逻辑内核 `@/lib/formula-highlight` 驱动、经
+ * `@/lib/formula-codemirror` 装配成 CodeMirror 扩展：
+ *  1. **语法高亮**：`StreamLanguage` 每行复用 `tokenize` 着色（亮 / 暗两套配色匹配站点 token）。
+ *  2. **自动补全**：`autocompletion({ override })` 复用 `currentIdentifier` + `matchCompletions`
+ *     （函数 + 字段模糊），函数补全插模板并把光标落到第一个参数。
+ *  3. **实时校验**：`linter` 把 `validate` 的错误区间画成波浪红下划线。
+ *  4. **参数提示**：CodeMirror 无内置——监听选区变化取 caret，仍用 `findActiveCall` +
+ *     `parseSignatureParams` 驱动底部提示条。
  *  5. **实时预览**：传 `evaluate` 显示求值结果 / 类型；否则显示「解析结构」摘要。
  *  6. **可搜索函数文档**：左侧带搜索框的函数列表，点选看签名 / 说明 / 示例并插入。
  *
- * 纯逻辑内核在 `@/lib/formula-highlight`（可单测）；本文件只负责 DOM / 交互装配。
- * 两套编辑器（取人 formula-editor / 计算 formula-designer）各传自己的
+ * 对外 props / 导出保持不变；两套编辑器（取人 formula-editor / 计算 formula-designer）各传自己的
  * functions / validate / evaluate 复用本组件，产出串格式不变。
  */
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react"
-import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react"
+import { useMemo, useRef, useState } from "react"
 import { AlertCircle, CheckCircle2, FunctionSquare, Search } from "lucide-react"
+import ReactCodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror"
 import { cn } from "@/lib/utils"
 import { Input } from "@/components/ui/input"
+import { isDarkMode } from "@/lib/theme"
+import { useAppStore } from "@/stores/app-store"
+import { createFormulaExtensions } from "@/lib/formula-codemirror"
 import {
   analyzeStructure,
-  currentIdentifier,
   findActiveCall,
   fuzzyScore,
-  matchCompletions,
   parseSignatureParams,
-  tokenize,
-  type Completion,
   type EvaluateResult,
   type FieldRef,
   type FnDoc,
-  type Token,
-  type TokenKind,
   type ValidateResult,
 } from "@/lib/formula-highlight"
 
@@ -57,74 +54,6 @@ export interface AdvancedFormulaEditorProps {
   className?: string
 }
 
-/** 两层（高亮 pre / textarea）必须字字对齐——共享同一套排版类。 */
-const EDITOR_TYPO = "font-mono text-xs leading-5 tracking-normal"
-const EDITOR_BOX = "px-3 py-2 whitespace-pre-wrap break-words"
-
-const TOKEN_CLASS: Record<TokenKind, string> = {
-  fn: "text-violet-600 dark:text-violet-400 font-medium",
-  field: "text-sky-600 dark:text-sky-400",
-  keyword: "text-amber-600 dark:text-amber-400",
-  string: "text-emerald-600 dark:text-emerald-400",
-  number: "text-orange-600 dark:text-orange-400",
-  operator: "text-pink-600 dark:text-pink-400",
-  paren: "text-muted-foreground",
-  comma: "text-muted-foreground",
-  ident: "text-foreground",
-  space: "",
-}
-
-interface CaretCoords {
-  top: number
-  left: number
-}
-
-/** 镜像 div 法测量 textarea 中某字符位置的像素坐标（补全下拉定位用）。 */
-function getCaretCoords(el: HTMLTextAreaElement, pos: number): CaretCoords {
-  const doc = el.ownerDocument
-  const mirror = doc.createElement("div")
-  const cs = window.getComputedStyle(el)
-  const copy = [
-    "boxSizing",
-    "width",
-    "paddingTop",
-    "paddingRight",
-    "paddingBottom",
-    "paddingLeft",
-    "borderTopWidth",
-    "borderRightWidth",
-    "borderBottomWidth",
-    "borderLeftWidth",
-    "fontFamily",
-    "fontSize",
-    "fontWeight",
-    "fontStyle",
-    "letterSpacing",
-    "lineHeight",
-    "textTransform",
-    "wordSpacing",
-    "tabSize",
-  ] as const
-  for (const p of copy) mirror.style[p] = cs[p]
-  mirror.style.position = "absolute"
-  mirror.style.visibility = "hidden"
-  mirror.style.whiteSpace = "pre-wrap"
-  mirror.style.overflowWrap = "break-word"
-  mirror.style.overflow = "hidden"
-  mirror.style.top = "0"
-  mirror.style.left = "0"
-
-  mirror.textContent = el.value.slice(0, pos)
-  const marker = doc.createElement("span")
-  marker.textContent = el.value.slice(pos) || "."
-  mirror.appendChild(marker)
-  doc.body.appendChild(mirror)
-  const top = marker.offsetTop - el.scrollTop
-  const left = marker.offsetLeft - el.scrollLeft
-  doc.body.removeChild(mirror)
-  return { top, left }
-}
-
 function typeLabel(v: unknown): string {
   if (v === null) return "null"
   if (v === undefined) return "空"
@@ -136,6 +65,12 @@ function formatValue(v: unknown): string {
   if (v === null || v === undefined) return "（空）"
   if (typeof v === "object") return JSON.stringify(v)
   return String(v)
+}
+
+/** 模板插入后光标落点：第一个 `(` 之后，无则末尾（与补全一致）。 */
+function templateCaret(tpl: string): number {
+  const p = tpl.indexOf("(")
+  return p >= 0 ? p + 1 : tpl.length
 }
 
 export function AdvancedFormulaEditor({
@@ -150,42 +85,36 @@ export function AdvancedFormulaEditor({
   placeholder,
   className,
 }: AdvancedFormulaEditorProps) {
-  const taRef = useRef<HTMLTextAreaElement>(null)
-  const preRef = useRef<HTMLPreElement>(null)
-  const errRef = useRef<HTMLPreElement>(null)
-  /** 待应用的选区（受控 value 更新后于 layout effect 落位） */
-  const pendingSel = useRef<[number, number] | null>(null)
+  const cmRef = useRef<ReactCodeMirrorRef>(null)
 
   const [caret, setCaret] = useState(0)
+  const [focused, setFocused] = useState(false)
   const [docQuery, setDocQuery] = useState("")
   const [selectedFn, setSelectedFn] = useState<FnDoc | null>(functions[0] ?? null)
 
-  // 自动补全状态
-  const [acOpen, setAcOpen] = useState(false)
-  const [acItems, setAcItems] = useState<Completion[]>([])
-  const [acIndex, setAcIndex] = useState(0)
-  const [acAnchor, setAcAnchor] = useState<CaretCoords>({ top: 0, left: 0 })
-  const acRange = useRef<[number, number]>([0, 0])
+  const dark = isDarkMode(useAppStore((s) => s.themeMode))
 
   const fnNames = useMemo(() => functions.map((f) => f.name), [functions])
   const fnByName = useMemo(() => new Map(functions.map((f) => [f.name, f])), [functions])
   const fieldKeys = useMemo(() => fields.map((f) => f.key), [fields])
   const tokenizeOpts = useMemo(() => ({ fieldKeys, keywords }), [fieldKeys, keywords])
 
-  const tokens: Token[] = useMemo(() => tokenize(value, tokenizeOpts), [value, tokenizeOpts])
+  const extensions = useMemo(
+    () => createFormulaExtensions({ functions, fields, validate, keywords, dark }),
+    [functions, fields, validate, keywords, dark],
+  )
+
   const trimmed = value.trim()
 
   const validation = useMemo<ValidateResult>(
     () => (trimmed === "" ? { ok: true } : validate(value)),
     [value, trimmed, validate],
   )
-  const hasError = trimmed !== "" && !validation.ok
-  const errStart = validation.errorStart
-  const errEnd = validation.errorEnd
 
-  // 参数提示
+  // 参数提示（监听 CodeMirror 选区变化取 caret）
   const activeCall = useMemo(() => findActiveCall(value, caret, fnNames), [value, caret, fnNames])
   const activeDoc = activeCall ? fnByName.get(activeCall.name) : undefined
+  const sigParts = activeDoc ? parseSignatureParams(activeDoc.signature) : null
 
   // 预览：有 evaluate → 求值；否则解析结构摘要
   const preview = useMemo(() => {
@@ -198,114 +127,17 @@ export function AdvancedFormulaEditor({
     return { mode: "struct" as const, summary: analyzeStructure(value, tokenizeOpts) }
   }, [value, trimmed, evaluate, validation.ok, tokenizeOpts])
 
-  const syncScroll = useCallback(() => {
-    const ta = taRef.current
-    if (!ta) return
-    if (preRef.current) {
-      preRef.current.scrollTop = ta.scrollTop
-      preRef.current.scrollLeft = ta.scrollLeft
-    }
-    if (errRef.current) {
-      errRef.current.scrollTop = ta.scrollTop
-      errRef.current.scrollLeft = ta.scrollLeft
-    }
-  }, [])
-
-  // 受控 value 变化后落位待应用选区（仅插入 / 补全会预置 pendingSel）+ 同步滚动
-  useLayoutEffect(() => {
-    const ta = taRef.current
-    if (ta && pendingSel.current) {
-      const [s, e] = pendingSel.current
-      pendingSel.current = null
-      ta.focus()
-      ta.setSelectionRange(s, e)
-      setCaret(e)
-      syncScroll()
-    }
-  }, [value, syncScroll])
-
-  /** 刷新补全下拉（依据光标处标识符） */
-  const refreshCompletion = (nextValue: string, pos: number) => {
-    const ta = taRef.current
-    const ident = currentIdentifier(nextValue, pos)
-    if (!ta || !ident) {
-      setAcOpen(false)
-      return
-    }
-    const items = matchCompletions(ident.text, functions, fields)
-    if (items.length === 0) {
-      setAcOpen(false)
-      return
-    }
-    acRange.current = [ident.start, ident.end]
-    setAcItems(items)
-    setAcIndex(0)
-    setAcAnchor(getCaretCoords(ta, ident.start))
-    setAcOpen(true)
-  }
-
-  const handleInput = (e: ChangeEvent<HTMLTextAreaElement>) => {
-    const next = e.target.value
-    const pos = e.target.selectionStart
-    onChange(next)
-    setCaret(pos)
-    refreshCompletion(next, pos)
-    syncScroll()
-  }
-
-  const syncCaret = () => {
-    const ta = taRef.current
-    if (!ta) return
-    setCaret(ta.selectionStart)
-  }
-
-  /** 插入文本，替换 [start,end)；caretOffset 为插入后光标相对插入串起点的偏移 */
-  const insertAt = (start: number, end: number, text: string, caretOffset: number) => {
-    const next = value.slice(0, start) + text + value.slice(end)
-    const cursor = start + caretOffset
-    pendingSel.current = [cursor, cursor]
-    onChange(next)
-    setAcOpen(false)
-  }
-
-  /** 计算模板插入后光标位置：落到第一个 `(` 之后（无则末尾） */
-  const templateCaret = (tpl: string): number => {
-    const p = tpl.indexOf("(")
-    return p >= 0 ? p + 1 : tpl.length
-  }
-
-  const acceptCompletion = (c: Completion) => {
-    const [s, e] = acRange.current
-    if (c.kind === "fn" && c.fn) {
-      insertAt(s, e, c.fn.insertTemplate, templateCaret(c.fn.insertTemplate))
-    } else {
-      insertAt(s, e, c.insert, c.insert.length)
-    }
-  }
-
-  /** 从函数库 / 字段面板点击插入（插到当前光标处，替换选区） */
+  /** 从函数库 / 字段面板点击插入（插到当前光标处，替换选区；无 view 则退化追加） */
   const insertFromPanel = (text: string, isTemplate: boolean) => {
-    const ta = taRef.current
-    const s = ta ? ta.selectionStart : value.length
-    const eSel = ta ? ta.selectionEnd : value.length
-    insertAt(s, eSel, text, isTemplate ? templateCaret(text) : text.length)
-  }
-
-  const handleKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (!acOpen) return
-    if (e.key === "ArrowDown") {
-      e.preventDefault()
-      setAcIndex((i) => (i + 1) % acItems.length)
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault()
-      setAcIndex((i) => (i - 1 + acItems.length) % acItems.length)
-    } else if (e.key === "Enter" || e.key === "Tab") {
-      e.preventDefault()
-      acceptCompletion(acItems[acIndex])
-    } else if (e.key === "Escape") {
-      e.preventDefault()
-      setAcOpen(false)
+    const view = cmRef.current?.view
+    if (!view) {
+      onChange(value + text)
+      return
     }
+    const sel = view.state.selection.main
+    const caretPos = sel.from + (isTemplate ? templateCaret(text) : text.length)
+    view.dispatch({ changes: { from: sel.from, to: sel.to, insert: text }, selection: { anchor: caretPos } })
+    view.focus()
   }
 
   // 函数库搜索过滤 + 分类
@@ -325,18 +157,6 @@ export function AdvancedFormulaEditor({
     }
     return [...byCat.entries()]
   }, [docQuery, functions])
-
-  // 错误层三段切片
-  const errorSlices = useMemo(() => {
-    if (!hasError || errStart === undefined || errEnd === undefined || errEnd <= errStart) return null
-    return {
-      before: value.slice(0, errStart),
-      mid: value.slice(errStart, errEnd),
-      after: value.slice(errEnd),
-    }
-  }, [hasError, errStart, errEnd, value])
-
-  const sigParts = activeDoc ? parseSignatureParams(activeDoc.signature) : null
 
   return (
     <div className={cn("space-y-2.5", className)}>
@@ -386,101 +206,36 @@ export function AdvancedFormulaEditor({
           </div>
         </div>
 
-        {/* 右：高亮编辑器 + 字段插入 */}
+        {/* 右：CodeMirror 编辑区 + 字段插入 */}
         <div className="space-y-2">
-          <div className="relative h-32 overflow-hidden rounded-md border bg-transparent focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50">
-            {/* 高亮层 */}
-            <pre
-              ref={preRef}
-              aria-hidden
-              className={cn(
-                "pointer-events-none absolute inset-0 m-0 h-full w-full overflow-auto",
-                EDITOR_TYPO,
-                EDITOR_BOX,
-              )}
-            >
-              {tokens.map((t, i) => (
-                <span key={i} className={TOKEN_CLASS[t.kind]}>
-                  {t.value}
-                </span>
-              ))}
-              {"\n"}
-            </pre>
-            {/* 错误下划线层（透明文字，仅显下划线） */}
-            {errorSlices && (
-              <pre
-                ref={errRef}
-                aria-hidden
-                className={cn(
-                  "pointer-events-none absolute inset-0 m-0 h-full w-full overflow-auto text-transparent",
-                  EDITOR_TYPO,
-                  EDITOR_BOX,
-                )}
-              >
-                {errorSlices.before}
-                <span className="underline decoration-red-500 decoration-wavy underline-offset-2">
-                  {errorSlices.mid}
-                </span>
-                {errorSlices.after}
-                {"\n"}
-              </pre>
+          <div
+            className={cn(
+              "relative rounded-md border bg-background transition-colors",
+              focused ? "border-ring ring-[3px] ring-ring/50" : "border-input",
             )}
-            {/* 真编辑层（透明文字 + 实体 caret） */}
-            <textarea
-              ref={taRef}
+          >
+            {/* 「公式代码区」标识 */}
+            <div className="pointer-events-none absolute right-1.5 top-1.5 z-10 flex select-none items-center gap-1 rounded bg-muted/70 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+              <span className="font-mono italic text-primary">fx</span>
+              公式
+            </div>
+            <ReactCodeMirror
+              ref={cmRef}
               value={value}
-              onChange={handleInput}
-              onKeyDown={handleKeyDown}
-              onKeyUp={syncCaret}
-              onClick={syncCaret}
-              onSelect={syncCaret}
-              onScroll={syncScroll}
-              onBlur={() => window.setTimeout(() => setAcOpen(false), 120)}
-              spellCheck={false}
+              height="128px"
+              theme="none"
+              basicSetup={false}
+              extensions={extensions}
               placeholder={placeholder}
-              className={cn(
-                "absolute inset-0 h-full w-full resize-none overflow-auto bg-transparent text-transparent caret-foreground outline-none placeholder:text-muted-foreground",
-                EDITOR_TYPO,
-                EDITOR_BOX,
-              )}
+              onChange={onChange}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
+              onUpdate={(u) => {
+                if (u.selectionSet || u.docChanged || u.focusChanged) {
+                  setCaret(u.state.selection.main.head)
+                }
+              }}
             />
-
-            {/* 自动补全下拉 */}
-            {acOpen && (
-              <div
-                className="absolute z-20 max-h-48 w-56 overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
-                style={{ top: acAnchor.top + 20, left: Math.min(acAnchor.left, 240) }}
-              >
-                {acItems.map((it, i) => (
-                  <button
-                    key={`${it.kind}-${it.label}-${i}`}
-                    type="button"
-                    className={cn(
-                      "flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-[11px]",
-                      i === acIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
-                    )}
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      acceptCompletion(it)
-                    }}
-                    onMouseEnter={() => setAcIndex(i)}
-                  >
-                    <span className="flex items-center gap-1 font-mono">
-                      <span
-                        className={cn(
-                          "inline-block w-3 text-center",
-                          it.kind === "fn" ? "text-violet-500" : "text-sky-500",
-                        )}
-                      >
-                        {it.kind === "fn" ? "ƒ" : "＃"}
-                      </span>
-                      {it.label}
-                    </span>
-                    <span className="truncate text-muted-foreground">{it.detail}</span>
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
 
           {/* 参数提示 */}
