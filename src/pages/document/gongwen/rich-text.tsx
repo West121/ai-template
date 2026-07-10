@@ -1,30 +1,36 @@
 /**
- * 轻量富文本编辑器（受控 contenteditable）。
+ * 公文正文富文本编辑器（TipTap / ProseMirror）。
  *
- * 仓库未内置富文本方案（announcement 用纯 Textarea 分段），公文正文需要加粗/分段/列表等，
- * 故用零依赖的 contenteditable + document.execCommand 实现一个轻量编辑器，输出 HTML（<p>/<strong>/
- * <ol>/<ul>）。渲染侧统一经 sanitizeHtml 净化（见预览与详情），编辑侧无需拦截。
+ * 取代旧的手写 contenteditable + `document.execCommand`（已废弃、回车插入脏 <br>/<div> 导致正文
+ * 出现字面 <br>）。TipTap 3.x（React 19 兼容，peer react ^19）产出**干净的 <p> HTML**：
+ * 回车 = 新段落 <p>，不产生裸 <br>；加粗/斜体/下划线/有序无序列表/段落工具栏。
  *
- * 受控要点：仅当外部 value 与 DOM 现值不一致时才回写 innerHTML，避免每次输入重置光标。
+ * 受控契约不变：`value`(string HTML) / `onChange(html)`。空文档回传空串（而非 `<p></p>`），
+ * 便于上层 `content.trim() || undefined` 判空。渲染侧统一经 sanitizeHtml 净化。
  */
-import { useEffect, useRef } from "react"
-import { Bold, Italic, List, ListOrdered, Pilcrow, Underline } from "lucide-react"
+import { useEffect, type CSSProperties } from "react"
+import { Bold, Italic, List, ListOrdered, Pilcrow, Underline as UnderlineIcon } from "lucide-react"
+import { EditorContent, useEditor, type Editor } from "@tiptap/react"
+import StarterKit from "@tiptap/starter-kit"
+import { Placeholder } from "@tiptap/extensions"
 import { cn } from "@/lib/utils"
+import "./rich-text.css"
 
 interface ToolButton {
-  cmd: string
-  arg?: string
   icon: typeof Bold
   title: string
+  /** 判定激活态高亮 */
+  active: (e: Editor) => boolean
+  run: (e: Editor) => void
 }
 
 const TOOLS: ToolButton[] = [
-  { cmd: "bold", icon: Bold, title: "加粗" },
-  { cmd: "italic", icon: Italic, title: "斜体" },
-  { cmd: "underline", icon: Underline, title: "下划线" },
-  { cmd: "insertUnorderedList", icon: List, title: "无序列表" },
-  { cmd: "insertOrderedList", icon: ListOrdered, title: "有序列表" },
-  { cmd: "formatBlock", arg: "P", icon: Pilcrow, title: "段落" },
+  { icon: Bold, title: "加粗", active: (e) => e.isActive("bold"), run: (e) => e.chain().focus().toggleBold().run() },
+  { icon: Italic, title: "斜体", active: (e) => e.isActive("italic"), run: (e) => e.chain().focus().toggleItalic().run() },
+  { icon: UnderlineIcon, title: "下划线", active: (e) => e.isActive("underline"), run: (e) => e.chain().focus().toggleUnderline().run() },
+  { icon: List, title: "无序列表", active: (e) => e.isActive("bulletList"), run: (e) => e.chain().focus().toggleBulletList().run() },
+  { icon: ListOrdered, title: "有序列表", active: (e) => e.isActive("orderedList"), run: (e) => e.chain().focus().toggleOrderedList().run() },
+  { icon: Pilcrow, title: "段落", active: (e) => e.isActive("paragraph"), run: (e) => e.chain().focus().setParagraph().run() },
 ]
 
 export function RichTextEditor({
@@ -40,56 +46,66 @@ export function RichTextEditor({
   className?: string
   minHeight?: number
 }) {
-  const ref = useRef<HTMLDivElement>(null)
+  const editor = useEditor({
+    extensions: [
+      // 收敛为公文正文需要的元素：段落 / 加粗 / 斜体 / 下划线 / 有序无序列表；关掉标题/引用/代码/横线/链接
+      StarterKit.configure({
+        heading: false,
+        blockquote: false,
+        codeBlock: false,
+        code: false,
+        horizontalRule: false,
+        link: false,
+      }),
+      Placeholder.configure({ placeholder }),
+    ],
+    content: value || "",
+    editorProps: {
+      attributes: {
+        class: cn(
+          "gw-rte prose-sm max-w-none px-3 py-2 text-sm leading-7 text-foreground outline-none",
+          "[&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-1 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-6",
+        ),
+      },
+    },
+    onUpdate: ({ editor }) => onChange(editor.isEmpty ? "" : editor.getHTML()),
+  })
 
-  // 受控回写：仅在外部值与 DOM 现值不一致时写入，避免光标跳动
+  // 受控同步：外部 value 与编辑器现值不一致时回写（emitUpdate:false 避免回环 / 光标跳动）
   useEffect(() => {
-    const el = ref.current
-    if (el && el.innerHTML !== value) el.innerHTML = value
-  }, [value])
-
-  const exec = (btn: ToolButton) => {
-    ref.current?.focus()
-    // execCommand 虽被标注 deprecated，但各浏览器仍支持，适合零依赖轻量编辑器
-    document.execCommand(btn.cmd, false, btn.arg)
-    if (ref.current) onChange(ref.current.innerHTML)
-  }
-
-  const handleInput = () => {
-    if (ref.current) onChange(ref.current.innerHTML)
-  }
+    if (!editor) return
+    const current = editor.isEmpty ? "" : editor.getHTML()
+    if ((value || "") !== current) editor.commands.setContent(value || "", { emitUpdate: false })
+  }, [value, editor])
 
   return (
-    <div className={cn("rounded-md border bg-background", className)}>
+    <div className={cn("rounded-md border bg-background focus-within:border-ring", className)}>
       <div className="flex flex-wrap items-center gap-0.5 border-b px-1.5 py-1">
-        {TOOLS.map((btn) => (
-          <button
-            key={btn.cmd + (btn.arg ?? "")}
-            type="button"
-            title={btn.title}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => exec(btn)}
-            className="flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            <btn.icon className="size-4" />
-          </button>
-        ))}
+        {TOOLS.map((btn) => {
+          const on = editor ? btn.active(editor) : false
+          return (
+            <button
+              key={btn.title}
+              type="button"
+              title={btn.title}
+              aria-label={btn.title}
+              aria-pressed={on}
+              disabled={!editor}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => editor && btn.run(editor)}
+              className={cn(
+                "flex size-7 items-center justify-center rounded transition-colors",
+                on
+                  ? "bg-accent text-accent-foreground"
+                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+              )}
+            >
+              <btn.icon className="size-4" />
+            </button>
+          )
+        })}
       </div>
-      <div
-        ref={ref}
-        contentEditable
-        suppressContentEditableWarning
-        role="textbox"
-        aria-multiline="true"
-        onInput={handleInput}
-        data-placeholder={placeholder}
-        style={{ minHeight }}
-        className={cn(
-          "gw-rte prose-sm max-w-none px-3 py-2 text-sm leading-7 outline-none",
-          "[&_p]:my-1 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-6",
-          "empty:before:pointer-events-none empty:before:text-muted-foreground empty:before:content-[attr(data-placeholder)]",
-        )}
-      />
+      <EditorContent editor={editor} style={{ "--gw-rte-min": `${minHeight}px` } as CSSProperties} />
     </div>
   )
 }
