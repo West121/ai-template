@@ -49,17 +49,22 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
 
       - name: pnpm install
+        working-directory: web
         run: pnpm install --frozen-lockfile
 
       - name: Lint (oxlint)
+        working-directory: web
         run: pnpm lint
 
       - name: Type-check (tsc -b)
+        working-directory: web
         run: pnpm exec tsc -b
 
       - name: Build (vite)
+        working-directory: web
         run: pnpm build
 
       # ---------- 后端 ----------

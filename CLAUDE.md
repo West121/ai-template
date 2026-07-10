@@ -6,16 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 星辰 OA — a full-stack enterprise OA platform. UI strings are hardcoded Chinese (no i18n). Two halves:
 
-- **Frontend (repo root)**: React 19 + TypeScript + Vite + Tailwind CSS v4 + shadcn/ui. Package manager is **pnpm**; lint is **oxlint** (not ESLint).
+- **Frontend (`web/`)**: React 19 + TypeScript + Vite + Tailwind CSS v4 + shadcn/ui. Package manager is **pnpm**; lint is **oxlint** (not ESLint).
 - **Backend (`server/`)**: Java 21, Spring Boot 4 modular monolith (Maven multi-module), PostgreSQL 17 + Redis, Flowable 8 workflow engine. Package root `com.xingchen.oa`.
 
 The `docs/` directory holds the authoritative contracts — `api-contract.md` (every endpoint, DTO, permission code), `workflow-design.md`, `flow-designer-v2.md`, `form-designer-v2.md`. Designer/serde code explicitly cites these; keep them in sync when touching workflow.
 
 ## Commands
 
-### Frontend (repo root)
+### Frontend (`web/`)
 
 ```bash
+cd web
 pnpm install
 pnpm dev        # http://localhost:5173, proxies /api → localhost:8081
 pnpm build      # tsc -b && vite build
@@ -43,17 +44,17 @@ The smoke test covers auth, data-permission scoping, all office modules, and ext
 
 ## Frontend Architecture
 
-**Everything is keyed by route `path`.** The route in `App.tsx`, the `MenuItem.path` in `src/config/menu.ts`, the tab key, and the breadcrumb key are the same string. To add a page: create component in `src/pages/`, add a `lazy()` route in `App.tsx`, add a menu item in `config/menu.ts` — tabs, breadcrumbs, and ⌘K search then work automatically.
+**Everything is keyed by route `path`.** The route in `App.tsx`, the `MenuItem.path` in `web/src/config/menu.ts`, the tab key, and the breadcrumb key are the same string. To add a page: create component in `web/src/pages/`, add a `lazy()` route in `App.tsx`, add a menu item in `config/menu.ts` — tabs, breadcrumbs, and ⌘K search then work automatically.
 
-- **Stores (`src/stores/`)**: zustand. Persisted: `app-store` (layout/theme settings), `tabs-store`, `auth-store` (token, multi-position `assignments`, `permissions`, `offline` flag). Ephemeral: `ui-store` (`refreshKey` remounts the page content = "refresh tab"), `badge-store` (dynamic menu badges by path).
-- **API client (`src/lib/api.ts`)**: `api<T>(path, init)` unwraps the `{code, message, data}` envelope (`code !== 0` → `ApiError`), injects `Bearer` token from auth-store, logs out on 401, throws `NetworkError` on fetch failure. Pages catch `NetworkError`/check `offline` and degrade to in-file mock data with a banner — follow this pattern in new pages.
+- **Stores (`web/src/stores/`)**: zustand. Persisted: `app-store` (layout/theme settings), `tabs-store`, `auth-store` (token, multi-position `assignments`, `permissions`, `offline` flag). Ephemeral: `ui-store` (`refreshKey` remounts the page content = "refresh tab"), `badge-store` (dynamic menu badges by path).
+- **API client (`web/src/lib/api.ts`)**: `api<T>(path, init)` unwraps the `{code, message, data}` envelope (`code !== 0` → `ApiError`), injects `Bearer` token from auth-store, logs out on 401, throws `NetworkError` on fetch failure. Pages catch `NetworkError`/check `offline` and degrade to in-file mock data with a banner — follow this pattern in new pages.
 - **Permissions**: gate UI with `hasPerm(code)` / `useHasPerm(code)` from auth-store; `permissions === null` (offline) means allow-all.
-- **DataTable (`src/components/data-table/`)**: TanStack Table wrapper. Column `meta.title` feeds column-visibility panel and CSV export; `searchKeys` for quick search; `serverSearch`/`serverPagination` for backend-driven mode (0-based `pageIndex`); `selectionColumn<T>()` helper for row selection.
-- **Forms**: react-hook-form + zod via shadcn `Form` components; dynamic/designer-driven forms go through `src/components/form-renderer.tsx` + `src/lib/form-runtime.ts`.
-- **Theme (`src/lib/theme.ts`)**: `applyTheme()` sets CSS custom properties on `<html>` at runtime; preset colors live here.
-- **TS config**: `@/*` → `src/*`; `verbatimModuleSyntax` is on — type-only imports must use `import type`.
+- **DataTable (`web/src/components/data-table/`)**: TanStack Table wrapper. Column `meta.title` feeds column-visibility panel and CSV export; `searchKeys` for quick search; `serverSearch`/`serverPagination` for backend-driven mode (0-based `pageIndex`); `selectionColumn<T>()` helper for row selection.
+- **Forms**: react-hook-form + zod via shadcn `Form` components; dynamic/designer-driven forms go through `web/src/components/form-renderer.tsx` + `web/src/lib/form-runtime.ts`.
+- **Theme (`web/src/lib/theme.ts`)**: `applyTheme()` sets CSS custom properties on `<html>` at runtime; preset colors live here.
+- **TS config**: `@/*` → `web/src/*`; `verbatimModuleSyntax` is on — type-only imports must use `import type`.
 
-### Workflow Designers (`src/pages/workflow/designer/`)
+### Workflow Designers (`web/src/pages/workflow/designer/`)
 
 Two parallel process designers share one property panel and node model:
 
