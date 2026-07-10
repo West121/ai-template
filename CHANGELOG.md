@@ -36,4 +36,5 @@
 - 破坏性：后端启动现在必须设置环境变量 `OA_JWT_SECRET`。
 - 数据库新增迁移 V15（文件查看权限种子）、V16（会议排他约束）、V17（乐观锁 version 列）、V18（脚本引擎权限+审计表）、V19（表单字段清单 form_type）。
 - 前端新增依赖 vitest；后端新增依赖 Aviator、LiteFlow（脚本插件 groovy/graaljs/python，约 +118MB jar）。
-- 路径三推迟小尾（不影响主功能）：钉钉 designerJson→ProcessModel 迁移适配、elk/dagre 自动布局、CODE 表单运行时 nodeFormPerms→FieldPolicy 接线。
+- 路径三收尾（已完成）：dagre 自动布局（整理布局按钮 + 坐标退化自动整理）、CODE 表单运行时接线（instance-detail 按来源分流 HostedForm，只读查看路径）、钉钉 designerJson→ProcessModel 适配器（已实现 + 单测）。前端 vitest 47。
+- 真正剩余的可选后续（不影响主功能，已注释标注）：CODE 表单的可编辑办理/重新提交路径（当前为只读查看）、钉钉适配器接入"打开旧定义"入口（钉钉设计器并存、老定义仍可用）、CI integration-smoke 转硬门禁（当前 PR/手动 + 本地 smoke 433/433 覆盖）。
