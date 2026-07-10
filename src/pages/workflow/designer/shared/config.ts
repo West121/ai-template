@@ -13,6 +13,7 @@ import type {
   AssigneeKind,
   AssigneeSource,
   EventAction,
+  EventActionConfig,
   EventTrigger,
   HandleOptions,
   VoteConfig,
@@ -63,12 +64,33 @@ export interface FlowVariable {
   defaultValue: string
 }
 
+/* ---------------- 流程级事件 ---------------- */
+
+/** 流程级事件触发点（后端在流程实例生命周期分发） */
+export type ProcessEventTrigger = "PROCESS_START" | "PROCESS_END" | "PROCESS_CANCEL"
+
+export const PROCESS_EVENT_TRIGGER_META: Record<ProcessEventTrigger, string> = {
+  PROCESS_START: "流程启动后",
+  PROCESS_END: "流程结束后",
+  PROCESS_CANCEL: "流程撤销 / 作废后",
+}
+
+/**
+ * 流程级事件：与 NodeEvent 复用同一动作载荷（EventActionConfig：NOTIFY/WEBHOOK/SCRIPT/API），
+ * 仅触发点不同（ProcessEventTrigger）。
+ */
+export interface ProcessEvent extends EventActionConfig {
+  trigger: ProcessEventTrigger
+}
+
 /** 流程级配置（存 ProcessDef.designerJson.flowConfig / BPMN oa:flowConfig） */
 export interface FlowConfig {
   operations: FlowOperations
   start: FlowStart
   /** 流程变量 */
   variables: FlowVariable[]
+  /** 流程级事件（启动/结束/撤销时执行 通知/Webhook/脚本/API） */
+  events?: ProcessEvent[]
 }
 
 /** 流程基础信息（存 ProcessDef 顶层列：name/remark/icon/category，非 flowConfig） */
@@ -203,4 +225,6 @@ export const EVENT_TRIGGER_META: Record<EventTrigger, string> = {
 export const EVENT_ACTION_META: Record<EventAction, string> = {
   NOTIFY: "发送通知",
   WEBHOOK: "调用 Webhook",
+  SCRIPT: "执行脚本",
+  API: "调用 API",
 }

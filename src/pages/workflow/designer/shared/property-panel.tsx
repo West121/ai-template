@@ -63,7 +63,8 @@ import {
   type ConditionOperator,
   type EmptyStrategy,
   type EventAction,
-  type EventTrigger,
+  type EventActionConfig,
+  type EventApiConfig,
   type FormPerm,
   type HandleOptions,
   type MultiMode,
@@ -85,6 +86,7 @@ import {
   EVENT_TRIGGER_META,
   FLOW_VAR_TYPE_META,
   HANDLE_OPTION_SWITCHES,
+  PROCESS_EVENT_TRIGGER_META,
   defaultHandleOptions,
   defaultVoteConfig,
   type FlowConfig,
@@ -92,8 +94,10 @@ import {
   type FlowVariable,
   type FormFieldOption,
   type ProcessConfig,
+  type ProcessEvent,
 } from "./config"
 import { FormulaField } from "./formula-editor"
+import { ScriptEditor } from "@/components/script-editor"
 
 /* ==================== 通用小组件 ==================== */
 
@@ -781,6 +785,8 @@ function ProcessPanelBody({
       <Section title="流程变量" icon={Variable} defaultOpen={false}>
         <FlowVariablesEditor value={flow.variables} onChange={(variables) => setFlow({ variables })} />
       </Section>
+
+      <ProcessEventsSection value={flow.events ?? []} onChange={(events) => setFlow({ events })} />
     </>
   )
 }
@@ -1141,29 +1147,190 @@ function TimeoutSection({ value, onChange }: { value: NodeTimeout; onChange: (v:
   )
 }
 
-/* ---------- 节点事件（P3，18 种触发类型，参考图24/25） ---------- */
+/* ---------- 事件动作载荷（NodeEvent / ProcessEvent 共用：NOTIFY / WEBHOOK / SCRIPT / API） ---------- */
 
-function NodeEventsSection({ value, onChange }: { value: NodeEvent[]; onChange: (v: NodeEvent[]) => void }) {
-  const [pickerIndex, setPickerIndex] = useState<number | null>(null)
-  const add = () =>
-    onChange([...value, { trigger: "TASK_AFTER_COMPLETE", action: "NOTIFY", notify: { to: [], template: "" } }])
-  const update = (i: number, ev: NodeEvent) => onChange(value.map((e, idx) => (idx === i ? ev : e)))
+const API_METHODS: EventApiConfig["method"][] = ["GET", "POST", "PUT", "DELETE"]
+
+/** 切换 action 时初始化对应载荷，并丢弃其它 action 的残留字段（序列化侧只带当前 action 字段） */
+function withEventAction<E extends EventActionConfig>(ev: E, action: EventAction): E {
+  const base: E = { ...ev, action, notify: undefined, webhookUrl: undefined, script: undefined, api: undefined }
+  switch (action) {
+    case "NOTIFY":
+      return { ...base, notify: ev.notify ?? { to: [], template: "" } }
+    case "WEBHOOK":
+      return { ...base, webhookUrl: ev.webhookUrl ?? "" }
+    case "SCRIPT":
+      return { ...base, script: ev.script ?? { lang: "groovy", code: "" } }
+    case "API":
+      return { ...base, api: ev.api ?? { method: "POST", url: "", headers: "", body: "" } }
+    default:
+      return base
+  }
+}
+
+/** action 选择 + 载荷编辑器（自管 OrgPicker 开合态；每条事件一个实例） */
+function EventActionEditor<E extends EventActionConfig>({
+  value,
+  onChange,
+}: {
+  value: E
+  onChange: (next: E) => void
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const api: EventApiConfig = value.api ?? { method: "POST", url: "", headers: "", body: "" }
+  const setApi = (patch: Partial<EventApiConfig>) => onChange({ ...value, api: { ...api, ...patch } })
+
+  return (
+    <>
+      <Select value={value.action} onValueChange={(v) => onChange(withEventAction(value, v as EventAction))}>
+        <SelectTrigger size="sm" className="h-8 w-full text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {(Object.keys(EVENT_ACTION_META) as EventAction[]).map((a) => (
+            <SelectItem key={a} value={a}>
+              {EVENT_ACTION_META[a]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      {value.action === "NOTIFY" && (
+        <>
+          <OrgPickerField
+            value={value.notify?.to ?? []}
+            multiple
+            placeholder="通知对象"
+            onOpen={() => setPickerOpen(true)}
+            onRemove={(ref) =>
+              onChange({
+                ...value,
+                notify: {
+                  to: (value.notify?.to ?? []).filter((r) => !(r.type === ref.type && r.id === ref.id)),
+                  template: value.notify?.template ?? "",
+                },
+              })
+            }
+          />
+          <OrgPicker
+            open={pickerOpen}
+            onOpenChange={setPickerOpen}
+            title="选择通知对象"
+            value={value.notify?.to ?? []}
+            onConfirm={(to) => onChange({ ...value, notify: { to, template: value.notify?.template ?? "" } })}
+          />
+          <Input
+            value={value.notify?.template ?? ""}
+            onChange={(e) =>
+              onChange({ ...value, notify: { to: value.notify?.to ?? [], template: e.target.value } })
+            }
+            placeholder="通知模板"
+            className="h-8 text-xs"
+          />
+        </>
+      )}
+
+      {value.action === "WEBHOOK" && (
+        <Input
+          value={value.webhookUrl ?? ""}
+          onChange={(e) => onChange({ ...value, webhookUrl: e.target.value })}
+          placeholder="Webhook 地址"
+          className="h-8 text-xs"
+        />
+      )}
+
+      {value.action === "SCRIPT" && (
+        <ScriptEditor
+          value={value.script ?? { lang: "groovy", code: "" }}
+          onChange={(script) => onChange({ ...value, script })}
+        />
+      )}
+
+      {value.action === "API" && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-1.5">
+            <Select value={api.method} onValueChange={(v) => setApi({ method: v as EventApiConfig["method"] })}>
+              <SelectTrigger size="sm" className="h-8 w-24 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {API_METHODS.map((m) => (
+                  <SelectItem key={m} value={m}>
+                    {m}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Input
+              value={api.url}
+              onChange={(e) => setApi({ url: e.target.value })}
+              placeholder="请求 URL（支持模板变量）"
+              className="h-8 flex-1 text-xs"
+            />
+          </div>
+          <div className="space-y-1">
+            <FieldLabel>请求头（每行 Name: Value）</FieldLabel>
+            <Textarea
+              value={api.headers ?? ""}
+              onChange={(e) => setApi({ headers: e.target.value })}
+              placeholder={"Content-Type: application/json\nAuthorization: Bearer ..."}
+              spellCheck={false}
+              rows={2}
+              className="font-mono text-[11px]"
+            />
+          </div>
+          <div className="space-y-1">
+            <FieldLabel>请求体（JSON / 模板串）</FieldLabel>
+            <Textarea
+              value={api.body ?? ""}
+              onChange={(e) => setApi({ body: e.target.value })}
+              placeholder={'{ "instanceId": "${instanceId}" }'}
+              spellCheck={false}
+              rows={3}
+              className="font-mono text-[11px]"
+            />
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+/** 事件列表编辑器（触发点下拉 + 动作载荷 + 增删），供节点事件 / 流程事件共用 */
+function EventsSection<T extends string, E extends EventActionConfig & { trigger: T }>({
+  title,
+  hint,
+  value,
+  onChange,
+  triggerMeta,
+  makeDefault,
+}: {
+  title: string
+  hint: string
+  value: E[]
+  onChange: (v: E[]) => void
+  triggerMeta: Record<T, string>
+  /** 新增事件的默认值（由调用方按各自事件类型构造，避免泛型强转） */
+  makeDefault: () => E
+}) {
+  const add = () => onChange([...value, makeDefault()])
+  const update = (i: number, ev: E) => onChange(value.map((e, idx) => (idx === i ? ev : e)))
   const remove = (i: number) => onChange(value.filter((_, idx) => idx !== i))
 
   return (
-    <Section title="节点事件" icon={Zap} defaultOpen={false}>
-      <p className="text-xs text-muted-foreground">在节点生命周期触发点执行通知 / Webhook / 脚本。</p>
+    <Section title={title} icon={Zap} defaultOpen={false}>
+      <p className="text-xs text-muted-foreground">{hint}</p>
       {value.map((ev, i) => (
         <div key={i} className="space-y-2 rounded-md border p-2.5">
           <div className="flex items-center gap-1.5">
-            <Select value={ev.trigger} onValueChange={(v) => update(i, { ...ev, trigger: v as EventTrigger })}>
+            <Select value={ev.trigger} onValueChange={(v) => update(i, { ...ev, trigger: v as T })}>
               <SelectTrigger size="sm" className="h-8 flex-1 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {(Object.keys(EVENT_TRIGGER_META) as EventTrigger[]).map((t) => (
+                {(Object.keys(triggerMeta) as T[]).map((t) => (
                   <SelectItem key={t} value={t}>
-                    {EVENT_TRIGGER_META[t]}
+                    {triggerMeta[t]}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1176,58 +1343,7 @@ function NodeEventsSection({ value, onChange }: { value: NodeEvent[]; onChange: 
               <Trash2 className="size-3.5" />
             </button>
           </div>
-          <Select value={ev.action} onValueChange={(v) => update(i, { ...ev, action: v as EventAction })}>
-            <SelectTrigger size="sm" className="h-8 w-full text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {(Object.keys(EVENT_ACTION_META) as EventAction[]).map((a) => (
-                <SelectItem key={a} value={a}>
-                  {EVENT_ACTION_META[a]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {ev.action === "NOTIFY" && (
-            <>
-              <OrgPickerField
-                value={ev.notify?.to ?? []}
-                multiple
-                placeholder="通知对象"
-                onOpen={() => setPickerIndex(i)}
-                onRemove={(ref) =>
-                  update(i, {
-                    ...ev,
-                    notify: {
-                      to: (ev.notify?.to ?? []).filter((r) => !(r.type === ref.type && r.id === ref.id)),
-                      template: ev.notify?.template ?? "",
-                    },
-                  })
-                }
-              />
-              <OrgPicker
-                open={pickerIndex === i}
-                onOpenChange={(open) => !open && setPickerIndex(null)}
-                title="选择通知对象"
-                value={ev.notify?.to ?? []}
-                onConfirm={(to) => update(i, { ...ev, notify: { to, template: ev.notify?.template ?? "" } })}
-              />
-              <Input
-                value={ev.notify?.template ?? ""}
-                onChange={(e) => update(i, { ...ev, notify: { to: ev.notify?.to ?? [], template: e.target.value } })}
-                placeholder="通知模板"
-                className="h-8 text-xs"
-              />
-            </>
-          )}
-          {ev.action === "WEBHOOK" && (
-            <Input
-              value={ev.webhookUrl ?? ""}
-              onChange={(e) => update(i, { ...ev, webhookUrl: e.target.value })}
-              placeholder="Webhook 地址"
-              className="h-8 text-xs"
-            />
-          )}
+          <EventActionEditor value={ev} onChange={(next) => update(i, next)} />
         </div>
       ))}
       <Button type="button" variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={add}>
@@ -1235,6 +1351,36 @@ function NodeEventsSection({ value, onChange }: { value: NodeEvent[]; onChange: 
         添加事件
       </Button>
     </Section>
+  )
+}
+
+/* ---------- 节点事件（P3：后端真分发的 6 种触发点 × 4 种动作） ---------- */
+
+function NodeEventsSection({ value, onChange }: { value: NodeEvent[]; onChange: (v: NodeEvent[]) => void }) {
+  return (
+    <EventsSection
+      title="节点事件"
+      hint="在节点生命周期触发点执行 通知 / Webhook / 脚本 / API。"
+      value={value}
+      onChange={onChange}
+      triggerMeta={EVENT_TRIGGER_META}
+      makeDefault={() => ({ trigger: "TASK_AFTER_COMPLETE", action: "NOTIFY", notify: { to: [], template: "" } })}
+    />
+  )
+}
+
+/* ---------- 流程事件（流程实例生命周期：启动 / 结束 / 撤销 × 4 种动作） ---------- */
+
+function ProcessEventsSection({ value, onChange }: { value: ProcessEvent[]; onChange: (v: ProcessEvent[]) => void }) {
+  return (
+    <EventsSection
+      title="流程事件"
+      hint="在流程实例生命周期触发点执行 通知 / Webhook / 脚本 / API。"
+      value={value}
+      onChange={onChange}
+      triggerMeta={PROCESS_EVENT_TRIGGER_META}
+      makeDefault={() => ({ trigger: "PROCESS_START", action: "NOTIFY", notify: { to: [], template: "" } })}
+    />
   )
 }
 

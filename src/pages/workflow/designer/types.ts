@@ -251,15 +251,49 @@ export type EventTrigger =
   | "TASK_BEFORE_UNDO" // 撤办前
   | "TASK_AFTER_UNDO" // 撤办后
 
-export type EventAction = "NOTIFY" | "WEBHOOK"
+export type EventAction = "NOTIFY" | "WEBHOOK" | "SCRIPT" | "API"
 
-export interface NodeEvent {
-  trigger: EventTrigger
+/**
+ * 事件脚本体（action=SCRIPT 用）：与 flow/model.ts 的 `ScriptConfig`（lang+code）字节对齐/结构等价。
+ * 此处内联声明而非 import ScriptConfig，避免 types → flow/model → shared/config → types 的循环依赖；
+ * 结构相同故可直接传给 `@/components/script-editor` 的 `ScriptEditor`（结构化类型）。
+ */
+export interface EventScript {
+  lang: "groovy" | "js" | "python"
+  code: string
+}
+
+/**
+ * 完整 HTTP 调用配置（action=API 用）。
+ * headers/body 为文本：headers 每行 `Name: Value`；body 可为 JSON / 模板串（后端按需插值）。
+ */
+export interface EventApiConfig {
+  method: "GET" | "POST" | "PUT" | "DELETE"
+  url: string
+  /** 请求头文本（每行 `Name: Value`），可空 */
+  headers?: string
+  /** 请求体文本（JSON / 模板串），可空 */
+  body?: string
+}
+
+/**
+ * 事件动作载荷（NodeEvent / ProcessEvent 共用）：action 判别 + 各动作专属字段。
+ * 切换 action 时序列化侧只保留当前 action 对应的字段（见 property-panel 事件区）。
+ */
+export interface EventActionConfig {
   action: EventAction
   /** action=NOTIFY 用 */
   notify?: { to: OrgRef[]; template: string }
-  /** action=WEBHOOK 用 */
+  /** action=WEBHOOK 用（保留：简单回调 URL） */
   webhookUrl?: string
+  /** action=SCRIPT 用：交后端 ScriptService 执行（同 wf:script:write 治理） */
+  script?: EventScript
+  /** action=API 用：完整 HTTP（method/url/headers/body） */
+  api?: EventApiConfig
+}
+
+export interface NodeEvent extends EventActionConfig {
+  trigger: EventTrigger
 }
 
 /** 单个节点（审批/抄送/分支）的属性集合，keyed by nodeId/branchId 挂在 designerJson.nodeProps */
