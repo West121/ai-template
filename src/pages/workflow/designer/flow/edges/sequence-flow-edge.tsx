@@ -38,19 +38,34 @@ interface FloatingAnchors {
   targetPosition: Position
 }
 
-/** 节点包围盒（中心 + 半宽半高）；measured 缺失（首帧）时回退 node.width/height 或类型默认，绝不返回 0 */
-function nodeBox(n: InternalNode): { cx: number; cy: number; hw: number; hh: number } {
+/** 节点形状：矩形（活动/事件卡）、菱形（网关）、圆形（开始/结束/定时事件）。 */
+type NodeShape = "rect" | "diamond" | "circle"
+const DIAMOND_TYPES = new Set(["exclusiveGateway", "parallelGateway", "inclusiveGateway"])
+const CIRCLE_TYPES = new Set(["startEvent", "endEvent", "timerCatch", "timerBoundary"])
+
+function nodeShape(n: InternalNode): NodeShape {
+  const t = (n.type ?? "") as string
+  if (DIAMOND_TYPES.has(t)) return "diamond"
+  if (CIRCLE_TYPES.has(t)) return "circle"
+  return "rect"
+}
+
+/** 节点包围盒（中心 + 半宽半高 + 形状）；measured 缺失（首帧）时回退 node.width/height 或类型默认，绝不返回 0 */
+function nodeBox(n: InternalNode): { cx: number; cy: number; hw: number; hh: number; shape: NodeShape } {
   const nn = n as InternalNode & { width?: number; height?: number }
   const w = n.measured.width || nn.width || 100
   const h = n.measured.height || nn.height || 60
   const x = n.internals.positionAbsolute.x
   const y = n.internals.positionAbsolute.y
-  return { cx: x + w / 2, cy: y + h / 2, hw: w / 2, hh: h / 2 }
+  return { cx: x + w / 2, cy: y + h / 2, hw: w / 2, hh: h / 2, shape: nodeShape(n) }
 }
 
 /**
- * 从节点中心朝目标中心的射线与该节点**包围盒边界**的交点 + 所在边朝向。
+ * 从节点中心朝目标中心的射线与该节点**可见形状边界**的交点 + 所在边朝向。
  * 保证连线端点恰好落在节点边界上（不进入节点体），并给出对应的 Position 供正交路由定向。
+ *  - 矩形：射线与包围盒求交（端点可沿边滑动）。
+ *  - 菱形（网关，rotate-45 方块）/圆形（事件）：吸附到最近的**基数顶点**（上/右/下/左），
+ *    因菱形尖端在 ±hw·√2（旋转方块对角，超出测量盒），圆形顶点在 ±hw；对齐 bpmn-js 的网关连线观感。
  */
 function boundaryPoint(
   cx: number,
@@ -59,11 +74,25 @@ function boundaryPoint(
   hh: number,
   towardX: number,
   towardY: number,
+  shape: NodeShape,
 ): { x: number; y: number; pos: Position } {
   const dx = towardX - cx
   const dy = towardY - cy
   if (dx === 0 && dy === 0) return { x: cx, y: cy, pos: Position.Top }
-  // 沿射线缩放到最先触及的一条边：scaleX 触左右边、scaleY 触上下边，取较小者
+
+  if (shape !== "rect") {
+    // 菱形尖端沿基数轴在 ±hw·√2；圆形在 ±hw。按主轴（谁先触达）吸附到该顶点。
+    const reachX = shape === "diamond" ? hw * Math.SQRT2 : hw
+    const reachY = shape === "diamond" ? hh * Math.SQRT2 : hh
+    const scaleX = dx !== 0 ? reachX / Math.abs(dx) : Number.POSITIVE_INFINITY
+    const scaleY = dy !== 0 ? reachY / Math.abs(dy) : Number.POSITIVE_INFINITY
+    if (scaleX < scaleY) {
+      return { x: cx + Math.sign(dx) * reachX, y: cy, pos: dx > 0 ? Position.Right : Position.Left }
+    }
+    return { x: cx, y: cy + Math.sign(dy) * reachY, pos: dy > 0 ? Position.Bottom : Position.Top }
+  }
+
+  // 矩形：沿射线缩放到最先触及的一条边：scaleX 触左右边、scaleY 触上下边，取较小者
   const scaleX = dx !== 0 ? hw / Math.abs(dx) : Number.POSITIVE_INFINITY
   const scaleY = dy !== 0 ? hh / Math.abs(dy) : Number.POSITIVE_INFINITY
   const scale = Math.min(scaleX, scaleY)
@@ -82,8 +111,8 @@ function boundaryPoint(
 function floatingAnchors(s: InternalNode, t: InternalNode): FloatingAnchors {
   const S = nodeBox(s)
   const T = nodeBox(t)
-  const a = boundaryPoint(S.cx, S.cy, S.hw, S.hh, T.cx, T.cy)
-  const b = boundaryPoint(T.cx, T.cy, T.hw, T.hh, S.cx, S.cy)
+  const a = boundaryPoint(S.cx, S.cy, S.hw, S.hh, T.cx, T.cy, S.shape)
+  const b = boundaryPoint(T.cx, T.cy, T.hw, T.hh, S.cx, S.cy, T.shape)
   return {
     sourceX: a.x,
     sourceY: a.y,
