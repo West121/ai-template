@@ -23,6 +23,8 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -555,6 +557,75 @@ class GraphToBpmnConverterTest {
                 """);
         BusinessException ex = assertThrows(BusinessException.class, () -> converter.graphToBpmn(root));
         assertTrue(ex.getMessage().contains("attachedTo"), "边界宿主非活动节点抛清晰异常");
+    }
+
+    /* ==================== 事件监听器：节点 SCRIPT/API + 流程级 ==================== */
+
+    /**
+     * 节点事件 SCRIPT/API：整条 events[] 存 oa:events 扩展（含 script{lang,code} / api{method,url,headers,body}），
+     * 并按 trigger 挂 taskListener {@code ${wfEventDelegate}}（complete/delete），运行时读回分发。
+     */
+    @Test
+    void nodeEventsScriptAndApiSerialized() {
+        JsonNode root = json("""
+                {"key": "p", "name": "事件", "nodes": [
+                   {"id": "start", "type": "startEvent", "name": "开始", "position": {"x": 0, "y": 0}},
+                   {"id": "t", "type": "userTask", "name": "审批", "position": {"x": 100, "y": 0},
+                    "props": {"assigneeRules": [{"type": "ROLE", "id": 1}], "multiMode": "ANY",
+                      "events": [
+                        {"trigger": "TASK_AFTER_COMPLETE", "action": "SCRIPT",
+                         "script": {"lang": "groovy", "code": "vars.put('approved', true)"}},
+                        {"trigger": "TASK_AFTER_UNDO", "action": "API",
+                         "api": {"method": "POST", "url": "http://localhost:9/hook",
+                                 "headers": "X-Token: abc", "body": "{\\"k\\":1}"}}
+                      ]}}],
+                 "edges": [{"id": "e1", "source": "start", "target": "t"}]}
+                """);
+        UserTask t = (UserTask) process(converter.graphToBpmn(root)).getFlowElement("t");
+        // 整条 events JSON 存 oa:events（NOTIFY/WEBHOOK/SCRIPT/API 一套序列化，delegate 运行时读回）
+        String eventsText = t.getExtensionElements().get("events").get(0).getElementText();
+        assertTrue(eventsText.contains("\"action\":\"SCRIPT\""), "SCRIPT 动作序列化进 oa:events");
+        assertTrue(eventsText.contains("\"lang\":\"groovy\""), "script.lang 无损");
+        assertTrue(eventsText.contains("vars.put('approved'"), "script.code 无损");
+        assertTrue(eventsText.contains("\"action\":\"API\""), "API 动作序列化进 oa:events");
+        assertTrue(eventsText.contains("http://localhost:9/hook"), "api.url 无损");
+        assertTrue(eventsText.contains("X-Token: abc"), "api.headers 文本无损");
+        // trigger → taskListener：complete（SCRIPT）+ delete（API），均 ${wfEventDelegate}
+        List<org.flowable.bpmn.model.FlowableListener> listeners = t.getTaskListeners();
+        assertEquals(2, listeners.size(), "两个 trigger → 两个 taskListener");
+        assertTrue(listeners.stream().allMatch(l -> "${wfEventDelegate}".equals(l.getImplementation())));
+        assertTrue(listeners.stream().anyMatch(l -> "complete".equals(l.getEvent())), "TASK_AFTER_COMPLETE→complete");
+        assertTrue(listeners.stream().anyMatch(l -> "delete".equals(l.getEvent())), "TASK_AFTER_UNDO→delete");
+    }
+
+    /**
+     * 流程级事件：flowConfig.events（ProcessEvent[]）→ 流程级 executionListener（start/end）。
+     * PROCESS_START→start、PROCESS_END→end 落地；PROCESS_CANCEL 暂不挂（TODO）。事件配置整体存 oa:flowConfig。
+     */
+    @Test
+    void processEventsToExecutionListeners() {
+        JsonNode root = json("""
+                {"key": "p", "name": "流程事件", "flowConfig": {
+                   "events": [
+                     {"trigger": "PROCESS_START", "action": "SCRIPT", "script": {"lang": "js", "code": "vars.started = true"}},
+                     {"trigger": "PROCESS_END", "action": "API", "api": {"method": "PUT", "url": "http://localhost:9/close"}},
+                     {"trigger": "PROCESS_CANCEL", "action": "NOTIFY", "notify": {"to": [], "template": "已撤销"}}
+                   ]},
+                 "nodes": [
+                   {"id": "start", "type": "startEvent", "name": "开始", "position": {"x": 0, "y": 0}},
+                   {"id": "end", "type": "endEvent", "name": "结束", "position": {"x": 100, "y": 0}}],
+                 "edges": [{"id": "e1", "source": "start", "target": "end"}]}
+                """);
+        Process p = process(converter.graphToBpmn(root));
+        List<org.flowable.bpmn.model.FlowableListener> listeners = p.getExecutionListeners();
+        assertEquals(2, listeners.size(), "PROCESS_START/END → 2 个 executionListener（CANCEL 不挂）");
+        assertTrue(listeners.stream().allMatch(l -> "${wfEventDelegate}".equals(l.getImplementation())));
+        assertTrue(listeners.stream().anyMatch(l -> "start".equals(l.getEvent())), "PROCESS_START→start");
+        assertTrue(listeners.stream().anyMatch(l -> "end".equals(l.getEvent())), "PROCESS_END→end");
+        assertTrue(listeners.stream().noneMatch(l -> "cancel".equals(l.getEvent())), "PROCESS_CANCEL 不挂 process-level 监听");
+        // 事件配置整体存 oa:flowConfig，delegate 运行时读回
+        String fc = p.getExtensionElements().get("flowConfig").get(0).getElementText();
+        assertTrue(fc.contains("PROCESS_START") && fc.contains("vars.started"), "flowConfig.events 无损存 oa:flowConfig");
     }
 
     private TimerEventDefinition timerOf(org.flowable.bpmn.model.Event event) {

@@ -133,6 +133,7 @@ public class GraphToBpmnConverter {
             process.setId(JsonToBpmnConverter.sanitizeId(pm.key));
             process.setName(pm.name);
             addExt(process, "flowConfig", pm.flowConfig);
+            addProcessEvents(pm.flowConfig);
             model.addProcess(process);
             // 顶层图 + 递归子图统一走 buildGraph（container 抽象，直译不合成拓扑）
             buildGraph(process, pm.nodes, pm.edges);
@@ -661,6 +662,50 @@ public class GraphToBpmnConverter {
                 case "TASK_AFTER_CREATED", "ACTIVITY_CONFIRM_PARTICIPANTS" -> "create";
                 case "TASK_BEFORE_COMPLETE", "TASK_AFTER_COMPLETE" -> "complete";
                 case "TASK_BEFORE_UNDO", "TASK_AFTER_UNDO" -> "delete";
+                default -> null;
+            };
+        }
+
+        /**
+         * 流程级事件：把 {@code flowConfig.events}（ProcessEvent[]）挂成<b>流程级 executionListener</b>
+         * （{@code ${wfEventDelegate}}，event=start/end）。事件配置本身随 {@code oa:flowConfig} 扩展整体落库
+         * （已在 {@link #build()} 写入），运行时 {@code wfEventDelegate} 读回 {@code flowConfig.events} 分发动作
+         * （NOTIFY/WEBHOOK/SCRIPT/API），与节点事件同一套动作实现。
+         *
+         * <p><b>落地范围</b>：PROCESS_START→start、PROCESS_END→end。
+         * <b>PROCESS_CANCEL（TODO）</b>：撤销/终止不经流程正常 end——process-level "end" 监听无法区分正常结束与
+         * 撤销/终止，Flowable 亦无「进程取消」的 process-level executionListener 事件；可靠落点在 {@code InstanceService}
+         * 的 cancel/terminate 端点侧挂钩（另行切片），故本转换器暂不为 PROCESS_CANCEL 挂监听。
+         */
+        private void addProcessEvents(JsonNode flowConfig) {
+            if (flowConfig == null || flowConfig.isMissingNode() || flowConfig.isNull()) {
+                return;
+            }
+            JsonNode events = flowConfig.path("events");
+            if (!events.isArray() || events.isEmpty()) {
+                return;
+            }
+            Set<String> execEvents = new LinkedHashSet<>();
+            for (JsonNode ev : events) {
+                String le = executionListenerEventFor(ev.path("trigger").asString(""));
+                if (le != null) {
+                    execEvents.add(le);
+                }
+            }
+            for (String le : execEvents) {
+                FlowableListener l = new FlowableListener();
+                l.setEvent(le);
+                l.setImplementationType(ImplementationType.IMPLEMENTATION_TYPE_DELEGATEEXPRESSION);
+                l.setImplementation("${wfEventDelegate}");
+                process.getExecutionListeners().add(l);
+            }
+        }
+
+        private String executionListenerEventFor(String trigger) {
+            return switch (trigger) {
+                case "PROCESS_START" -> "start";
+                case "PROCESS_END" -> "end";
+                // PROCESS_CANCEL：见 addProcessEvents 文档，暂不落地（TODO）
                 default -> null;
             };
         }
