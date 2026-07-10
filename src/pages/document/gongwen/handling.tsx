@@ -26,8 +26,15 @@ import { DECISION_META, gwFormatTime, type GwDoc, type GwOpinion } from "./types
 
 /* ============================ 办理时间线 ============================ */
 
-export function OpinionTimeline({ items }: { items: GwOpinion[] }) {
-  if (!items || items.length === 0) {
+export function OpinionTimeline({
+  items,
+  current,
+}: {
+  items: GwOpinion[]
+  /** 正在办理的环节（未终态时传入）：时间线末尾追加「办理中」条目 */
+  current?: { node: string; assignee?: string }
+}) {
+  if ((!items || items.length === 0) && !current) {
     return <div className="py-6 text-center text-sm text-muted-foreground">暂无办理记录</div>
   }
   return (
@@ -35,8 +42,11 @@ export function OpinionTimeline({ items }: { items: GwOpinion[] }) {
       {items.map((item, index) => {
         const meta = DECISION_META[item.decision] ?? { label: item.decision, dot: "bg-muted-foreground/30" }
         return (
-          <div key={item.id ?? index} className="relative flex gap-3 pb-6 last:pb-0">
-            {index < items.length - 1 && (
+          <div
+            key={item.id ?? index}
+            className={cn("relative flex gap-3", index === items.length - 1 && !current ? "pb-0" : "pb-6")}
+          >
+            {(index < items.length - 1 || current) && (
               <div className="absolute left-[5px] top-4 h-full w-px bg-border" />
             )}
             <div className={cn("mt-1 size-[11px] shrink-0 rounded-full", meta.dot)} />
@@ -57,6 +67,24 @@ export function OpinionTimeline({ items }: { items: GwOpinion[] }) {
           </div>
         )
       })}
+      {/* 正在办理的环节（脉冲蓝点 + 环节名 + 当前办理人） */}
+      {current && (
+        <div className="relative flex gap-3">
+          <span className="relative mt-1 flex size-[11px] shrink-0">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/50" />
+            <span className="relative inline-flex size-[11px] rounded-full bg-primary" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-primary">办理中</span>
+              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">{current.node}</span>
+            </div>
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              当前办理人：{current.assignee ?? "按规则运行时确定"}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

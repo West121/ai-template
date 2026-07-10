@@ -202,7 +202,14 @@ export default function SendDetailPage() {
             </TabsList>
           </div>
           <TabsContent value="timeline" className="m-0 px-4 py-3">
-            <OpinionTimeline items={doc.opinions ?? []} />
+            <OpinionTimeline
+              items={doc.opinions ?? []}
+              current={
+                doc.currentNode && doc.status !== "ARCHIVED"
+                  ? { node: doc.currentNode, assignee: doc.currentAssignee }
+                  : undefined
+              }
+            />
           </TabsContent>
           <TabsContent value="content" className="m-0 px-4 py-3">
             {doc.content ? (
