@@ -1,0 +1,286 @@
+/**
+ * 公文纸固定白底版式 —— GB/T 9704《党政机关公文格式》。
+ * 契约：docs/design/gongwen-format-spec.md（丹青）。
+ *
+ * 红线：`.gongwen-paper` 作用域内一律 mm/pt + 写死黑白红，**不引任何主题 token**
+ * （--background/--foreground/bg-card 等），保证预览/打印固定白底正规版式，不随深浅色变化。
+ * 外层 `.gw-preview-shell` 才跟随主题（灰底 + 工具条）。
+ */
+
+/* ============ 外层预览壳（跟随主题：灰底 + 桌面观感） ============ */
+.gw-preview-shell {
+  background: #e5e7eb;
+  overflow: auto;
+}
+.dark .gw-preview-shell {
+  background: #1f2328;
+}
+
+/* ============ 固定白底边界：以下全部写死黑白红，脱离主题 ============ */
+.gongwen-paper {
+  /* 字体族（含 Web 回退，避免掉成默认无衬线） */
+  --gw-font-song: "FZXiaoBiaoSong-B05S", "方正小标宋简体", "STZhongsong", "华文中宋", "SimSun", "宋体", serif;
+  --gw-font-fs: "FangSong", "仿宋", "仿宋_GB2312", "FangSong_GB2312", "STFangsong", "华文仿宋", serif;
+  --gw-font-hei: "SimHei", "黑体", "Microsoft YaHei", "Heiti SC", sans-serif;
+  --gw-font-kai: "KaiTi", "楷体", "KaiTi_GB2312", "STKaiti", "华文楷体", serif;
+
+  /* 字号（照 GB/T，pt 单位） */
+  --gw-size-title: 22pt; /* 二号 标题 */
+  --gw-size-body: 16pt; /* 三号 正文/主送/日期/抄送 */
+  --gw-size-fwzh: 16pt; /* 三号 发文字号 */
+  --gw-size-fj: 14pt; /* 四号 版记 */
+  --gw-size-mark: 16pt; /* 三号 份号/密级/紧急程度 */
+
+  /* 公文红（唯一红色，全篇红头/红线/印章统一引用） */
+  --gw-red: #e60012;
+
+  display: flex;
+  justify-content: center;
+  padding: 24px 0;
+}
+
+/* 页面盒（A4） */
+.gw-page {
+  box-sizing: border-box;
+  width: 210mm;
+  min-height: 297mm;
+  padding: 37mm 26mm 35mm 28mm; /* 上 右 下 左 = 版心内缩 */
+  margin: 0 auto;
+  background: #fff;
+  color: #000;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.15);
+}
+
+/* 版心（显式 156mm，供份号/紧急程度绝对定位参照） */
+.gw-typearea {
+  position: relative;
+  width: 156mm;
+  min-height: 225mm;
+}
+
+/* ---- 顶部标注：份号/密级（左）紧急程度（右） ---- */
+.gw-marks {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.gw-copyno,
+.gw-secret,
+.gw-urgency {
+  font-family: var(--gw-font-hei);
+  font-size: var(--gw-size-mark);
+  line-height: 1.6;
+  color: #000;
+}
+.gw-urgency {
+  color: var(--gw-red);
+}
+
+/* ---- 发文机关标志（红头） ---- */
+.gw-header {
+  font-family: var(--gw-font-song);
+  font-size: 34pt; /* ≈ 一号 */
+  font-weight: 700;
+  color: var(--gw-red);
+  text-align: center;
+  letter-spacing: 0.05em;
+  padding-top: 8mm;
+  line-height: 1.2;
+}
+
+/* ---- 发文字号 + 签发人 ---- */
+.gw-docnum {
+  font-family: var(--gw-font-fs);
+  font-size: var(--gw-size-fwzh);
+  color: #000;
+  margin-top: 2em;
+  line-height: 1.9;
+}
+.gw-docnum--center {
+  text-align: center;
+}
+.gw-docnum--upward {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 0 1em;
+}
+.gw-issuer {
+  font-family: var(--gw-font-fs);
+}
+
+/* ---- 红反线（撑满版心） ---- */
+.gw-red-line {
+  border: none;
+  height: 0;
+  width: 100%;
+  border-top: 1.2pt solid var(--gw-red);
+  margin: 0.4em 0 0;
+}
+
+/* ---- 标题 ---- */
+.gw-title {
+  font-family: var(--gw-font-song);
+  font-size: var(--gw-size-title);
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.5;
+  margin: 2em 0 0;
+  word-break: keep-all;
+  color: #000;
+}
+
+/* ---- 主送机关（左顶格，末尾补冒号） ---- */
+.gw-recipients {
+  font-family: var(--gw-font-fs);
+  font-size: var(--gw-size-body);
+  text-align: left;
+  margin-top: 1em;
+  line-height: 1.9;
+  color: #000;
+}
+.gw-recipients::after {
+  content: "：";
+}
+
+/* ---- 正文（三号仿宋，每面 22 行×28 字：行距 29pt、字距 0、首行缩进 2 字） ---- */
+.gw-body {
+  font-family: var(--gw-font-fs);
+  font-size: var(--gw-size-body);
+  color: #000;
+  text-align: justify;
+  line-height: 29pt;
+  letter-spacing: 0;
+  margin-top: 0.5em;
+}
+.gw-body p {
+  margin: 0;
+  text-indent: 2em;
+}
+.gw-body img,
+.gw-body table {
+  max-width: 100%;
+}
+
+/* ---- 成文日期（右空四字）+ 电子印章 ---- */
+.gw-docdate {
+  font-family: var(--gw-font-fs);
+  font-size: var(--gw-size-body);
+  text-align: right;
+  padding-right: 4em;
+  margin-top: 1em;
+  line-height: 1.9;
+  position: relative;
+  color: #000;
+}
+.gw-seal {
+  position: absolute;
+  width: 42mm;
+  height: 42mm;
+  right: 6em;
+  top: 50%;
+  transform: translateY(-55%);
+  opacity: 0.85;
+  mix-blend-mode: multiply;
+  pointer-events: none;
+  z-index: 2;
+}
+/* 纯 CSS 兜底章（无印章图片时的占位/演示） */
+.gw-seal--css {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  border-radius: 50%;
+  border: 1.2mm solid var(--gw-red);
+  color: var(--gw-red);
+  font-family: var(--gw-font-song);
+  font-size: 9pt;
+  line-height: 1.2;
+  opacity: 0.8;
+  padding: 4mm;
+}
+
+/* ---- 附注 ---- */
+.gw-annotation {
+  font-family: var(--gw-font-fs);
+  font-size: var(--gw-size-body);
+  text-indent: 2em;
+  margin-top: 1em;
+  line-height: 1.9;
+  color: #000;
+}
+
+/* ---- 版记（抄送 / 印发机关和日期） ---- */
+.gw-record {
+  font-family: var(--gw-font-fs);
+  font-size: var(--gw-size-fj);
+  color: #000;
+  border-top: 0.75pt solid #000;
+  border-bottom: 0.75pt solid #000;
+  margin-top: 2em;
+  padding: 0.3em 1em;
+  line-height: 1.8;
+}
+.gw-cc {
+  border-bottom: 0.5pt solid #000;
+  padding-bottom: 0.2em;
+}
+.gw-print-info {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 0.2em;
+}
+
+/* ============ A4 缩放（预览区窄时整体缩放，保持 mm 尺寸不变） ============ */
+.gw-page--scaled {
+  transform-origin: top center;
+}
+
+/* ============ 打印 / PDF（@page A4 + 隔离公文纸） ============ */
+@page {
+  size: A4 portrait;
+  margin: 0;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .gongwen-paper,
+  .gongwen-paper * {
+    visibility: visible;
+  }
+  .gongwen-paper {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding: 0;
+    display: block;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .gw-page {
+    box-shadow: none;
+    page-break-after: always;
+    transform: none !important;
+  }
+  .gw-page:last-child {
+    page-break-after: auto;
+  }
+  .gw-record {
+    break-inside: avoid;
+  }
+  .gw-body p {
+    orphans: 2;
+    widows: 2;
+  }
+  .gw-seal--pending,
+  .gw-editing-only {
+    display: none !important;
+  }
+}

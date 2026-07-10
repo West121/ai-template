@@ -77,6 +77,7 @@ export const menuTree: MenuItem[] = [
     children: [
       { title: "收文管理", path: "/document/receive", icon: FileInput },
       { title: "发文管理", path: "/document/send", icon: FileOutput },
+      { title: "公文台账", path: "/document/ledger", icon: FileStack },
     ],
   },
   {

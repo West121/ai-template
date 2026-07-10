@@ -19,7 +19,10 @@ const WorkflowFormDefsPage = lazy(() => import("@/pages/workflow/form-defs"))
 const WorkflowInstanceDetailPage = lazy(() => import("@/pages/workflow/instance-detail"))
 const WorkflowSealsPage = lazy(() => import("@/pages/workflow/seals"))
 const DocumentReceivePage = lazy(() => import("@/pages/document/receive"))
+const DocumentReceiveDetailPage = lazy(() => import("@/pages/document/receive-detail"))
 const DocumentSendPage = lazy(() => import("@/pages/document/send"))
+const DocumentSendDetailPage = lazy(() => import("@/pages/document/send-detail"))
+const DocumentLedgerPage = lazy(() => import("@/pages/document/ledger"))
 const MeetingRoomsPage = lazy(() => import("@/pages/meeting/rooms"))
 const MeetingMyPage = lazy(() => import("@/pages/meeting/my"))
 const AttendanceRecordPage = lazy(() => import("@/pages/attendance/record"))
@@ -126,7 +129,10 @@ export default function App() {
             <Route path="document">
               <Route index element={<Navigate to="/document/receive" replace />} />
               <Route path="receive" element={<DocumentReceivePage />} />
+              <Route path="receive/:id" element={<DocumentReceiveDetailPage />} />
               <Route path="send" element={<DocumentSendPage />} />
+              <Route path="send/:id" element={<DocumentSendDetailPage />} />
+              <Route path="ledger" element={<DocumentLedgerPage />} />
             </Route>
             <Route path="meeting">
               <Route index element={<Navigate to="/meeting/rooms" replace />} />
