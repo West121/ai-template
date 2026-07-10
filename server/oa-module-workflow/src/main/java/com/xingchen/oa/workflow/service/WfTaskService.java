@@ -30,9 +30,13 @@ import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.runtime.Execution;
+import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.DelegationState;
 import org.flowable.task.api.Task;
 import org.flowable.task.api.history.HistoricTaskInstance;
+
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -111,12 +115,45 @@ public class WfTaskService {
         WfInstanceExt inst = instanceRepository.findByProcInstId(t.getProcessInstanceId()).orElse(null);
         boolean claim = t.getAssignee() == null;
         boolean delegated = t.getDelegationState() == DelegationState.PENDING;
+        String title = inst != null ? inst.getTitle() : null;
+        String defName = inst != null ? inst.getDefName() : null;
+        String initiatorName = inst != null ? inst.getInitiatorName() : null;
+        OffsetDateTime createdAt = inst != null ? inst.getCreatedAt() : null;
+        if (inst == null) {
+            // 无 wf_instance_ext 托管的实例（如公文办文经 RuntimeService 起）——从共享 Flowable 引擎回退取
+            // 流程名/标题(实例名)/发起人/起始时间。只读本引擎数据，workflow 不反向依赖起单方(office)。
+            FlowableMeta m = flowableMeta(t.getProcessInstanceId());
+            title = m.title();
+            defName = m.defName();
+            initiatorName = m.initiatorName();
+            createdAt = m.createdAt();
+        }
         return new TaskItem(t.getId(), t.getProcessInstanceId(),
-                inst != null ? inst.getTitle() : null,
-                inst != null ? inst.getDefName() : null,
-                t.getName(),
-                inst != null ? inst.getInitiatorName() : null,
-                inst != null ? inst.getCreatedAt() : null, claim, delegated);
+                title, defName, t.getName(), initiatorName, createdAt, claim, delegated);
+    }
+
+    /** 从 Flowable 运行时实例回退取元数据（实例名=标题、流程定义名、initiatorName 变量、起始时间）。 */
+    private FlowableMeta flowableMeta(String procInstId) {
+        try {
+            ProcessInstance pi = runtimeService.createProcessInstanceQuery()
+                    .processInstanceId(procInstId).singleResult();
+            if (pi == null) {
+                return new FlowableMeta(null, null, null, null);
+            }
+            Object initiatorName = runtimeService.getVariable(procInstId, "initiatorName");
+            OffsetDateTime createdAt = pi.getStartTime() == null ? null
+                    : pi.getStartTime().toInstant().atZone(ZoneId.systemDefault()).toOffsetDateTime();
+            return new FlowableMeta(
+                    StringUtils.hasText(pi.getName()) ? pi.getName() : null,
+                    pi.getProcessDefinitionName(),
+                    initiatorName != null ? String.valueOf(initiatorName) : null,
+                    createdAt);
+        } catch (Exception e) {
+            return new FlowableMeta(null, null, null, null);
+        }
+    }
+
+    private record FlowableMeta(String title, String defName, String initiatorName, OffsetDateTime createdAt) {
     }
 
     /* ---------------- 审批通过（委派感知） ---------------- */

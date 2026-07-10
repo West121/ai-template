@@ -218,7 +218,11 @@ check("发文拟稿占位号=待编号", drA.body?.data?.code === "待编号", d
 const rvA = await call(admin.token, "POST", `/api/office/doc/${aId}/opinion`, { decision: "APPROVE", opinion: "核稿通过" })
 check("核稿后=签发, 办理人=部门经理(单位领导,id 2)≠发起人(admin,id 1)", rvA.body?.data?.currentTask?.taskKey === "issue" && rvA.body?.data?.currentTask?.assignee === "2", JSON.stringify(rvA.body?.data?.currentTask))
 const gwMgrTodo = await call(manager.token, "GET", "/api/wf/tasks/todo?pageNum=1&pageSize=100")
-check("非发起人(王经理)待办含签发任务", (gwMgrTodo.body?.data?.list ?? []).some((t) => t.nodeName === "签发"), (gwMgrTodo.body?.data?.list ?? []).map((t) => t.nodeName).join(","))
+const gwSignTask = (gwMgrTodo.body?.data?.list ?? []).find((t) => t.nodeName === "签发")
+check("非发起人(王经理)待办含签发任务", !!gwSignTask, (gwMgrTodo.body?.data?.list ?? []).map((t) => t.nodeName).join(","))
+check("公文任务在通用待办显示流程名/标题/发起人(非空)",
+  !!gwSignTask && gwSignTask.defName === "发文办理单" && gwSignTask.instanceTitle === "冒烟测试发文A：情况通报" && !!gwSignTask.initiatorName,
+  JSON.stringify({ defName: gwSignTask?.defName, title: gwSignTask?.instanceTitle, initiator: gwSignTask?.initiatorName }))
 const isA = await call(admin.token, "POST", `/api/office/doc/${aId}/opinion`, { decision: "APPROVE", opinion: "同意签发" })
 const a = { id: aId, draft: drA.body, issued: isA.body }
 check("签发占正式号(ISSUED)", a.issued?.data?.status === "ISSUED" && a.issued?.data?.currentTask?.taskKey === "seal", JSON.stringify({ s: a.issued?.data?.status, t: a.issued?.data?.currentTask?.taskKey }))

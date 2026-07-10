@@ -22,12 +22,12 @@ VALUES
 ('gw_send', '发文办理单', '公文', 'GRAPH',
 '{"schemaVersion":1,"key":"gw_send","name":"发文办理单","nodes":[
 {"id":"start","type":"startEvent","name":"拟稿","position":{"x":80,"y":140}},
-{"id":"review","type":"userTask","name":"核稿","position":{"x":200,"y":120},"props":{"assigneeRules":[{"type":"LEADER","level":1}],"emptyStrategy":"TO_ADMIN"}},
+{"id":"review","type":"userTask","locked":true,"name":"核稿","position":{"x":200,"y":120},"props":{"assigneeRules":[{"type":"LEADER","level":1}],"emptyStrategy":"TO_ADMIN"}},
 {"id":"gwCs","type":"exclusiveGateway","name":"是否会签","position":{"x":360,"y":132}},
-{"id":"countersign","type":"userTask","name":"会签","position":{"x":480,"y":40},"props":{"assigneeRules":[{"type":"ROLE","refs":[{"kind":"ROLE","id":2}]}],"emptyStrategy":"TO_ADMIN"}},
-{"id":"issue","type":"userTask","name":"签发","position":{"x":480,"y":200},"props":{"assigneeRules":[{"type":"ROLE","refs":[{"kind":"ROLE","id":2}]}],"emptyStrategy":"TO_ADMIN"}},
-{"id":"seal","type":"userTask","name":"用印","position":{"x":640,"y":200},"props":{"assigneeRules":[{"type":"ROLE","refs":[{"kind":"ROLE","id":1}]}],"emptyStrategy":"TO_ADMIN"}},
-{"id":"publish","type":"userTask","name":"成文分发","position":{"x":800,"y":200},"props":{"assigneeRules":[{"type":"INITIATOR"}],"emptyStrategy":"TO_ADMIN"}},
+{"id":"countersign","type":"userTask","locked":true,"name":"会签","position":{"x":480,"y":40},"props":{"assigneeRules":[{"type":"ROLE","refs":[{"kind":"ROLE","id":2}]}],"emptyStrategy":"TO_ADMIN"}},
+{"id":"issue","type":"userTask","locked":true,"name":"签发","position":{"x":480,"y":200},"props":{"assigneeRules":[{"type":"ROLE","refs":[{"kind":"ROLE","id":2}]}],"emptyStrategy":"TO_ADMIN"}},
+{"id":"seal","type":"userTask","locked":true,"name":"用印","position":{"x":640,"y":200},"props":{"assigneeRules":[{"type":"ROLE","refs":[{"kind":"ROLE","id":1}]}],"emptyStrategy":"TO_ADMIN"}},
+{"id":"publish","type":"userTask","locked":true,"name":"成文分发","position":{"x":800,"y":200},"props":{"assigneeRules":[{"type":"INITIATOR"}],"emptyStrategy":"TO_ADMIN"}},
 {"id":"end","type":"endEvent","name":"成文归档","position":{"x":960,"y":210}}
 ],"edges":[
 {"id":"se1","source":"start","target":"review"},
@@ -44,12 +44,12 @@ VALUES
 ('gw_recv', '收文办理单', '公文', 'GRAPH',
 '{"schemaVersion":1,"key":"gw_recv","name":"收文办理单","nodes":[
 {"id":"start","type":"startEvent","name":"签收登记","position":{"x":80,"y":140}},
-{"id":"propose","type":"userTask","name":"拟办","position":{"x":200,"y":120},"props":{"assigneeRules":[{"type":"LEADER","level":1}],"emptyStrategy":"TO_ADMIN"}},
-{"id":"approve","type":"userTask","name":"批办","position":{"x":360,"y":120},"props":{"assigneeRules":[{"type":"ROLE","refs":[{"kind":"ROLE","id":2}]}],"emptyStrategy":"TO_ADMIN"}},
-{"id":"handle","type":"userTask","name":"承办","position":{"x":520,"y":120},"props":{"assigneeRules":[{"type":"LEADER","level":1}],"emptyStrategy":"TO_ADMIN"}},
+{"id":"propose","type":"userTask","locked":true,"name":"拟办","position":{"x":200,"y":120},"props":{"assigneeRules":[{"type":"LEADER","level":1}],"emptyStrategy":"TO_ADMIN"}},
+{"id":"approve","type":"userTask","locked":true,"name":"批办","position":{"x":360,"y":120},"props":{"assigneeRules":[{"type":"ROLE","refs":[{"kind":"ROLE","id":2}]}],"emptyStrategy":"TO_ADMIN"}},
+{"id":"handle","type":"userTask","locked":true,"name":"承办","position":{"x":520,"y":120},"props":{"assigneeRules":[{"type":"LEADER","level":1}],"emptyStrategy":"TO_ADMIN"}},
 {"id":"gwCirc","type":"exclusiveGateway","name":"是否传阅","position":{"x":680,"y":132}},
-{"id":"circulate","type":"userTask","name":"传阅","position":{"x":800,"y":40},"props":{"assigneeRules":[{"type":"INITIATOR"}],"emptyStrategy":"TO_ADMIN"}},
-{"id":"finish","type":"userTask","name":"办结归档","position":{"x":800,"y":200},"props":{"assigneeRules":[{"type":"INITIATOR"}],"emptyStrategy":"TO_ADMIN"}},
+{"id":"circulate","type":"userTask","locked":true,"name":"传阅","position":{"x":800,"y":40},"props":{"assigneeRules":[{"type":"INITIATOR"}],"emptyStrategy":"TO_ADMIN"}},
+{"id":"finish","type":"userTask","locked":true,"name":"办结归档","position":{"x":800,"y":200},"props":{"assigneeRules":[{"type":"INITIATOR"}],"emptyStrategy":"TO_ADMIN"}},
 {"id":"end","type":"endEvent","name":"办结","position":{"x":960,"y":210}}
 ],"edges":[
 {"id":"re1","source":"start","target":"propose"},

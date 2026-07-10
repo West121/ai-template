@@ -111,15 +111,18 @@ public class GongwenService {
         d = documentRepository.save(d);
 
         // AssigneeResolver 取人上下文：initiatorId/initiatorDeptId 供 LEADER/INITIATOR/ROLE 等规则运行时求值。
+        // initiatorName + 实例名(title)写入共享 Flowable 引擎，供通用待办在无 wf_instance_ext 时回退展示。
         Map<String, Object> vars = new HashMap<>();
         vars.put("initiatorId", ctx.getUserId());
         vars.put("initiatorDeptId", ctx.getActiveDeptId());
+        vars.put("initiatorName", SecuritySupport.displayName(ctx));
         vars.put("needCountersign", Boolean.TRUE.equals(req.needCountersign()));
         if (req.numberRuleId() != null) {
             vars.put("numberRuleId", req.numberRuleId());
         }
         ProcessInstance pi = runtimeService.startProcessInstanceByKey(
                 SEND_KEY, BIZ_PREFIX + d.getId(), vars);
+        runtimeService.setProcessInstanceName(pi.getId(), d.getTitle());
         d.setProcessInstanceId(pi.getProcessInstanceId());
         d.setStatus(Document.STATUS_REVIEWING);
         documentRepository.save(d);
@@ -154,9 +157,11 @@ public class GongwenService {
         Map<String, Object> vars = new HashMap<>();
         vars.put("initiatorId", ctx.getUserId());
         vars.put("initiatorDeptId", ctx.getActiveDeptId());
+        vars.put("initiatorName", SecuritySupport.displayName(ctx));
         vars.put("needCirculate", Boolean.TRUE.equals(req.needCirculate()));
         ProcessInstance pi = runtimeService.startProcessInstanceByKey(
                 RECV_KEY, BIZ_PREFIX + d.getId(), vars);
+        runtimeService.setProcessInstanceName(pi.getId(), d.getTitle());
         d.setProcessInstanceId(pi.getProcessInstanceId());
         d.setStatus(Document.STATUS_ASSIGNING);
         documentRepository.save(d);
