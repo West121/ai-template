@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react"
+import { useMemo, useRef, useState, type ReactNode } from "react"
 import {
   Ban,
   BellRing,
@@ -43,7 +43,13 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
-import type { WfInstanceDetail, WfNodeRef, WfOrgRef } from "@/types/workflow"
+import { HostedForm } from "@/components/hosted-form"
+import { buildFieldPolicyMap } from "@/components/field-perms-editor"
+import { getForm, isCodeForm, type HostedFormHandle } from "@/lib/form-registry"
+import { missingRequiredFields, type FieldPolicyMap } from "@/lib/form-manifest"
+import { parseFormData, type WfNodeRef, type WfOrgRef } from "@/types/workflow"
+import type { WfInstanceDetailP3 } from "@/types/workflow-p3"
+import "@/pages/workflow/forms" // 触发 CODE 表单登记（registerForm 副作用），确保办理页命中
 
 /* ================= 转换工具 ================= */
 
@@ -125,7 +131,7 @@ function useOpSubmit(onDone: () => void) {
 }
 
 interface DialogProps {
-  detail: WfInstanceDetail
+  detail: WfInstanceDetailP3
   open: boolean
   onOpenChange: (open: boolean) => void
   /** 操作成功：刷新详情 + 关闭 */
@@ -826,18 +832,50 @@ function AppendNodeDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
 function ApproveDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
   const [comment, setComment] = useState("")
   const { busy, run } = useOpSubmit(onDone)
-  const submit = () =>
-    run(
-      () => post(`/api/wf/tasks/${detail.myTaskId}/approve`, { comment: comment.trim() || undefined }),
+  const formHandle = useRef<HostedFormHandle>(null)
+
+  // CODE 表单（本仓库手写 react-hook-form 表单）：节点绑定命中 registry 时，办理页渲染**可编辑**
+  // HostedForm（fieldPolicy 由 nodeFormPerms 合成，editable 按节点策略），提交随 approve 带 formData。
+  const codeFormKey = detail.formKey && isCodeForm(detail.formKey) ? detail.formKey : undefined
+  const codeManifest = codeFormKey ? getForm(codeFormKey)?.manifest : undefined
+  const codeFieldPolicy = useMemo<FieldPolicyMap | undefined>(
+    () => (codeManifest ? buildFieldPolicyMap(codeManifest.fields, detail.nodeFormPerms) : undefined),
+    [codeManifest, detail.nodeFormPerms],
+  )
+  const codeFormData = useMemo(() => parseFormData(detail.formData), [detail.formData])
+  const labelOf = (key: string) => codeManifest?.fields.find((f) => f.key === key)?.label ?? key
+
+  const submit = async () => {
+    let formData: Record<string, unknown> | undefined
+    if (codeFormKey) {
+      // 触发 react-hook-form 校验以在字段上浮现错误提示（含按策略注入的必填）
+      await formHandle.current?.validate()
+      const values = formHandle.current?.getValues() ?? {}
+      // 权威门禁：清单必填（来自 manifest → fieldPolicy.required）未填则拦截
+      const missing = missingRequiredFields(codeFieldPolicy, values)
+      if (missing.length > 0) {
+        toast.error(`请完善必填项：${missing.map(labelOf).join("、")}`)
+        return
+      }
+      formData = values
+    }
+    await run(
+      () =>
+        post(`/api/wf/tasks/${detail.myTaskId}/approve`, {
+          comment: comment.trim() || undefined,
+          ...(formData ? { formData } : {}),
+        }),
       "已同意",
     )
+  }
+
   return (
     <Modal
       open={open}
       onOpenChange={(o) => !o && !busy && onOpenChange(false)}
       title="同意"
       description={detail.title}
-      width={440}
+      width={codeFormKey ? 520 : 440}
       resizable={false}
       fullscreenable={false}
       footer={
@@ -845,20 +883,37 @@ function ApproveDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             取消
           </Button>
-          <Button className="bg-emerald-600 text-white hover:bg-emerald-600/90" onClick={submit} disabled={busy}>
+          <Button
+            className="bg-emerald-600 text-white hover:bg-emerald-600/90"
+            onClick={() => void submit()}
+            disabled={busy}
+          >
             {busy ? "提交中…" : "确认同意"}
           </Button>
         </>
       }
     >
-      <Field label="审批意见">
-        <Textarea
-          value={comment}
-          onChange={(e) => setComment(e.target.value)}
-          rows={3}
-          placeholder="选填，默认为「同意」"
-        />
-      </Field>
+      <div className="space-y-4">
+        {codeFormKey && (
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-muted-foreground">表单填写</div>
+            <HostedForm
+              formKey={codeFormKey}
+              formData={codeFormData}
+              fieldPolicy={codeFieldPolicy}
+              formRef={formHandle}
+            />
+          </div>
+        )}
+        <Field label="审批意见">
+          <Textarea
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            rows={3}
+            placeholder="选填，默认为「同意」"
+          />
+        </Field>
+      </div>
     </Modal>
   )
 }
@@ -909,7 +964,7 @@ const OP_META: Record<
  * 实例详情操作栏：按 detail.allowedOps / isAdmin 动态渲染操作按钮 + 弹窗。
  * allowedOps 缺省（后端 P2 未就绪）时回退 P1 行为：有待办即显示同意/驳回。
  */
-export function WfOpBar({ detail, onReload }: { detail: WfInstanceDetail; onReload: () => void }) {
+export function WfOpBar({ detail, onReload }: { detail: WfInstanceDetailP3; onReload: () => void }) {
   const [dlg, setDlg] = useState<DialogKey | null>(null)
   const [claiming, setClaiming] = useState(false)
   const userId = useAuthStore((s) => s.userId)

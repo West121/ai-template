@@ -382,7 +382,8 @@ export default function WorkflowInstanceDetailPage() {
     if (!manifest) return undefined
     const policy = buildFieldPolicyMap(manifest.fields, detail.nodeFormPerms)
     // 详情区为只读查看：在策略基础上强制不可编辑（visible/required 仍按 nodeFormPerms/清单）。
-    // 办理页 / 重新提交的可编辑 + 提交接线属较大改动，见收尾报告说明。
+    // 可编辑的**填写→提交**在办理动作里进行：见 wf-op-dialogs 的 ApproveDialog（CODE 表单渲染可编辑
+    // HostedForm，提交随 approve 带 formData）。
     const view: FieldPolicyMap = {}
     for (const [k, p] of Object.entries(policy)) view[k] = { ...p, editable: false }
     return view

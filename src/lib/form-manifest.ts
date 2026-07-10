@@ -87,3 +87,28 @@ export function fieldStateOf(policy: FieldPolicyMap | undefined, key: string): F
   if (!p) return { hidden: false, disabled: false, required: false }
   return { hidden: !p.visible, disabled: !p.editable, required: p.required }
 }
+
+/** 判定字段值是否为“空”（未填）：null/undefined、纯空白字符串、空数组皆视为空。 */
+export function isEmptyValue(v: unknown): boolean {
+  if (v == null) return true
+  if (typeof v === "string") return v.trim() === ""
+  if (Array.isArray(v)) return v.length === 0
+  return false
+}
+
+/**
+ * 提交前必填校验（设计文档 2.4：required 来自清单，经 `buildFieldPolicyMap` 合入策略）。
+ * 返回未填写的必填字段 key 列表：只校验**可见且必填**的字段（隐藏字段不阻塞提交）。
+ * 纯函数、无 React——供 CODE 表单办理动作在带 formData 提交前作权威门禁，且可在 node 环境单测。
+ */
+export function missingRequiredFields(
+  policy: FieldPolicyMap | undefined,
+  values: Record<string, unknown>,
+): string[] {
+  if (!policy) return []
+  const out: string[] = []
+  for (const [key, p] of Object.entries(policy)) {
+    if (p.visible && p.required && isEmptyValue(values[key])) out.push(key)
+  }
+  return out
+}

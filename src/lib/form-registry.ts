@@ -9,19 +9,33 @@
  *  - ONLINE：未登记 → `GET /api/wf/forms/{formKey}/fields`（后端从 schemaJson 派生）。
  *  - 皆不可得 → 抛清晰错误。
  */
-import type { ComponentType } from "react"
+import type { ComponentType, Ref } from "react"
 import { ApiError, NetworkError, api } from "@/lib/api"
 import type { FieldPolicyMap, FormFieldManifest } from "@/lib/form-manifest"
 
 /**
- * 注册的手写表单组件契约（设计文档 2.4）：接收 `formData` + 可选 `fieldPolicy` + `onChange`。
- * 组件遵守此契约即获得节点级 visible/editable/required 联动能力（见 `fieldStateOf`）。
+ * 受控提交契约（设计文档 2.4）：CODE 表单经 `formRef` 向包裹层 / 办理动作暴露命令式句柄。
+ *  - `validate()`：触发全字段校验（含按策略注入的必填），返回是否通过——用于办理前把关并在字段上浮现错误。
+ *  - `getValues()`：取当前表单值，随办理动作（approve/complete）作为 `formData` 提交给后端。
+ * 手写 react-hook-form 表单用 `useImperativeHandle(formRef, …)` 以 `form.trigger()` / `form.getValues()` 实现。
+ */
+export interface HostedFormHandle {
+  validate: () => Promise<boolean>
+  getValues: () => Record<string, unknown>
+}
+
+/**
+ * 注册的手写表单组件契约（设计文档 2.4）：接收 `formData` + 可选 `fieldPolicy` + `onChange` + `formRef`。
+ * 组件遵守此契约即获得节点级 visible/editable/required 联动能力（见 `fieldStateOf`），
+ * 并可选地经 `formRef` 暴露受控提交句柄（`HostedFormHandle`）。
  */
 export interface HostedFormComponentProps {
   formData: Record<string, unknown>
   /** 节点级字段策略：字段 key → { visible, editable, required } */
   fieldPolicy?: FieldPolicyMap
   onChange?: (data: Record<string, unknown>) => void
+  /** 受控提交句柄：办理动作经此取值 + 校验（可选；只读查看场景可不传）。 */
+  formRef?: Ref<HostedFormHandle>
 }
 
 /** registry 条目：组件 + 其字段清单。 */

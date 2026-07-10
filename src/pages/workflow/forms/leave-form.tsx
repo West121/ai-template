@@ -9,7 +9,7 @@
  *
  * manifest 的字段 `key` 必须与 useForm 字段名对齐。
  */
-import { useEffect } from "react"
+import { useEffect, useImperativeHandle } from "react"
 import { useForm } from "react-hook-form"
 import {
   Form,
@@ -55,7 +55,7 @@ function toValues(data: Record<string, unknown>): LeaveFormValues {
   }
 }
 
-export function LeaveForm({ formData, fieldPolicy, onChange }: HostedFormComponentProps) {
+export function LeaveForm({ formData, fieldPolicy, onChange, formRef }: HostedFormComponentProps) {
   const form = useForm<LeaveFormValues>({ defaultValues: toValues(formData), mode: "onTouched" })
 
   // 值变化向上抛出（包裹层 onChange 契约）
@@ -64,6 +64,16 @@ export function LeaveForm({ formData, fieldPolicy, onChange }: HostedFormCompone
     const sub = watch((values) => onChange?.({ ...values }))
     return () => sub.unsubscribe()
   }, [watch, onChange])
+
+  // 受控提交契约：向办理动作暴露 validate()/getValues()（设计文档 2.4）
+  useImperativeHandle(
+    formRef,
+    () => ({
+      validate: () => form.trigger(),
+      getValues: () => ({ ...form.getValues() }),
+    }),
+    [form],
+  )
 
   const st = (key: string) => fieldStateOf(fieldPolicy, key)
 

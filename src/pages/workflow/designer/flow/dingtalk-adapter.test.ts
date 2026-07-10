@@ -110,4 +110,17 @@ describe("dingtalk-adapter · 树→图迁移", () => {
   it("非钉钉后端格式抛清晰错误", () => {
     expect(() => dingtalkToProcessModel({ foo: 1 })).toThrow(/无法识别的钉钉/)
   })
+
+  it("meta.key/name/formKey 透传到 ProcessModel（defs「用新设计器打开」入口契约）", () => {
+    const designerJson = {
+      nodes: [{ id: "a1", type: "approval", name: "审批", assigneeRules: [], multiMode: "ANY" }],
+    }
+    const pm = dingtalkToProcessModel(designerJson, { key: "leave_flow", name: "请假审批", formKey: "leave:3" })
+    expect(pm.key).toBe("leave_flow")
+    expect(pm.name).toBe("请假审批")
+    expect(pm.formKey).toBe("leave:3")
+    // 叶子审批步骤映射为 userTask 一等节点
+    const task = pm.nodes.find((n) => n.id === "a1")
+    expect(task?.type).toBe("userTask")
+  })
 })

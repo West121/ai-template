@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ColumnDef } from "@tanstack/react-table"
-import { CalendarClock, CloudOff, GitBranch, History, Pencil, Plus, RotateCw, Send, Workflow } from "lucide-react"
+import { CalendarClock, CloudOff, FlaskConical, GitBranch, History, Pencil, Plus, RotateCw, Send, Workflow } from "lucide-react"
 import { toast } from "sonner"
 import { api, ApiError, NetworkError, type PageResult } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -40,6 +40,7 @@ import {
 } from "@/components/ui/select"
 import { FlowDesigner, type FlowDesignerHandle } from "@/pages/workflow/designer/flow/flow-designer"
 import type { ProcessModel } from "@/pages/workflow/designer/flow/model"
+import { dingtalkToProcessModel } from "@/pages/workflow/designer/flow/dingtalk-adapter"
 import type { ValidationIssue as FlowValidationIssue } from "@/pages/workflow/designer/flow/validate"
 import { DingtalkProcessDesigner } from "@/pages/workflow/designer/dingtalk/process-designer"
 import { ensureNodeIdSeq, type StepNode } from "@/pages/workflow/designer/dingtalk/model"
@@ -422,6 +423,69 @@ export default function WorkflowDefsPage() {
     setEditorOpen(true)
   }
 
+  /**
+   * 实验入口：用新 react-flow 设计器打开一条 DINGTALK 旧定义。
+   * 把该定义的钉钉 `designerJson` 经 `dingtalkToProcessModel` 转成归一化 ProcessModel，载入 FlowDesigner
+   * 编辑（与存量 BPMN 经 /api/wf/models/import 迁移一致）。**不动钉钉设计器本身**——仅多一个「在新设计器打开」的通道。
+   * 转换失败给清晰 toast 提示，不进入设计器。
+   */
+  const openInNewDesigner = async (row: ProcessDefItem) => {
+    const next = emptyEditor()
+    next.id = row.id
+    next.defCode = row.defCode
+    next.name = row.name
+    next.category = row.category ?? ""
+    next.icon = row.icon ?? ""
+    next.description = row.remark ?? ""
+    next.formType = row.formType ?? "DYNAMIC"
+    next.formCode = row.formCode ?? ""
+    next.formSubmitPath = row.formSubmitPath ?? ""
+    next.formViewPath = row.formViewPath ?? ""
+
+    let detail: ProcessDefItem | null = null
+    try {
+      detail = await api<ProcessDefItem>(`/api/wf/process-defs/${row.defCode}/latest`)
+    } catch {
+      detail = row
+    }
+    if (detail?.remark != null) next.description = detail.remark
+    if (detail?.icon != null) next.icon = detail.icon
+    if (detail?.formType) next.formType = detail.formType
+    if (detail?.formSubmitPath != null) next.formSubmitPath = detail.formSubmitPath
+    if (detail?.formViewPath != null) next.formViewPath = detail.formViewPath
+
+    // 钉钉 designerJson（字符串或对象）→ ProcessModel
+    const raw = detail?.designerJson
+    let parsed: unknown
+    try {
+      parsed = typeof raw === "string" ? JSON.parse(raw) : raw
+    } catch {
+      toast.error("无法用新设计器打开：钉钉流程定义（designerJson）不是合法 JSON")
+      return
+    }
+    let model: ProcessModel
+    try {
+      model = dingtalkToProcessModel(parsed, {
+        key: row.defCode,
+        name: row.name,
+        formKey: composeFormKey(row.formCode, row.formVersion),
+      })
+    } catch (err) {
+      toast.error(err instanceof Error ? `钉钉流程转换失败：${err.message}` : "钉钉流程转换失败")
+      return
+    }
+
+    next.designerType = "GRAPH"
+    next.graphModel = model
+
+    const { fields, version } = await resolveFormFields(row.formCode ?? "")
+    next.formFields = fields
+    next.formVersion = row.formVersion ?? version
+    setEditor(next)
+    setEditorOpen(true)
+    toast.info("已用新流程图设计器打开（实验）：保存后将迁移为「流程图」定义")
+  }
+
   const doSave = async (): Promise<ProcessDefItem | null> => {
     setSaving(true)
     const base: Record<string, unknown> = {
@@ -661,6 +725,18 @@ export default function WorkflowDefsPage() {
               <Pencil className="size-3.5" />
               编辑
             </Button>
+            {row.original.designerType === "DINGTALK" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs text-violet-600 hover:text-violet-600"
+                title="把这条仿钉钉旧定义转成流程图，用新 react-flow 设计器打开（实验）"
+                onClick={() => void openInNewDesigner(row.original)}
+              >
+                <FlaskConical className="size-3.5" />
+                新设计器
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"

@@ -10,9 +10,10 @@
  *
  * 未登记的 formKey 给出清晰占位（而非空白），避免运行时死胡同。
  */
+import type { Ref } from "react"
 import { AlertTriangle } from "lucide-react"
 import type { FieldPolicyMap } from "@/lib/form-manifest"
-import { getForm } from "@/lib/form-registry"
+import { getForm, type HostedFormHandle } from "@/lib/form-registry"
 
 export interface HostedFormProps {
   formKey: string
@@ -20,9 +21,11 @@ export interface HostedFormProps {
   /** 节点级字段策略：字段 key → { visible, editable, required } */
   fieldPolicy?: FieldPolicyMap
   onChange?: (data: Record<string, unknown>) => void
+  /** 受控提交句柄：办理动作经此校验并取 formData（只读查看可不传）。 */
+  formRef?: Ref<HostedFormHandle>
 }
 
-export function HostedForm({ formKey, formData, fieldPolicy, onChange }: HostedFormProps) {
+export function HostedForm({ formKey, formData, fieldPolicy, onChange, formRef }: HostedFormProps) {
   const entry = getForm(formKey)
 
   if (!entry) {
@@ -37,5 +40,7 @@ export function HostedForm({ formKey, formData, fieldPolicy, onChange }: HostedF
   }
 
   const Component = entry.component
-  return <Component formData={formData} fieldPolicy={fieldPolicy} onChange={onChange} />
+  return (
+    <Component formData={formData} fieldPolicy={fieldPolicy} onChange={onChange} formRef={formRef} />
+  )
 }
