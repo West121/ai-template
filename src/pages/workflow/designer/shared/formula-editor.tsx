@@ -197,7 +197,7 @@ export function FormulaField({
           </>
         }
       >
-        <div className="p-3">
+        <div className="h-full p-3">
           <FormulaEditor value={draft} onChange={setDraft} fields={fields} />
         </div>
       </Modal>

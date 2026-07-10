@@ -159,11 +159,12 @@ export function AdvancedFormulaEditor({
   }, [docQuery, functions])
 
   return (
-    <div className={cn("space-y-2.5", className)}>
-      <div className="grid grid-cols-[150px_1fr] gap-2">
-        {/* 左：可搜索函数库 */}
-        <div className="flex max-h-64 flex-col rounded-md border">
-          <div className="border-b p-1.5">
+    <div className={cn("@container flex h-full min-h-0 flex-col gap-2.5", className)}>
+      {/* 主区：函数库侧栏 + 编辑器列——弹性铺满可用高度 */}
+      <div className="flex min-h-0 flex-1 gap-2">
+        {/* 左：可搜索函数库（满高，内部列表独立滚动，不裁分类） */}
+        <div className="flex h-full w-36 shrink-0 flex-col overflow-hidden rounded-md border @sm:w-48 @lg:w-56 @2xl:w-64">
+          <div className="shrink-0 border-b p-1.5">
             <div className="relative">
               <Search className="pointer-events-none absolute left-1.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -174,7 +175,7 @@ export function AdvancedFormulaEditor({
               />
             </div>
           </div>
-          <div className="flex-1 space-y-2 overflow-y-auto p-2">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
             {filteredFns.length === 0 ? (
               <p className="text-[11px] text-muted-foreground">无匹配函数</p>
             ) : (
@@ -206,11 +207,11 @@ export function AdvancedFormulaEditor({
           </div>
         </div>
 
-        {/* 右：CodeMirror 编辑区 + 字段插入 */}
-        <div className="space-y-2">
+        {/* 右：CodeMirror 编辑区（主角，撑满剩余空间）+ 参数提示 + 字段插入 */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
           <div
             className={cn(
-              "relative rounded-md border bg-background transition-colors",
+              "relative min-h-[8rem] flex-1 overflow-hidden rounded-md border bg-background transition-colors",
               focused ? "border-ring ring-[3px] ring-ring/50" : "border-input",
             )}
           >
@@ -221,8 +222,9 @@ export function AdvancedFormulaEditor({
             </div>
             <ReactCodeMirror
               ref={cmRef}
+              className="h-full [&_.cm-editor]:h-full [&_.cm-scroller]:overflow-auto"
               value={value}
-              height="128px"
+              height="100%"
               theme="none"
               basicSetup={false}
               extensions={extensions}
@@ -238,9 +240,9 @@ export function AdvancedFormulaEditor({
             />
           </div>
 
-          {/* 参数提示 */}
+          {/* 参数提示（常驻编辑区下方，不挤占编辑高度） */}
           {sigParts && (
-            <div className="rounded-md border bg-muted/40 px-2 py-1 font-mono text-[11px]">
+            <div className="shrink-0 rounded-md border bg-muted/40 px-2 py-1 font-mono text-[11px]">
               <span className="text-muted-foreground">{sigParts.head}(</span>
               {sigParts.params.map((p, i) => (
                 <span key={i}>
@@ -260,8 +262,8 @@ export function AdvancedFormulaEditor({
             </div>
           )}
 
-          {/* 字段插入 */}
-          <div className="space-y-1">
+          {/* 字段插入（字段多时自身滚动，不无限撑高） */}
+          <div className="max-h-28 shrink-0 overflow-y-auto">
             {fields.length === 0 ? (
               <p className="text-[11px] text-muted-foreground">未绑定表单，无可引用字段</p>
             ) : (
@@ -284,70 +286,73 @@ export function AdvancedFormulaEditor({
         </div>
       </div>
 
-      {/* 校验状态 */}
-      {trimmed === "" ? (
-        <div className="flex items-center gap-1.5 rounded-md border border-dashed px-2 py-1.5 text-[11px] text-muted-foreground">
-          <FunctionSquare className="size-3.5" /> 未配置公式
-        </div>
-      ) : (
-        <div
-          className={cn(
-            "flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-[11px]",
-            validation.ok
-              ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-600"
-              : "border-amber-500/30 bg-amber-500/5 text-amber-600",
-          )}
-        >
-          {validation.ok ? <CheckCircle2 className="size-3.5" /> : <AlertCircle className="size-3.5" />}
-          {validation.ok ? "语法校验通过" : (validation.message ?? "语法有误")}
-        </div>
-      )}
-
-      {/* 实时预览 / 解析结构 */}
-      {preview?.mode === "eval" && (
-        <div className="rounded-md border bg-muted/40 px-2 py-1.5 text-[11px]">
-          {preview.result.ok ? (
-            <span>
-              预览结果：
-              <span className="font-mono text-foreground">{formatValue(preview.result.value)}</span>
-              <span className="ml-1 text-muted-foreground">（{typeLabel(preview.result.value)}）</span>
-            </span>
-          ) : (
-            <span className="text-amber-600">预览求值失败：{preview.result.error}</span>
-          )}
-          {sampleContext && (
-            <span className="ml-2 text-muted-foreground">
-              样例字段：{Object.keys(sampleContext).slice(0, 6).join("、") || "无"}
-            </span>
-          )}
-        </div>
-      )}
-      {preview?.mode === "struct" && (
-        <div className="rounded-md border bg-muted/40 px-2 py-1.5 text-[11px] text-muted-foreground">
-          解析结构：命中函数{" "}
-          <span className="font-mono text-foreground">
-            {preview.summary.functions.length ? preview.summary.functions.join("、") : "无"}
-          </span>
-          ，引用字段{" "}
-          <span className="font-mono text-foreground">
-            {preview.summary.fields.length ? preview.summary.fields.join("、") : "无"}
-          </span>
-        </div>
-      )}
-
-      {/* 选中函数说明 */}
-      {selectedFn && (
-        <div className="space-y-0.5 rounded-md border bg-muted/40 px-2 py-1.5 text-[11px]">
-          <div className="flex items-center gap-1 font-mono font-medium">
-            <FunctionSquare className="size-3.5 text-primary" />
-            {selectedFn.signature}
+      {/* 底部信息条：校验 / 实时预览 / 选中函数说明——shrink-0 常驻，沉在编辑区下方 */}
+      <div className="shrink-0 space-y-2">
+        {/* 校验状态 */}
+        {trimmed === "" ? (
+          <div className="flex items-center gap-1.5 rounded-md border border-dashed px-2 py-1.5 text-[11px] text-muted-foreground">
+            <FunctionSquare className="size-3.5" /> 未配置公式
           </div>
-          <div className="text-muted-foreground">{selectedFn.description}</div>
-          <div className="text-muted-foreground">
-            示例：<span className="font-mono">{selectedFn.example}</span>
+        ) : (
+          <div
+            className={cn(
+              "flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-[11px]",
+              validation.ok
+                ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-600"
+                : "border-amber-500/30 bg-amber-500/5 text-amber-600",
+            )}
+          >
+            {validation.ok ? <CheckCircle2 className="size-3.5" /> : <AlertCircle className="size-3.5" />}
+            {validation.ok ? "语法校验通过" : (validation.message ?? "语法有误")}
           </div>
-        </div>
-      )}
+        )}
+
+        {/* 实时预览 / 解析结构 */}
+        {preview?.mode === "eval" && (
+          <div className="rounded-md border bg-muted/40 px-2 py-1.5 text-[11px]">
+            {preview.result.ok ? (
+              <span>
+                预览结果：
+                <span className="font-mono text-foreground">{formatValue(preview.result.value)}</span>
+                <span className="ml-1 text-muted-foreground">（{typeLabel(preview.result.value)}）</span>
+              </span>
+            ) : (
+              <span className="text-amber-600">预览求值失败：{preview.result.error}</span>
+            )}
+            {sampleContext && (
+              <span className="ml-2 text-muted-foreground">
+                样例字段：{Object.keys(sampleContext).slice(0, 6).join("、") || "无"}
+              </span>
+            )}
+          </div>
+        )}
+        {preview?.mode === "struct" && (
+          <div className="rounded-md border bg-muted/40 px-2 py-1.5 text-[11px] text-muted-foreground">
+            解析结构：命中函数{" "}
+            <span className="font-mono text-foreground">
+              {preview.summary.functions.length ? preview.summary.functions.join("、") : "无"}
+            </span>
+            ，引用字段{" "}
+            <span className="font-mono text-foreground">
+              {preview.summary.fields.length ? preview.summary.fields.join("、") : "无"}
+            </span>
+          </div>
+        )}
+
+        {/* 选中函数说明 */}
+        {selectedFn && (
+          <div className="space-y-0.5 rounded-md border bg-muted/40 px-2 py-1.5 text-[11px]">
+            <div className="flex items-center gap-1 font-mono font-medium">
+              <FunctionSquare className="size-3.5 text-primary" />
+              {selectedFn.signature}
+            </div>
+            <div className="text-muted-foreground">{selectedFn.description}</div>
+            <div className="text-muted-foreground">
+              示例：<span className="font-mono">{selectedFn.example}</span>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

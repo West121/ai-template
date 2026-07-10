@@ -433,7 +433,7 @@ export function FlowDesigner({
   const showScaffold = DEV_SCAFFOLD && !embedded
 
   return (
-    <div className="space-y-3">
+    <div className={cn(embedded ? "flex h-full min-h-0 flex-col gap-3" : "space-y-3")}>
       {!embedded && (
         <PageHeader
           title="流程设计器"
@@ -442,7 +442,7 @@ export function FlowDesigner({
       )}
 
       {/* 工具栏 */}
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
         <span className="text-xs text-muted-foreground">从左侧调色板拖拽或点击新增节点</span>
         <div className="ml-auto flex items-center gap-2">
           {showScaffold && roundTripOk !== null && (
@@ -472,7 +472,7 @@ export function FlowDesigner({
 
       {/* 校验结果（W-14：每条可点击定位到画布元素；W-15：状态色走 token） */}
       {issues !== null && (
-        <div className="rounded-lg border bg-card px-3 py-2 text-xs">
+        <div className="shrink-0 rounded-lg border bg-card px-3 py-2 text-xs">
           {issues.length === 0 ? (
             <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
               <CircleCheck className="size-3.5" /> 校验通过，无问题
@@ -518,7 +518,12 @@ export function FlowDesigner({
       {/* 调色板 + 画布 + 属性面板 */}
       <NodeActionsContext.Provider value={nodeActions}>
         <FormFieldsContext.Provider value={fields}>
-          <div className="flex h-[68vh] overflow-hidden rounded-lg border">
+          <div
+            className={cn(
+              "flex overflow-hidden rounded-lg border",
+              embedded ? "min-h-0 flex-1" : "h-[68vh]",
+            )}
+          >
             <FlowPalette onPick={pickFromPalette} />
 
             <div className="min-w-0 flex-1">

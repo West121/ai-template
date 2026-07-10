@@ -1071,7 +1071,7 @@ export default function WorkflowDefsPage() {
             />
           </div>
         ) : (
-          <div className="h-full overflow-auto bg-muted/20 p-3">
+          <div className="h-full min-h-0 overflow-hidden bg-muted/20 p-3">
             <FlowDesigner
               key={editor.id ?? editor.defCode}
               ref={flowRef}
