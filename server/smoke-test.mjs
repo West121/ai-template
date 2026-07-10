@@ -238,6 +238,19 @@ const aId = drA.body?.data?.id
 check("发文拟稿起流程(status=REVIEWING,当前核稿)", drA.body?.data?.status === "REVIEWING" && drA.body?.data?.currentTask?.taskKey === "review", JSON.stringify(drA.body?.data?.currentTask))
 check("核稿办理人=真实取人(部门主管,非硬编 initiator)", !!drA.body?.data?.currentTask?.assignee, drA.body?.data?.currentTask?.assignee)
 check("发文拟稿占位号=待编号", drA.body?.data?.code === "待编号", drA.body?.data?.code)
+check("发文拟稿 headerType 默认 RED", drA.body?.data?.headerType === "RED", drA.body?.data?.headerType)
+// 白头（PLAIN）发文：headerType 落库 + render 无红头三件套 + 带 .gw-typearea--plain 标记
+const drPlain = await call(admin.token, "POST", "/api/office/doc/send/draft", {
+  title: "白头普通文件测试", headerType: "PLAIN", issuingOrg: "星辰科技有限公司", content: "普通文件正文。",
+})
+check("白头拟稿 headerType=PLAIN 落库", drPlain.body?.data?.headerType === "PLAIN", drPlain.body?.data?.headerType)
+const rPlain = await call(admin.token, "POST", `/api/office/doc/${drPlain.body?.data?.id}/render`)
+const plainHtml = rPlain.body?.data?.html ?? ""
+check("白头 render 无红头三件套 + 有 gw-typearea--plain",
+  plainHtml.includes("gw-typearea--plain") && !plainHtml.includes("gw-header") &&
+    !plainHtml.includes("gw-red-line") && !plainHtml.includes("gw-docnum") &&
+    plainHtml.includes("gw-title") && plainHtml.includes("gw-body"),
+  plainHtml.slice(0, 100))
 // 流程图高亮（节点 id 原值：completed 含 start/review，active 含当前核稿）
 const hlDraft = drA.body?.data?.highlight
 check("发文详情返回 highlight(completed 含 start, active 含 review)",
@@ -271,7 +284,7 @@ check("用印(SEALED)", seal.body?.data?.status === "SEALED" && seal.body?.data?
 // 红头正文渲染
 const render = await call(admin.token, "POST", `/api/office/doc/${a.id}/render`)
 const html = render.body?.data?.html ?? ""
-check("render 返回 .gw-* 片段(gw-typearea/gw-header)", html.includes("gw-typearea") && html.includes("gw-header"), html.slice(0, 60))
+check("render 返回 .gw-* 片段(RED 含 gw-header/gw-red-line)", html.includes("gw-typearea") && html.includes("gw-header") && html.includes("gw-red-line") && !html.includes("gw-typearea--plain"), html.slice(0, 60))
 check("render 含文号六角括号", html.includes(a.issued?.data?.code) && html.includes("〔"), a.issued?.data?.code)
 check("render 已用印→渲染印章(gw-seal)", html.includes("gw-seal"))
 // 成文分发

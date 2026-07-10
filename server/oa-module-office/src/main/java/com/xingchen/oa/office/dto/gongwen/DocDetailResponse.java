@@ -13,6 +13,7 @@ public record DocDetailResponse(
         String code,
         String title,
         String docType,
+        String headerType,
         String issuingOrg,
         String secret,
         LocalDate secretExpire,

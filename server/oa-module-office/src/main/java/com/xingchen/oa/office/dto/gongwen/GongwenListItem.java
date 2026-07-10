@@ -12,6 +12,7 @@ public record GongwenListItem(
         String code,
         String title,
         String docType,
+        String headerType,
         String secret,
         String urgency,
         String status,

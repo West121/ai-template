@@ -8,6 +8,8 @@ import jakarta.validation.constraints.NotBlank;
 public record SendDraftRequest(
         @NotBlank(message = "标题不能为空") String title,
         String docType,
+        /** 文头类型 RED 红头 / PLAIN 白头；可空缺省 RED。 */
+        String headerType,
         String issuingOrg,
         String mainRecipients,
         String ccRecipients,

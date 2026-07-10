@@ -47,6 +47,10 @@ public class Document {
     public static final String SEAL_PENDING = "PENDING";
     public static final String SEAL_SEALED = "SEALED";
 
+    /** 文头类型：RED=红头正式公文（GB/T 红头三件套）/ PLAIN=白头普通文件。 */
+    public static final String HEADER_RED = "RED";
+    public static final String HEADER_PLAIN = "PLAIN";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -114,6 +118,10 @@ public class Document {
     /** 文种：决定/通知/通报/报告/请示/批复/意见/函/纪要… */
     @Column(name = "doc_type", length = 16)
     private String docType;
+
+    /** 文头类型：RED 红头 / PLAIN 白头普通文件（null 按 RED 处理）。 */
+    @Column(name = "header_type", length = 16)
+    private String headerType;
 
     /** 主送机关（多个以「；」分隔）。 */
     @Column(name = "main_recipients", columnDefinition = "text")

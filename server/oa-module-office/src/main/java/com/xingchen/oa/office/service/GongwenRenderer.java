@@ -25,8 +25,10 @@ public class GongwenRenderer {
         String issuingOrg = firstNonBlank(doc.getIssuingOrg(),
                 template != null ? template.getIssuingOrg() : null, "发文机关文件");
 
+        boolean plain = Document.HEADER_PLAIN.equals(doc.getHeaderType());
+
         StringBuilder sb = new StringBuilder();
-        sb.append("<div class=\"gw-typearea\">");
+        sb.append("<div class=\"gw-typearea").append(plain ? " gw-typearea--plain" : "").append("\">");
 
         // 版心顶部标注：份号/密级（左）紧急程度（右）
         boolean hasCopyNo = StringUtils.hasText(doc.getCopyNo());
@@ -45,23 +47,26 @@ public class GongwenRenderer {
             sb.append("</div>");
         }
 
-        // 红头：发文机关标志
-        sb.append("<div class=\"gw-header\">").append(esc(issuingOrg)).append("</div>");
+        if (!plain) {
+            // 红头三件套（RED）：发文机关标志（红、居中大字）→ 发文字号（+上行文签发人）→ 红反线
+            sb.append("<div class=\"gw-header\">").append(esc(issuingOrg)).append("</div>");
 
-        // 发文字号（+ 上行文签发人）
-        String docNumber = StringUtils.hasText(doc.getCode()) ? doc.getCode() : "";
-        if (upward) {
-            sb.append("<div class=\"gw-docnum gw-docnum--upward\">")
-                    .append("<span class=\"gw-docnum-text\">").append(esc(docNumber)).append("</span>")
-                    .append("<span class=\"gw-issuer\">签发人：")
-                    .append(esc(firstNonBlank(doc.getIssuer(), doc.getSigner(), ""))).append("</span>")
-                    .append("</div>");
-        } else {
-            sb.append("<div class=\"gw-docnum gw-docnum--center\">").append(esc(docNumber)).append("</div>");
+            String docNumber = StringUtils.hasText(doc.getCode()) ? doc.getCode() : "";
+            if (upward) {
+                sb.append("<div class=\"gw-docnum gw-docnum--upward\">")
+                        .append("<span class=\"gw-docnum-text\">").append(esc(docNumber)).append("</span>")
+                        .append("<span class=\"gw-issuer\">签发人：")
+                        .append(esc(firstNonBlank(doc.getIssuer(), doc.getSigner(), ""))).append("</span>")
+                        .append("</div>");
+            } else {
+                sb.append("<div class=\"gw-docnum gw-docnum--center\">").append(esc(docNumber)).append("</div>");
+            }
+
+            sb.append("<hr class=\"gw-red-line\" />");
+        } else if (StringUtils.hasText(issuingOrg)) {
+            // 白头普通文件：不渲染红头/红反线/发文字号；可选黑体小字机关名（非红、非居中大字），前端 CSS 配合。
+            sb.append("<div class=\"gw-plain-org\">").append(esc(issuingOrg)).append("</div>");
         }
-
-        // 红反线
-        sb.append("<hr class=\"gw-red-line\" />");
 
         // 标题
         sb.append("<div class=\"gw-title\">").append(esc(doc.getTitle())).append("</div>");

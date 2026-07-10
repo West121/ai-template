@@ -96,6 +96,7 @@ public class GongwenService {
         d.setCode("待编号");
         d.setTitle(req.title());
         d.setDocType(req.docType());
+        d.setHeaderType(StringUtils.hasText(req.headerType()) ? req.headerType() : Document.HEADER_RED);
         d.setIssuingOrg(req.issuingOrg());
         d.setMainRecipients(req.mainRecipients());
         d.setUnit(req.mainRecipients());
@@ -374,7 +375,8 @@ public class GongwenService {
                 .toList();
 
         return new DocDetailResponse(
-                d.getId(), d.getDirection(), d.getCode(), d.getTitle(), d.getDocType(), d.getIssuingOrg(),
+                d.getId(), d.getDirection(), d.getCode(), d.getTitle(), d.getDocType(),
+                d.getHeaderType() != null ? d.getHeaderType() : Document.HEADER_RED, d.getIssuingOrg(),
                 d.getSecret(), d.getSecretExpire(), d.getUrgency(), d.getStatus(), d.getUnit(),
                 d.getMainRecipients(), d.getCcRecipients(), d.getCopyNo(), d.getIssuer(), d.getAnnotation(),
                 d.getDrafter(), d.getSigner(), d.getContent(), d.getDocDate(), d.getSealStatus(),
@@ -453,7 +455,8 @@ public class GongwenService {
                 PageRequest.of(Math.max(pageNum - 1, 0), pageSize, Sort.by(Sort.Direction.DESC, "createdAt")));
         Map<Long, String> deptNames = deptNameResolver.nameMap();
         List<GongwenListItem> list = page.getContent().stream().map(d -> new GongwenListItem(
-                d.getId(), d.getDirection(), d.getCode(), d.getTitle(), d.getDocType(), d.getSecret(),
+                d.getId(), d.getDirection(), d.getCode(), d.getTitle(), d.getDocType(),
+                d.getHeaderType() != null ? d.getHeaderType() : Document.HEADER_RED, d.getSecret(),
                 d.getUrgency(), d.getStatus(), d.getUnit(), d.getDrafter(), d.getSigner(),
                 d.getSealStatus(), d.getArchived(), d.getArchiveNo(), d.getDocDate(), d.getDeptId(),
                 d.getDeptId() != null ? deptNames.get(d.getDeptId()) : null, d.getCreatedAt())).toList();
@@ -488,7 +491,8 @@ public class GongwenService {
                 PageRequest.of(Math.max(pageNum - 1, 0), pageSize, Sort.by(Sort.Direction.DESC, "archivedAt")));
         Map<Long, String> deptNames = deptNameResolver.nameMap();
         List<GongwenListItem> list = page.getContent().stream().map(d -> new GongwenListItem(
-                d.getId(), d.getDirection(), d.getCode(), d.getTitle(), d.getDocType(), d.getSecret(),
+                d.getId(), d.getDirection(), d.getCode(), d.getTitle(), d.getDocType(),
+                d.getHeaderType() != null ? d.getHeaderType() : Document.HEADER_RED, d.getSecret(),
                 d.getUrgency(), d.getStatus(), d.getUnit(), d.getDrafter(), d.getSigner(),
                 d.getSealStatus(), d.getArchived(), d.getArchiveNo(), d.getDocDate(), d.getDeptId(),
                 d.getDeptId() != null ? deptNames.get(d.getDeptId()) : null, d.getCreatedAt())).toList();
