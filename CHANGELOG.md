@@ -30,7 +30,14 @@
 - **F-01 假沙箱消灭**：前端公式改安全 AST 解释器（零 `new Function`）。
 - **.bpmn 导入导出**（Flowable `BpmnXMLConverter` + `BpmnToGraphConverter` 全类型逆向）。往返 E2E 12/12。
 - **表单字段清单系统**：`GET /api/wf/forms/{formKey}/fields`（ONLINE 从 schemaJson 派生）+ 前端 `formRegistry`/`HostedForm`/节点字段权限矩阵编辑器（写 `WfNodeProps.formPerms`）。
-- smoke-test 新增 43 条断言覆盖上述全部场景，**smoke 总计 433/433**。
+- smoke-test 新增断言覆盖上述全部场景，**smoke 总计 435/435**。
+
+### 收尾与安全（可选项 + 修复）
+- **B-10** 首节点 WEBHOOK 时序：发起时把 title/defCode 注入流程变量，`WfWebhookDelegate` 在 `wf_instance_ext` 未落库时兜底取用。E2E 6/6：首节点 webhook 回调 payload 正确含 title。
+- **B-17** 文件/电子章越权放行：`FileAccessGrant` SPI（infra）+ `WfFileAccessGrant`（workflow），电子章图片与「可见实例附件」放行，URL 不变、前端零改。
+- **B-19** 文件下载鉴权拒绝改真 HTTP 403（`AccessDeniedException` → `SecurityExceptionAdvice`），与 `@PreAuthorize` 语义一致（原为 HTTP 200 + 信封 code，易被状态码探测误读）。**经查 `dataScope` 映射本无缺陷**（SELF→all=false 正确）。
+- CODE 表单可编辑办理提交（`HostedFormHandle` 契约 + `ApproveDialog` 随 approve 带 formData）；钉钉旧定义「用新设计器打开」入口（`dingtalkToProcessModel`）。
+- smoke 补文件下载越权断言（越权→403、下自己→200），闭合此前缺失的文件 IDOR 覆盖。
 
 ### Notes
 - 破坏性：后端启动现在必须设置环境变量 `OA_JWT_SECRET`。

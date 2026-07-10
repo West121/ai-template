@@ -36,11 +36,12 @@
 
 - ✅ **B-18**（验证期发现的既有 bug，主控 2026-07-09 修）SecurityConfig 未放行 `DispatcherType.ERROR`：匿名/出错请求向 `/error` 二次派发时被 `AuthorizationFilter` 再拒一次，401 响应已写出 → "response already committed" → 连接被重置（keep-alive 复用后表现为客户端 socket closed、smoke 间歇崩溃）。修复：`.dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()`。修后 smoke 不再崩，匿名请求干净返回 401。
 - ✅ **B-06** 日志接口收权 + DTO 化。（磐石完成：三接口补 `system:log:list`（V6 已种子）；新增 `LoginLogResponse`/`OperLogResponse` DTO，不再返回实体。待鹰眼回归。）
-- ⬜ **B-17**（B-04 衍生遗留项）跨用户附件/电子章展示。B-04 收紧后，SELF 数据权限用户查看他人上传的审批附件、`instance-detail`/`wf-print` 的 `sealImageUrl` 会 403（裂图）。根治需文件与业务对象建立关联，或电子章走专用只读端点；**涉及跨端契约，主控协调 磐石+疾风 同步**。
+- ✅ **B-17** 跨用户附件/电子章展示（磐石完成 2026-07-10）：`FileAccessGrant` SPI（infra）+ `WfFileAccessGrant`（workflow），电子章图片 + 可见实例附件放行，URL 不变前端零改。TODO：表单上传控件存于 `form_data_json` 的文件（需建 file↔实例关联）。
+- ✅ **B-19** 文件下载鉴权拒绝改真 HTTP 403（磐石完成 2026-07-10）：`AccessDeniedException`→`SecurityExceptionAdvice`，与 `@PreAuthorize` 一致。**经查 dataScope 映射本无缺陷**（此前主控用状态码误判为越权，实为业务 200+信封 403 被误读）；smoke 补文件 IDOR 断言，433→435。
 - ⬜ **B-07** 乐观锁。全库无一处 `@Version`。给 `Approval`、`WfAddSign` 加 `@Version`，`approve/reject/withdraw`、`AddSignService.advance` 并发冲突转 409。**验收**：并发 approve+reject 只有一个成功且审计日志一致。
 - ⬜ **B-08** 内存分页下推。`ApprovalService.done()`（:78-108）、`MeetingService.my()`（:107-120）全量加载后 subList。改为 repository 层分页查询。
 - ⬜ **B-09** 热路径全表扫描。`AssigneeResolver.java:523,533,595,606,622` 多处 `findAll().stream()` 过滤，改为条件查询；顺带收敛 `UserNameResolver`/`DeptNameResolver` 重复实现。
-- ⬜ **B-10** 首节点 WEBHOOK 时序缺陷：在 `wf_instance_ext` 落库前触发导致拿不到标题（workflow-design.md:301）。调整触发时机或补数据。（推迟：并入新方向工作流批次）
+- ✅ **B-10** 首节点 WEBHOOK 时序（磐石完成 2026-07-10）：发起时 title/defCode 注入流程变量，`WfWebhookDelegate` 兜底取用。主控 E2E 6/6：首节点 webhook payload 正确含 title。
 - ✅ **B-11** "唤醒"操作补权限。（磐石完成 2026-07-09：resurrect 端点补 `@PreAuthorize("hasAuthority('wf:instance:admin')")`，复用现有权限码不新增迁移，api-contract 同步。**衍生前端跟进 F-11**：唤醒按钮入口 gate 成 `resurrectable && isAdmin`。）
 
 ### 低危 / 债务
