@@ -227,4 +227,21 @@ export const EVENT_ACTION_META: Record<EventAction, string> = {
   WEBHOOK: "调用 Webhook",
   SCRIPT: "执行脚本",
   API: "调用 API",
+  DELEGATE: "自定义监听器",
 }
+
+/**
+ * 前置节点触发点集合：仅这些触发点显示「阻断办理」开关（动作失败可中止本次办理）。
+ * 与后端 OaEventDelegate.BLOCKING_TRIGGERS 严格对齐（{TASK_BEFORE_COMPLETE, TASK_BEFORE_UNDO}）。
+ * ACTIVITY_CONFIRM_PARTICIPANTS 映射到 Flowable task「create」监听点，是就绪钩子而非可否决的办理动作，
+ * 后端按非阻断（fire-and-forget）处理——故前端不给它阻断开关，避免开了静默失效（主控裁定收窄）。
+ */
+export const BLOCKING_NODE_TRIGGERS: ReadonlySet<EventTrigger> = new Set<EventTrigger>([
+  "TASK_BEFORE_COMPLETE",
+  "TASK_BEFORE_UNDO",
+])
+
+/** 前置流程触发点集合：流程启动前（PROCESS_START）可阻断发起。 */
+export const BLOCKING_PROCESS_TRIGGERS: ReadonlySet<ProcessEventTrigger> = new Set<ProcessEventTrigger>([
+  "PROCESS_START",
+])

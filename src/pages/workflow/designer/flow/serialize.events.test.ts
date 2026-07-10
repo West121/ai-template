@@ -79,6 +79,57 @@ describe("serialize · 事件监听器往返", () => {
     })
   })
 
+  it("阻断标记 blocking + 自定义监听器 DELEGATE 随 props 往返无损", () => {
+    const events: NodeEvent[] = [
+      // 前置触发点 + 阻断：blocking 应随 props 往返
+      { trigger: "TASK_BEFORE_COMPLETE", action: "SCRIPT", blocking: true, script: { lang: "groovy", code: "return true" } },
+      // 自定义监听器（DELEGATE）：delegate.bean 无损
+      { trigger: "TASK_BEFORE_UNDO", action: "DELEGATE", blocking: true, delegate: { bean: "demoBudgetGuard" } },
+      // 非阻断的 DELEGATE
+      { trigger: "TASK_AFTER_COMPLETE", action: "DELEGATE", delegate: { bean: "auditLogger" } },
+    ]
+    const pm: ProcessModel = {
+      schemaVersion: 1,
+      key: "k",
+      name: "n",
+      nodes: [
+        { id: "start", type: "startEvent", name: "开始", position: { x: 0, y: 0 } },
+        { id: "t", type: "userTask", name: "审批", position: { x: 0, y: 100 }, props: { events } },
+        { id: "end", type: "endEvent", name: "结束", position: { x: 0, y: 200 } },
+      ],
+      edges: [
+        { id: "e1", source: "start", target: "t" },
+        { id: "e2", source: "t", target: "end" },
+      ],
+    }
+    const out = roundTrip(pm)
+    expect(out).toEqual(pm)
+    const node = out.nodes.find((n) => n.id === "t")
+    expect(node?.props?.events?.[0].blocking).toBe(true)
+    expect(node?.props?.events?.[1].delegate).toEqual({ bean: "demoBudgetGuard" })
+    expect(node?.props?.events?.[1].blocking).toBe(true)
+    expect(node?.props?.events?.[2].delegate).toEqual({ bean: "auditLogger" })
+    expect(node?.props?.events?.[2].blocking).toBeUndefined()
+  })
+
+  it("流程事件 PROCESS_START 阻断 + DELEGATE 随 flowConfig 往返无损", () => {
+    const events: ProcessEvent[] = [
+      { trigger: "PROCESS_START", action: "DELEGATE", blocking: true, delegate: { bean: "startGuard" } },
+    ]
+    const pm: ProcessModel = {
+      schemaVersion: 1,
+      key: "k",
+      name: "n",
+      flowConfig: { operations: { terminate: true, retrieve: false, urge: false, cancel: true }, start: { scope: [], taskTitle: "" }, variables: [], events },
+      nodes: [{ id: "start", type: "startEvent", name: "开始", position: { x: 0, y: 0 } }],
+      edges: [],
+    }
+    const out = roundTrip(pm)
+    expect(out).toEqual(pm)
+    expect(out.flowConfig?.events?.[0].blocking).toBe(true)
+    expect(out.flowConfig?.events?.[0].delegate).toEqual({ bean: "startGuard" })
+  })
+
   it("流程事件（含 SCRIPT/API）随 flowConfig 往返字节一致", () => {
     const pm: ProcessModel = {
       schemaVersion: 1,

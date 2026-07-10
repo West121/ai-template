@@ -119,8 +119,12 @@ function panelNodeType(type: string | undefined): string {
 export interface FlowDesignerHandle {
   /** 取当前画布的归一化 ProcessModel（含坐标，供 GRAPH 部署 / 保存 designerJson） */
   getModel: () => ProcessModel
-  /** 保存前全量校验，返回问题清单（error 应阻止保存/发布） */
+  /** 纯校验：返回问题清单（error 应阻止保存/发布），不改 UI */
   validate: () => ValidationIssue[]
+  /** 跑校验并在画布内展示（高亮 + 清单 + toast），返回问题清单——供顶栏「校验」按钮 */
+  runValidate: () => ValidationIssue[]
+  /** 自动整理布局（dagre）——供顶栏「整理」按钮 */
+  autoLayout: () => void
 }
 
 export interface FlowDesignerProps {
@@ -137,6 +141,10 @@ export interface FlowDesignerProps {
   formFields?: FormFieldOption[]
   /** 嵌入模式：隐藏页面级 PageHeader 与开发自检脚手架 */
   embedded?: boolean
+  /** 隐藏内置工具栏（校验/整理/序列化）——整页设计器由顶栏统一承载这些操作 */
+  hideToolbar?: boolean
+  /** 画布/属性变更通知（供整页设计器做未保存标记）；首次挂载不触发 */
+  onDirty?: () => void
   ref?: Ref<FlowDesignerHandle>
 }
 
@@ -148,6 +156,8 @@ export function FlowDesigner({
   onBaseChange,
   formFields,
   embedded = false,
+  hideToolbar = false,
+  onDirty,
   ref,
 }: FlowDesignerProps) {
   const fields = formFields ?? SAMPLE_FIELDS
@@ -330,9 +340,6 @@ export function FlowDesigner({
     [nodes, edges, processConfig, effKey, effFormKey],
   )
 
-  // 命令式句柄：嵌入方（流程定义页）保存/发布时取模型 + 跑校验
-  useImperativeHandle(ref, () => ({ getModel: buildModel, validate: () => validateProcessModel(buildModel()) }), [buildModel])
-
   const handleValidate = useCallback(() => {
     const found = validateProcessModel(buildModel())
     setIssues(found)
@@ -340,7 +347,26 @@ export function FlowDesigner({
     if (errors > 0) toast.error(`校验未通过：${errors} 个错误`)
     else if (found.length > 0) toast.warning(`校验通过，但有 ${found.length} 个提示`)
     else toast.success("校验通过，无问题")
+    return found
   }, [buildModel])
+
+  /* ---- 自动整理布局（dagre）：仅回写各节点 position，data/边不动，往返仍一致 ---- */
+  const handleAutoLayout = useCallback(() => {
+    setNodes((ns) => layoutFlow(ns, edges))
+    canvasApiRef.current?.fitView()
+  }, [edges, setNodes])
+
+  // 命令式句柄：嵌入方（流程定义页 / 整页设计器）保存/发布/校验/整理时驱动
+  useImperativeHandle(
+    ref,
+    () => ({
+      getModel: buildModel,
+      validate: () => validateProcessModel(buildModel()),
+      runValidate: handleValidate,
+      autoLayout: handleAutoLayout,
+    }),
+    [buildModel, handleValidate, handleAutoLayout],
+  )
 
   /* ---- 序列化 + 往返自检 ---- */
   const handleSerialize = useCallback(() => {
@@ -354,12 +380,6 @@ export function FlowDesigner({
     setRoundTripOk(ok)
   }, [buildModel])
 
-  /* ---- 自动整理布局（dagre）：仅回写各节点 position，data/边不动，往返仍一致 ---- */
-  const handleAutoLayout = useCallback(() => {
-    setNodes((ns) => layoutFlow(ns, edges))
-    canvasApiRef.current?.fitView()
-  }, [edges, setNodes])
-
   // 导入 .bpmn / 迁移旧定义后坐标退化（挤在兜底位、相互重叠）→ 挂载时自动整理一次
   const didAutoLayout = useRef(false)
   useEffect(() => {
@@ -370,6 +390,16 @@ export function FlowDesigner({
       canvasApiRef.current?.fitView()
     }
   }, [seed, setNodes])
+
+  // 未保存标记：节点/边/流程配置任一变更即通知外层（首次挂载跳过，避免误标脏）
+  const dirtyMounted = useRef(false)
+  useEffect(() => {
+    if (!dirtyMounted.current) {
+      dirtyMounted.current = true
+      return
+    }
+    onDirty?.()
+  }, [nodes, edges, processConfig, onDirty])
 
   const nodeOptions = useMemo(
     () => nodes.filter((n) => n.type === "userTask").map((n) => ({ id: n.id, name: n.data.name })),
@@ -441,7 +471,8 @@ export function FlowDesigner({
         />
       )}
 
-      {/* 工具栏 */}
+      {/* 工具栏（整页设计器由顶栏统一承载，hideToolbar 时隐藏本条） */}
+      {!hideToolbar && (
       <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
         <span className="text-xs text-muted-foreground">从左侧调色板拖拽或点击新增节点</span>
         <div className="ml-auto flex items-center gap-2">
@@ -469,6 +500,7 @@ export function FlowDesigner({
           )}
         </div>
       </div>
+      )}
 
       {/* 校验结果（W-14：每条可点击定位到画布元素；W-15：状态色走 token） */}
       {issues !== null && (

@@ -14,6 +14,7 @@ const WorkflowTasksPage = lazy(() => import("@/pages/workflow/tasks"))
 const WorkflowStartPage = lazy(() => import("@/pages/workflow/start"))
 const WorkflowMonitorPage = lazy(() => import("@/pages/workflow/monitor"))
 const WorkflowDefsPage = lazy(() => import("@/pages/workflow/defs"))
+const WorkflowDesignerPage = lazy(() => import("@/pages/workflow/designer-page"))
 const WorkflowFormDefsPage = lazy(() => import("@/pages/workflow/form-defs"))
 const WorkflowInstanceDetailPage = lazy(() => import("@/pages/workflow/instance-detail"))
 const WorkflowSealsPage = lazy(() => import("@/pages/workflow/seals"))
@@ -107,6 +108,9 @@ export default function App() {
               <Route path="start" element={<WorkflowStartPage />} />
               <Route path="monitor" element={<WorkflowMonitorPage />} />
               <Route path="defs" element={<WorkflowDefsPage />} />
+              {/* 流程设计器整页（不进菜单，同 instances/:id 动态路由）：新建 / 编辑设计 */}
+              <Route path="defs/new" element={<WorkflowDesignerPage />} />
+              <Route path="defs/:code/design" element={<WorkflowDesignerPage />} />
               <Route path="form-defs" element={<WorkflowFormDefsPage />} />
               <Route path="seals" element={<WorkflowSealsPage />} />
               {/* 旧的六个独立菜单 → 合并页对应 Tab；流程治理 → 流程监控 */}

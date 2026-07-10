@@ -1,13 +1,14 @@
 /**
  * 流程定义管理 /workflow/defs
- * 列表 + 新建（选设计器类型：仿钉钉/流程图 + 绑定已发布表单）+ 全屏设计器 + 发布 + 版本历史。
- * GRAPH（流程图）走新 react-flow 设计器，部署经 POST /api/wf/models/graph/deploy（图直译）；
+ * 列表 + 新建（选设计器类型：仿钉钉/流程图 + 绑定已发布表单）+ 发布 + 版本历史 + 穿越补审。
+ * 设计器改独立整页路由（/workflow/defs/:code/design，新建 /workflow/defs/new），
+ *   列表「编辑/设计」`navigate()` 跳页而非弹全屏 Modal（见 designer-page.tsx）。
+ * GRAPH（流程图）走 react-flow 设计器，部署经 POST /api/wf/models/graph/deploy；
  * 仿钉钉（DINGTALK）并存保留；存量 BPMN 定义编辑时经 /api/wf/models/import 迁移为 GRAPH。
- * 接口：GET /api/wf/process-defs、POST /api/wf/process-defs、PUT /{id}、
- *       POST /{id}/publish（后端转换/部署，展示报错）、GET /{code}/versions
- * 后端未就绪时优雅空态（不造假数据）。
+ * 接口：GET /api/wf/process-defs、POST /{id}/publish（后端转换/部署，展示报错）、GET /{code}/versions
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import type { ColumnDef } from "@tanstack/react-table"
 import { CalendarClock, CloudOff, FlaskConical, GitBranch, History, Pencil, Plus, RotateCw, Send, Workflow } from "lucide-react"
 import { toast } from "sonner"
@@ -38,29 +39,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { FlowDesigner, type FlowDesignerHandle } from "@/pages/workflow/designer/flow/flow-designer"
 import type { ProcessModel } from "@/pages/workflow/designer/flow/model"
-import { dingtalkToProcessModel } from "@/pages/workflow/designer/flow/dingtalk-adapter"
-import type { ValidationIssue as FlowValidationIssue } from "@/pages/workflow/designer/flow/validate"
-import { DingtalkProcessDesigner } from "@/pages/workflow/designer/dingtalk/process-designer"
-import { ensureNodeIdSeq, type StepNode } from "@/pages/workflow/designer/dingtalk/model"
-import {
-  deserializeDingtalk,
-  isBackendDesignerJson,
-  serializeDingtalk,
-} from "@/pages/workflow/designer/dingtalk/serialize"
-import { defaultFlowConfig, type FlowConfig, type FormFieldOption, type ProcessBase } from "@/pages/workflow/designer/shared/config"
+import { deserializeDingtalk, isBackendDesignerJson } from "@/pages/workflow/designer/dingtalk/serialize"
 import { hasBlockingIssue, validateFlow, type ValidationIssue } from "@/pages/workflow/designer/shared/validate"
 import { FormRenderer } from "@/components/form-renderer"
 import { parseFormSchema, type FormWidget as WfFormWidget, type WfFormData } from "@/types/workflow"
-import { widgetsToFields } from "@/pages/workflow/designer/form/fields"
-import { ensureWidgetIdSeq, type FormWidget } from "@/pages/workflow/designer/form/model"
 import {
   WF_STATUS_META,
   type DesignerType,
   type FormDefItem,
   type FormType,
-  type NodePropsMap,
   type ProcessDefItem,
 } from "@/pages/workflow/designer/types"
 
@@ -73,44 +61,6 @@ const DESIGNER_META: Record<DesignerType, { label: string; description: string; 
 
 /** 新建时可选的设计器类型（BPMN 旧设计器已下线，不再提供入口） */
 const CREATE_DESIGNER_TYPES: DesignerType[] = ["DINGTALK", "GRAPH"]
-
-/** .bpmn XML → 归一化 ProcessModel（POST /api/wf/models/import 返回结构） */
-interface BpmnImportResult {
-  model: ProcessModel
-  warnings?: string[]
-}
-
-/** 仿钉钉初始节点树（一条主管审批） */
-function initialSteps(): StepNode[] {
-  return [{ id: "n_root_1", kind: "approval", name: "审批人", assignees: [], mode: "any" }]
-}
-
-/** GRAPH 空白模型：开始 → 审批 → 结束（前端画布坐标已就绪，后端据此生成 BPMN DI） */
-function blankGraphModel(key: string, name: string, formKey?: string): ProcessModel {
-  const model: ProcessModel = {
-    schemaVersion: 1,
-    key: key || "process",
-    name: name || "未命名流程",
-    flowConfig: defaultFlowConfig(),
-    nodes: [
-      { id: "start", type: "startEvent", name: "开始", position: { x: 260, y: 40 } },
-      {
-        id: "approve",
-        type: "userTask",
-        name: "审批",
-        position: { x: 210, y: 150 },
-        props: { assigneeRules: [], multiMode: "ANY" },
-      },
-      { id: "end", type: "endEvent", name: "结束", position: { x: 260, y: 300 } },
-    ],
-    edges: [
-      { id: "e_start_approve", source: "start", target: "approve" },
-      { id: "e_approve_end", source: "approve", target: "end" },
-    ],
-  }
-  if (formKey) model.formKey = formKey
-  return model
-}
 
 /** 解析存储的 designerJson（字符串或对象）为 ProcessModel；非法/空返回 null */
 function parseGraphModel(raw: unknown): ProcessModel | null {
@@ -126,84 +76,13 @@ function parseGraphModel(raw: unknown): ProcessModel | null {
   }
 }
 
-/** flow 校验问题（level: error|warning）→ 共享发布校验清单（level: error|warn） */
-function mapFlowIssues(issues: FlowValidationIssue[]): ValidationIssue[] {
-  return issues.map((i) => ({
-    nodeId: i.nodeId ?? i.edgeId,
-    level: i.level === "warning" ? "warn" : "error",
-    message: i.message,
-  }))
-}
-
-/** 组合 formKey（formCode:version）供 GRAPH 各 userTask 继承 */
-function composeFormKey(formCode?: string | null, formVersion?: number | null): string | undefined {
-  if (!formCode) return undefined
-  return formVersion != null ? `${formCode}:${formVersion}` : formCode
-}
-
-interface EditorState {
-  id: number | null
-  defCode: string
-  name: string
-  description: string
-  icon: string
-  category: string
-  designerType: DesignerType
-  formType: FormType
-  formCode: string
-  formVersion: number | null
-  formSubmitPath: string
-  formViewPath: string
-  steps: StepNode[]
-  nodeProps: NodePropsMap
-  flowConfig: FlowConfig
-  formFields: FormFieldOption[]
-  /** GRAPH 设计器的归一化模型（DINGTALK 时忽略） */
-  graphModel: ProcessModel
-}
-
-function emptyEditor(): EditorState {
-  return {
-    id: null,
-    defCode: "",
-    name: "",
-    description: "",
-    icon: "",
-    category: "",
-    designerType: "DINGTALK",
-    formType: "DYNAMIC",
-    formCode: "",
-    formVersion: null,
-    formSubmitPath: "",
-    formViewPath: "",
-    steps: initialSteps(),
-    nodeProps: {},
-    flowConfig: defaultFlowConfig(),
-    formFields: [],
-    graphModel: blankGraphModel("", ""),
-  }
-}
-
-/** 解析表单 schema（字符串或对象）→ widgets */
-function parseWidgets(raw: unknown): FormWidget[] {
-  try {
-    const obj = typeof raw === "string" ? JSON.parse(raw) : raw
-    const widgets = Array.isArray((obj as { widgets?: unknown })?.widgets)
-      ? ((obj as { widgets: FormWidget[] }).widgets)
-      : []
-    ensureWidgetIdSeq(widgets)
-    return widgets
-  } catch {
-    return []
-  }
-}
-
 export default function WorkflowDefsPage() {
+  const navigate = useNavigate()
   const [rows, setRows] = useState<ProcessDefItem[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<"network" | string | null>(null)
 
-  // 后端搜索 + 后端分页（避免只拉前 N 条本地搜索导致搜不全）
+  // 后端搜索 + 后端分页
   const [keyword, setKeyword] = useState("")
   const [pageNum, setPageNum] = useState(1)
   const [pageSize, setPageSize] = useState(10)
@@ -223,17 +102,12 @@ export default function WorkflowDefsPage() {
     formViewPath: "",
   })
 
-  // 发布校验清单（编辑器"保存并发布"或列表发布前）
+  // 发布确认（列表行「发布」）
   const [publishIssues, setPublishIssues] = useState<ValidationIssue[]>([])
-
-  const [editorOpen, setEditorOpen] = useState(false)
-  const [editor, setEditor] = useState<EditorState>(emptyEditor)
-  const [saving, setSaving] = useState(false)
-  const flowRef = useRef<FlowDesignerHandle>(null)
-
   const [publishTarget, setPublishTarget] = useState<ProcessDefItem | null>(null)
   const [publishError, setPublishError] = useState<string | null>(null)
   const [publishing, setPublishing] = useState(false)
+
   const [versionsFor, setVersionsFor] = useState<ProcessDefItem | null>(null)
   const [versions, setVersions] = useState<ProcessDefItem[]>([])
   const [versionsLoading, setVersionsLoading] = useState(false)
@@ -282,21 +156,6 @@ export default function WorkflowDefsPage() {
     return () => clearTimeout(timer)
   }, [load, keyword, pageNum, pageSize])
 
-  /** 拉表单最新 schema → 字段选项 + 版本 */
-  const resolveFormFields = async (
-    formCode: string,
-  ): Promise<{ fields: FormFieldOption[]; version: number | null }> => {
-    if (!formCode) return { fields: [], version: null }
-    try {
-      const detail = await api<FormDefItem & { schemaJson?: unknown; version?: number }>(
-        `/api/wf/form-defs/${formCode}/latest`,
-      )
-      return { fields: widgetsToFields(parseWidgets(detail.schemaJson)), version: detail.version ?? null }
-    } catch {
-      return { fields: [], version: null }
-    }
-  }
-
   const startCreate = () => {
     setCreateForm({
       defCode: "",
@@ -311,7 +170,8 @@ export default function WorkflowDefsPage() {
     setCreateOpen(true)
   }
 
-  const confirmCreate = async () => {
+  /** 新建：校验后跳独立设计页（/workflow/defs/new?...），首次保存草稿由设计页 replace 到带 code 的 URL */
+  const confirmCreate = () => {
     if (!createForm.defCode.trim() || !createForm.name.trim()) {
       toast.error("请填写流程名称与编码")
       return
@@ -320,224 +180,32 @@ export default function WorkflowDefsPage() {
       toast.error("自定义表单需填写发起页路由")
       return
     }
-    // 动态表单才解析字段；自定义表单无可绑定字段
-    const { fields, version } =
-      createForm.formType === "DYNAMIC"
-        ? await resolveFormFields(createForm.formCode)
-        : { fields: [], version: null }
-    setEditor({
-      ...emptyEditor(),
-      defCode: createForm.defCode.trim(),
-      name: createForm.name.trim(),
-      category: createForm.category.trim(),
-      designerType: createForm.designerType,
-      formType: createForm.formType,
-      formCode: createForm.formType === "DYNAMIC" ? createForm.formCode : "",
-      formVersion: version,
-      formSubmitPath: createForm.formSubmitPath.trim(),
-      formViewPath: createForm.formViewPath.trim(),
-      formFields: fields,
-    })
+    const params = new URLSearchParams()
+    params.set("type", createForm.designerType)
+    params.set("code", createForm.defCode.trim())
+    params.set("name", createForm.name.trim())
+    if (createForm.category.trim()) params.set("category", createForm.category.trim())
+    params.set("formType", createForm.formType)
+    if (createForm.formType === "DYNAMIC" && createForm.formCode) params.set("formCode", createForm.formCode)
+    if (createForm.formType === "CUSTOM") {
+      params.set("formSubmitPath", createForm.formSubmitPath.trim())
+      if (createForm.formViewPath.trim()) params.set("formViewPath", createForm.formViewPath.trim())
+    }
     setCreateOpen(false)
-    setEditorOpen(true)
+    navigate(`/workflow/defs/new?${params.toString()}`)
   }
 
-  const openEdit = async (row: ProcessDefItem) => {
-    const next = emptyEditor()
-    next.id = row.id
-    next.defCode = row.defCode
-    next.name = row.name
-    next.category = row.category ?? ""
-    next.icon = row.icon ?? ""
-    next.description = row.remark ?? ""
-    next.designerType = row.designerType
-    next.formType = row.formType ?? "DYNAMIC"
-    next.formCode = row.formCode ?? ""
-    next.formSubmitPath = row.formSubmitPath ?? ""
-    next.formViewPath = row.formViewPath ?? ""
+  /** 编辑 / 设计：跳独立整页设计器 */
+  const openDesign = (row: ProcessDefItem) => navigate(`/workflow/defs/${row.defCode}/design`)
 
-    let detail: ProcessDefItem | null = null
-    try {
-      detail = await api<ProcessDefItem>(`/api/wf/process-defs/${row.defCode}/latest`)
-    } catch {
-      detail = row
-    }
-    if (detail?.remark != null) next.description = detail.remark
-    if (detail?.icon != null) next.icon = detail.icon
-    if (detail?.formType) next.formType = detail.formType
-    if (detail?.formSubmitPath != null) next.formSubmitPath = detail.formSubmitPath
-    if (detail?.formViewPath != null) next.formViewPath = detail.formViewPath
-    if (row.designerType === "DINGTALK") {
-      try {
-        const raw = detail?.designerJson
-        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw
-        if (isBackendDesignerJson(parsed)) {
-          // 后端格式 { nodes: [...] } → 反序列化回内部模型
-          const { steps, nodeProps, flowConfig } = deserializeDingtalk(parsed)
-          ensureNodeIdSeq(steps)
-          next.steps = steps.length ? steps : initialSteps()
-          next.nodeProps = nodeProps
-          next.flowConfig = flowConfig
-        } else if (Array.isArray((parsed as { root?: unknown })?.root)) {
-          // 兼容早期 { root, nodeProps } 草稿
-          const root = (parsed as { root: StepNode[] }).root
-          ensureNodeIdSeq(root)
-          next.steps = root
-          next.nodeProps = ((parsed as { nodeProps?: NodePropsMap })?.nodeProps ?? {}) as NodePropsMap
-        } else {
-          next.steps = initialSteps()
-        }
-      } catch {
-        next.steps = initialSteps()
-      }
-    } else if (row.designerType === "GRAPH") {
-      // GRAPH：designerJson 存归一化 ProcessModel，直接载入 flow 设计器
-      next.designerType = "GRAPH"
-      next.graphModel =
-        parseGraphModel(detail?.designerJson) ??
-        blankGraphModel(row.defCode, row.name, composeFormKey(row.formCode, row.formVersion))
-    } else {
-      // 存量 BPMN（旧 bpmn-js 定义，已下线）：经 /api/wf/models/import 迁移为 ProcessModel，改用 flow 设计器编辑
-      next.designerType = "GRAPH"
-      const xml = detail?.bpmnXml
-      let migrated: ProcessModel | null = null
-      if (xml) {
-        try {
-          const res = await api<BpmnImportResult>("/api/wf/models/import", {
-            method: "POST",
-            headers: { "Content-Type": "text/plain" },
-            body: xml,
-          })
-          migrated = res.model
-        } catch {
-          migrated = null
-        }
-      }
-      next.graphModel =
-        migrated ?? blankGraphModel(row.defCode, row.name, composeFormKey(row.formCode, row.formVersion))
-    }
-    const { fields, version } = await resolveFormFields(row.formCode ?? "")
-    next.formFields = fields
-    next.formVersion = row.formVersion ?? version
-    setEditor(next)
-    setEditorOpen(true)
-  }
+  /** 实验入口：把仿钉钉旧定义用新流程图设计器打开（?as=graph 由设计页迁移） */
+  const openInNewDesigner = (row: ProcessDefItem) =>
+    navigate(`/workflow/defs/${row.defCode}/design?as=graph`)
 
-  /**
-   * 实验入口：用新 react-flow 设计器打开一条 DINGTALK 旧定义。
-   * 把该定义的钉钉 `designerJson` 经 `dingtalkToProcessModel` 转成归一化 ProcessModel，载入 FlowDesigner
-   * 编辑（与存量 BPMN 经 /api/wf/models/import 迁移一致）。**不动钉钉设计器本身**——仅多一个「在新设计器打开」的通道。
-   * 转换失败给清晰 toast 提示，不进入设计器。
-   */
-  const openInNewDesigner = async (row: ProcessDefItem) => {
-    const next = emptyEditor()
-    next.id = row.id
-    next.defCode = row.defCode
-    next.name = row.name
-    next.category = row.category ?? ""
-    next.icon = row.icon ?? ""
-    next.description = row.remark ?? ""
-    next.formType = row.formType ?? "DYNAMIC"
-    next.formCode = row.formCode ?? ""
-    next.formSubmitPath = row.formSubmitPath ?? ""
-    next.formViewPath = row.formViewPath ?? ""
-
-    let detail: ProcessDefItem | null = null
-    try {
-      detail = await api<ProcessDefItem>(`/api/wf/process-defs/${row.defCode}/latest`)
-    } catch {
-      detail = row
-    }
-    if (detail?.remark != null) next.description = detail.remark
-    if (detail?.icon != null) next.icon = detail.icon
-    if (detail?.formType) next.formType = detail.formType
-    if (detail?.formSubmitPath != null) next.formSubmitPath = detail.formSubmitPath
-    if (detail?.formViewPath != null) next.formViewPath = detail.formViewPath
-
-    // 钉钉 designerJson（字符串或对象）→ ProcessModel
-    const raw = detail?.designerJson
-    let parsed: unknown
-    try {
-      parsed = typeof raw === "string" ? JSON.parse(raw) : raw
-    } catch {
-      toast.error("无法用新设计器打开：钉钉流程定义（designerJson）不是合法 JSON")
-      return
-    }
-    let model: ProcessModel
-    try {
-      model = dingtalkToProcessModel(parsed, {
-        key: row.defCode,
-        name: row.name,
-        formKey: composeFormKey(row.formCode, row.formVersion),
-      })
-    } catch (err) {
-      toast.error(err instanceof Error ? `钉钉流程转换失败：${err.message}` : "钉钉流程转换失败")
-      return
-    }
-
-    next.designerType = "GRAPH"
-    next.graphModel = model
-
-    const { fields, version } = await resolveFormFields(row.formCode ?? "")
-    next.formFields = fields
-    next.formVersion = row.formVersion ?? version
-    setEditor(next)
-    setEditorOpen(true)
-    toast.info("已用新流程图设计器打开（实验）：保存后将迁移为「流程图」定义")
-  }
-
-  const doSave = async (): Promise<ProcessDefItem | null> => {
-    setSaving(true)
-    const base: Record<string, unknown> = {
-      defCode: editor.defCode,
-      name: editor.name,
-      remark: editor.description || undefined,
-      icon: editor.icon || undefined,
-      category: editor.category || undefined,
-      designerType: editor.designerType,
-      formType: editor.formType,
-      formCode: editor.formType === "DYNAMIC" ? editor.formCode || undefined : undefined,
-      formVersion: editor.formType === "DYNAMIC" ? editor.formVersion ?? undefined : undefined,
-      formSubmitPath: editor.formType === "CUSTOM" ? editor.formSubmitPath || undefined : undefined,
-      formViewPath: editor.formType === "CUSTOM" ? editor.formViewPath || undefined : undefined,
-    }
-    if (editor.designerType === "DINGTALK") {
-      // 序列化为后端格式 { nodes: [...], flowConfig }（属性内联，见 designer/dingtalk/serialize.ts）；
-      // 后端 designerJson 字段为 JSON 字符串，需 stringify
-      base.designerJson = JSON.stringify(serializeDingtalk(editor.steps, editor.nodeProps, editor.flowConfig))
-    } else {
-      // GRAPH：designerJson 存归一化 ProcessModel（flow 设计器 getModel 产出，含坐标）。
-      // 存量 BPMN 编辑时已在 openEdit 迁移为 GRAPH，故此处统一走 GRAPH 分支。
-      base.designerType = "GRAPH"
-      const model = flowRef.current?.getModel() ?? editor.graphModel
-      base.designerJson = JSON.stringify(model)
-    }
-    try {
-      const saved = editor.id
-        ? await api<ProcessDefItem>(`/api/wf/process-defs/${editor.id}`, {
-            method: "PUT",
-            body: JSON.stringify(base),
-          })
-        : await api<ProcessDefItem>("/api/wf/process-defs", { method: "POST", body: JSON.stringify(base) })
-      toast.success(`流程「${editor.name}」已保存为草稿`)
-      if (saved?.id) setEditor((e) => ({ ...e, id: saved.id }))
-      reload()
-      return saved
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "保存失败")
-      return null
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  /**
-   * 打开发布确认：可传入编辑器现场校验的 issues（DINGTALK/GRAPH 设计器内发布）；
-   * 未传时按 target.designerJson 现解析跑校验（列表「发布」按钮，仅 DINGTALK 有前端校验）。
-   */
-  const openPublish = (target: ProcessDefItem, precomputed?: ValidationIssue[]) => {
-    let issues: ValidationIssue[] = precomputed ?? []
-    if (!precomputed && target.designerType === "DINGTALK" && target.designerJson) {
+  /** 打开发布确认：DINGTALK 现解析跑前端校验；GRAPH 交后端把关 */
+  const openPublish = (target: ProcessDefItem) => {
+    let issues: ValidationIssue[] = []
+    if (target.designerType === "DINGTALK" && target.designerJson) {
       try {
         const parsed = typeof target.designerJson === "string" ? JSON.parse(target.designerJson) : target.designerJson
         if (isBackendDesignerJson(parsed)) {
@@ -563,7 +231,6 @@ export default function WorkflowDefsPage() {
     setPublishError(null)
     try {
       if (publishTarget.designerType === "GRAPH") {
-        // GRAPH：走图直译一站式部署端点（ProcessModel → BpmnModel → Flowable 部署 + wf_process_ext 落库）
         const model = parseGraphModel(publishTarget.designerJson)
         if (!model) {
           setPublishError("流程模型解析失败（designerJson 为空或非法），请重新保存草稿")
@@ -586,7 +253,6 @@ export default function WorkflowDefsPage() {
       setPublishTarget(null)
       reload()
     } catch (err) {
-      // 后端转换/部署报错：留在弹窗内展示，方便排查
       setPublishError(err instanceof Error ? err.message : "发布失败")
     } finally {
       setPublishing(false)
@@ -721,7 +387,7 @@ export default function WorkflowDefsPage() {
         header: () => <span>操作</span>,
         cell: ({ row }) => (
           <div className="flex items-center gap-0.5">
-            <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => void openEdit(row.original)}>
+            <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => openDesign(row.original)}>
               <Pencil className="size-3.5" />
               编辑
             </Button>
@@ -731,7 +397,7 @@ export default function WorkflowDefsPage() {
                 size="sm"
                 className="h-7 gap-1 px-2 text-xs text-violet-600 hover:text-violet-600"
                 title="把这条仿钉钉旧定义转成流程图，用新 react-flow 设计器打开（实验）"
-                onClick={() => void openInNewDesigner(row.original)}
+                onClick={() => openInNewDesigner(row.original)}
               >
                 <FlaskConical className="size-3.5" />
                 新设计器
@@ -828,7 +494,7 @@ export default function WorkflowDefsPage() {
         />
       )}
 
-      {/* 新建：选择设计器类型 + 绑定表单 */}
+      {/* 新建：选择设计器类型 + 绑定表单 → 跳独立设计页 */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
@@ -973,132 +639,10 @@ export default function WorkflowDefsPage() {
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
               取消
             </Button>
-            <Button onClick={() => void confirmCreate()}>进入设计器</Button>
+            <Button onClick={confirmCreate}>进入设计器</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* 全屏设计器 Modal */}
-      <Modal
-        open={editorOpen}
-        onOpenChange={setEditorOpen}
-        title={
-          <span className="flex items-center gap-2">
-            <Workflow className="size-4 text-primary" />
-            {editor.id ? "编辑流程" : "设计流程"} · {editor.name}
-            <Badge variant="secondary" className="ml-1 gap-1">
-              {editor.designerType === "DINGTALK" ? "仿钉钉" : "流程图"}
-            </Badge>
-          </span>
-        }
-        description={
-          editor.formCode
-            ? `绑定表单：${formName(editor.formCode)} · 条件/审批人可引用表单字段`
-            : "未绑定表单：条件与表单字段规则暂无可选字段"
-        }
-        width={1200}
-        height={740}
-        bodyClassName="p-0"
-        footer={
-          <>
-            <span className="mr-auto text-xs text-muted-foreground">
-              编码 <span className="font-mono">{editor.defCode}</span>
-            </span>
-            <Button variant="outline" size="sm" disabled={saving} onClick={() => void doSave()}>
-              {saving ? "保存中…" : "保存草稿"}
-            </Button>
-            <Button
-              size="sm"
-              className="gap-1.5"
-              disabled={saving}
-              onClick={async () => {
-                const saved = await doSave()
-                if (saved?.id) {
-                  // 设计器内发布：用编辑器现场校验（DINGTALK 走 validateFlow；GRAPH 走 flow 设计器 validate）
-                  const issues =
-                    editor.designerType === "DINGTALK"
-                      ? validateFlow(editor.steps, editor.nodeProps)
-                      : mapFlowIssues(flowRef.current?.validate() ?? [])
-                  openPublish(saved, issues)
-                }
-              }}
-            >
-              <Send className="size-3.5" />
-              保存并发布
-            </Button>
-          </>
-        }
-      >
-        {editor.designerType === "DINGTALK" ? (
-          <div className="h-full bg-muted/20">
-            <DingtalkProcessDesigner
-              steps={editor.steps}
-              onStepsChange={(updater) =>
-                setEditor((e) => ({
-                  ...e,
-                  steps:
-                    typeof updater === "function" ? (updater as (s: StepNode[]) => StepNode[])(e.steps) : updater,
-                }))
-              }
-              nodeProps={editor.nodeProps}
-              onNodePropsChange={(updater) =>
-                setEditor((e) => ({
-                  ...e,
-                  nodeProps:
-                    typeof updater === "function"
-                      ? (updater as (n: NodePropsMap) => NodePropsMap)(e.nodeProps)
-                      : updater,
-                }))
-              }
-              formFields={editor.formFields}
-              base={{
-                name: editor.name,
-                description: editor.description,
-                icon: editor.icon,
-                category: editor.category,
-              }}
-              onBaseChange={(next: ProcessBase) =>
-                setEditor((e) => ({
-                  ...e,
-                  name: next.name,
-                  description: next.description,
-                  icon: next.icon,
-                  category: next.category,
-                }))
-              }
-              flowConfig={editor.flowConfig}
-              onFlowConfigChange={(flowConfig: FlowConfig) => setEditor((e) => ({ ...e, flowConfig }))}
-            />
-          </div>
-        ) : (
-          <div className="h-full min-h-0 overflow-hidden bg-muted/20 p-3">
-            <FlowDesigner
-              key={editor.id ?? editor.defCode}
-              ref={flowRef}
-              embedded
-              initialModel={editor.graphModel}
-              processKey={editor.defCode}
-              formKey={composeFormKey(editor.formCode, editor.formVersion)}
-              base={{
-                name: editor.name,
-                description: editor.description,
-                icon: editor.icon,
-                category: editor.category,
-              }}
-              onBaseChange={(next: ProcessBase) =>
-                setEditor((e) => ({
-                  ...e,
-                  name: next.name,
-                  description: next.description,
-                  icon: next.icon,
-                  category: next.category,
-                }))
-              }
-              formFields={editor.formFields}
-            />
-          </div>
-        )}
-      </Modal>
 
       {/* 发布确认（含后端转换/部署报错展示） */}
       <Dialog
@@ -1159,10 +703,7 @@ export default function WorkflowDefsPage() {
             >
               取消
             </Button>
-            <Button
-              disabled={publishing || hasBlockingIssue(publishIssues)}
-              onClick={() => void doPublish()}
-            >
+            <Button disabled={publishing || hasBlockingIssue(publishIssues)} onClick={() => void doPublish()}>
               {publishing ? "发布中…" : publishError ? "重试发布" : "确认发布"}
             </Button>
           </DialogFooter>
@@ -1249,11 +790,7 @@ export default function WorkflowDefsPage() {
             />
           )}
           {!ttTarget?.formCode && (
-            <Button
-              className="gap-1.5"
-              disabled={ttSubmitting}
-              onClick={() => void submitTimeTravel({})}
-            >
+            <Button className="gap-1.5" disabled={ttSubmitting} onClick={() => void submitTimeTravel({})}>
               <Send className="size-3.5" /> 提交补审
             </Button>
           )}

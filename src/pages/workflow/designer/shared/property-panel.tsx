@@ -13,6 +13,7 @@
  */
 import { useState, type ReactNode } from "react"
 import {
+  AlertTriangle,
   ArrowDownUp,
   ChevronDown,
   Clock,
@@ -31,6 +32,7 @@ import {
   Zap,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useHasPerm } from "@/stores/auth-store"
 import { OrgPicker, OrgPickerField, type OrgRef } from "@/components/org-picker"
 import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
@@ -81,6 +83,8 @@ import {
   ASSIGNEE_KIND_META,
   ASSIGNEE_SOURCE_MATRIX,
   ASSIGNEE_SOURCE_META,
+  BLOCKING_NODE_TRIGGERS,
+  BLOCKING_PROCESS_TRIGGERS,
   DEFAULT_ALLOWED_OPS,
   EVENT_ACTION_META,
   EVENT_TRIGGER_META,
@@ -1147,13 +1151,27 @@ function TimeoutSection({ value, onChange }: { value: NodeTimeout; onChange: (v:
   )
 }
 
-/* ---------- 事件动作载荷（NodeEvent / ProcessEvent 共用：NOTIFY / WEBHOOK / SCRIPT / API） ---------- */
+/* ---------- 事件监听器：卡片式列表（NOTIFY / WEBHOOK / SCRIPT / API / DELEGATE） ---------- */
 
 const API_METHODS: EventApiConfig["method"][] = ["GET", "POST", "PUT", "DELETE"]
 
-/** 切换 action 时初始化对应载荷，并丢弃其它 action 的残留字段（序列化侧只带当前 action 字段） */
+/** 受信动作（配置入口需 wf:script:write 权限，无权只读） */
+const TRUSTED_ACTIONS: ReadonlySet<EventAction> = new Set<EventAction>(["SCRIPT", "API", "DELEGATE"])
+
+/**
+ * 切换 action 时初始化对应载荷，并丢弃其它 action 的残留字段（序列化侧只带当前 action 字段）。
+ * 保留 blocking（阻断开关随触发点/切动作沿用，仅切到非前置触发点时由 withTrigger 清理）。
+ */
 function withEventAction<E extends EventActionConfig>(ev: E, action: EventAction): E {
-  const base: E = { ...ev, action, notify: undefined, webhookUrl: undefined, script: undefined, api: undefined }
+  const base: E = {
+    ...ev,
+    action,
+    notify: undefined,
+    webhookUrl: undefined,
+    script: undefined,
+    api: undefined,
+    delegate: undefined,
+  }
   switch (action) {
     case "NOTIFY":
       return { ...base, notify: ev.notify ?? { to: [], template: "" } }
@@ -1163,38 +1181,41 @@ function withEventAction<E extends EventActionConfig>(ev: E, action: EventAction
       return { ...base, script: ev.script ?? { lang: "groovy", code: "" } }
     case "API":
       return { ...base, api: ev.api ?? { method: "POST", url: "", headers: "", body: "" } }
+    case "DELEGATE":
+      return { ...base, delegate: ev.delegate ?? { bean: "" } }
     default:
       return base
   }
 }
 
-/** action 选择 + 载荷编辑器（自管 OrgPicker 开合态；每条事件一个实例） */
-function EventActionEditor<E extends EventActionConfig>({
+/** 切触发点：非前置触发点清掉 blocking（避免残留一个不生效的阻断标记） */
+function withTrigger<T extends string, E extends EventActionConfig & { trigger: T }>(
+  ev: E,
+  trigger: T,
+  blockingTriggers: ReadonlySet<T>,
+): E {
+  const next = { ...ev, trigger }
+  if (!blockingTriggers.has(trigger)) next.blocking = undefined
+  return next
+}
+
+/** 动作参数载荷编辑器（不含 action 下拉——由卡片上层渲染）；受信动作无权时只读 */
+function EventActionPayload<E extends EventActionConfig>({
   value,
   onChange,
+  canWriteTrusted,
 }: {
   value: E
   onChange: (next: E) => void
+  canWriteTrusted: boolean
 }) {
   const [pickerOpen, setPickerOpen] = useState(false)
   const api: EventApiConfig = value.api ?? { method: "POST", url: "", headers: "", body: "" }
   const setApi = (patch: Partial<EventApiConfig>) => onChange({ ...value, api: { ...api, ...patch } })
+  const trustedReadonly = TRUSTED_ACTIONS.has(value.action) && !canWriteTrusted
 
   return (
     <>
-      <Select value={value.action} onValueChange={(v) => onChange(withEventAction(value, v as EventAction))}>
-        <SelectTrigger size="sm" className="h-8 w-full text-xs">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {(Object.keys(EVENT_ACTION_META) as EventAction[]).map((a) => (
-            <SelectItem key={a} value={a}>
-              {EVENT_ACTION_META[a]}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-
       {value.action === "NOTIFY" && (
         <>
           <OrgPickerField
@@ -1240,6 +1261,7 @@ function EventActionEditor<E extends EventActionConfig>({
       )}
 
       {value.action === "SCRIPT" && (
+        // ScriptEditor 自带 wf:script:write 只读门控
         <ScriptEditor
           value={value.script ?? { lang: "groovy", code: "" }}
           onChange={(script) => onChange({ ...value, script })}
@@ -1248,8 +1270,13 @@ function EventActionEditor<E extends EventActionConfig>({
 
       {value.action === "API" && (
         <div className="space-y-2">
+          {trustedReadonly && <TrustedReadonlyNote />}
           <div className="flex items-center gap-1.5">
-            <Select value={api.method} onValueChange={(v) => setApi({ method: v as EventApiConfig["method"] })}>
+            <Select
+              value={api.method}
+              onValueChange={(v) => setApi({ method: v as EventApiConfig["method"] })}
+              disabled={trustedReadonly}
+            >
               <SelectTrigger size="sm" className="h-8 w-24 text-xs">
                 <SelectValue />
               </SelectTrigger>
@@ -1266,6 +1293,7 @@ function EventActionEditor<E extends EventActionConfig>({
               onChange={(e) => setApi({ url: e.target.value })}
               placeholder="请求 URL（支持模板变量）"
               className="h-8 flex-1 text-xs"
+              disabled={trustedReadonly}
             />
           </div>
           <div className="space-y-1">
@@ -1277,6 +1305,7 @@ function EventActionEditor<E extends EventActionConfig>({
               spellCheck={false}
               rows={2}
               className="font-mono text-[11px]"
+              disabled={trustedReadonly}
             />
           </div>
           <div className="space-y-1">
@@ -1288,97 +1317,235 @@ function EventActionEditor<E extends EventActionConfig>({
               spellCheck={false}
               rows={3}
               className="font-mono text-[11px]"
+              disabled={trustedReadonly}
             />
           </div>
+        </div>
+      )}
+
+      {value.action === "DELEGATE" && (
+        <div className="space-y-1.5">
+          {trustedReadonly && <TrustedReadonlyNote />}
+          <FieldLabel>监听器 Bean 名</FieldLabel>
+          <Input
+            value={value.delegate?.bean ?? ""}
+            onChange={(e) => onChange({ ...value, delegate: { bean: e.target.value } })}
+            placeholder="如 demoBudgetGuard"
+            className="h-8 font-mono text-xs"
+            disabled={trustedReadonly}
+          />
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            后端按名解析实现 <code className="font-mono">WfEventHandler</code> 的受信 Spring bean 并执行；治理同{" "}
+            <code className="font-mono">wf:script:write</code>。
+          </p>
         </div>
       )}
     </>
   )
 }
 
-/** 事件列表编辑器（触发点下拉 + 动作载荷 + 增删），供节点事件 / 流程事件共用 */
+/** 受信动作无权时的只读提示 */
+function TrustedReadonlyNote() {
+  return (
+    <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+      <AlertTriangle className="size-3.5 shrink-0" />
+      只读：配置该动作需 <code className="font-mono">wf:script:write</code> 权限（仅受信管理员）。
+    </p>
+  )
+}
+
+/** 单张监听器卡：折叠态一行摘要（序号 + 触发点 + 动作 + 阻断标记），展开态编辑 */
+function EventListenerCard<T extends string, E extends EventActionConfig & { trigger: T }>({
+  index,
+  value,
+  triggerMeta,
+  blockingTriggers,
+  canWriteTrusted,
+  onChange,
+  onRemove,
+}: {
+  index: number
+  value: E
+  triggerMeta: Record<T, string>
+  blockingTriggers: ReadonlySet<T>
+  canWriteTrusted: boolean
+  onChange: (next: E) => void
+  onRemove: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const isPreTrigger = blockingTriggers.has(value.trigger)
+  const blocking = isPreTrigger && value.blocking === true
+
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className={cn("rounded-md border bg-card", blocking && "border-l-2 border-l-amber-500")}
+    >
+      <div className="flex items-center gap-2 px-2.5 py-2">
+        <CollapsibleTrigger asChild>
+          <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left">
+            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] tabular-nums">
+              {index + 1}
+            </span>
+            <span className="shrink-0 rounded bg-secondary px-1.5 py-0.5 text-[11px] text-secondary-foreground">
+              {triggerMeta[value.trigger]}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+              → {EVENT_ACTION_META[value.action]}
+            </span>
+            {blocking && (
+              <span className="flex shrink-0 items-center gap-0.5 rounded border border-amber-500/40 bg-amber-500/10 px-1 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="size-3" />
+                阻断
+              </span>
+            )}
+            <ChevronDown
+              className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", !open && "-rotate-90")}
+            />
+          </button>
+        </CollapsibleTrigger>
+        <button
+          type="button"
+          className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-destructive"
+          onClick={onRemove}
+          aria-label="删除监听器"
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+      </div>
+
+      <CollapsibleContent className="space-y-2.5 border-t px-2.5 pb-2.5 pt-2">
+        <div className="space-y-1">
+          <FieldLabel>触发点</FieldLabel>
+          <Select
+            value={value.trigger}
+            onValueChange={(v) => onChange(withTrigger(value, v as T, blockingTriggers))}
+          >
+            <SelectTrigger size="sm" className="h-8 w-full text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(Object.keys(triggerMeta) as T[]).map((t) => (
+                <SelectItem key={t} value={t}>
+                  {triggerMeta[t]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1">
+          <FieldLabel>动作</FieldLabel>
+          <Select value={value.action} onValueChange={(v) => onChange(withEventAction(value, v as EventAction))}>
+            <SelectTrigger size="sm" className="h-8 w-full text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(Object.keys(EVENT_ACTION_META) as EventAction[]).map((a) => (
+                <SelectItem key={a} value={a}>
+                  {EVENT_ACTION_META[a]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {isPreTrigger && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-2">
+            <label className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="size-3.5" />
+                阻断办理
+              </span>
+              <Switch
+                checked={value.blocking ?? false}
+                onCheckedChange={(v) => onChange({ ...value, blocking: v || undefined })}
+              />
+            </label>
+            <p className="mt-1 text-[11px] text-muted-foreground">该动作失败将中止本次办理（并回滚）。</p>
+          </div>
+        )}
+
+        <div className="border-t pt-2 text-[11px] text-muted-foreground">—— 动作参数 ——</div>
+        <EventActionPayload value={value} onChange={onChange} canWriteTrusted={canWriteTrusted} />
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
+/** 卡片式事件监听器列表（触发点/动作分行 + 阻断开关 + 增删），供节点事件 / 流程事件共用 */
 function EventsSection<T extends string, E extends EventActionConfig & { trigger: T }>({
-  title,
   hint,
   value,
   onChange,
   triggerMeta,
+  blockingTriggers,
   makeDefault,
 }: {
-  title: string
   hint: string
   value: E[]
   onChange: (v: E[]) => void
   triggerMeta: Record<T, string>
+  blockingTriggers: ReadonlySet<T>
   /** 新增事件的默认值（由调用方按各自事件类型构造，避免泛型强转） */
   makeDefault: () => E
 }) {
+  const canWriteTrusted = useHasPerm("wf:script:write")
   const add = () => onChange([...value, makeDefault()])
   const update = (i: number, ev: E) => onChange(value.map((e, idx) => (idx === i ? ev : e)))
   const remove = (i: number) => onChange(value.filter((_, idx) => idx !== i))
 
   return (
-    <Section title={title} icon={Zap} defaultOpen={false}>
+    <Section title="事件监听器" icon={Zap} defaultOpen={false}>
       <p className="text-xs text-muted-foreground">{hint}</p>
-      {value.map((ev, i) => (
-        <div key={i} className="space-y-2 rounded-md border p-2.5">
-          <div className="flex items-center gap-1.5">
-            <Select value={ev.trigger} onValueChange={(v) => update(i, { ...ev, trigger: v as T })}>
-              <SelectTrigger size="sm" className="h-8 flex-1 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(Object.keys(triggerMeta) as T[]).map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {triggerMeta[t]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <button
-              type="button"
-              className="rounded p-0.5 text-muted-foreground hover:text-rose-500"
-              onClick={() => remove(i)}
-            >
-              <Trash2 className="size-3.5" />
-            </button>
-          </div>
-          <EventActionEditor value={ev} onChange={(next) => update(i, next)} />
-        </div>
-      ))}
+      <div className="space-y-2">
+        {value.map((ev, i) => (
+          <EventListenerCard
+            key={i}
+            index={i}
+            value={ev}
+            triggerMeta={triggerMeta}
+            blockingTriggers={blockingTriggers}
+            canWriteTrusted={canWriteTrusted}
+            onChange={(next) => update(i, next)}
+            onRemove={() => remove(i)}
+          />
+        ))}
+      </div>
       <Button type="button" variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={add}>
         <Plus className="size-3" />
-        添加事件
+        添加监听器
       </Button>
     </Section>
   )
 }
 
-/* ---------- 节点事件（P3：后端真分发的 6 种触发点 × 4 种动作） ---------- */
+/* ---------- 节点事件（P3：后端真分发的 6 种触发点 × 5 种动作） ---------- */
 
 function NodeEventsSection({ value, onChange }: { value: NodeEvent[]; onChange: (v: NodeEvent[]) => void }) {
   return (
     <EventsSection
-      title="节点事件"
-      hint="在节点生命周期触发点执行 通知 / Webhook / 脚本 / API。"
+      hint="在节点生命周期触发点执行 通知 / Webhook / 脚本 / API / 自定义监听器。前置触发点可开启阻断办理。"
       value={value}
       onChange={onChange}
       triggerMeta={EVENT_TRIGGER_META}
+      blockingTriggers={BLOCKING_NODE_TRIGGERS}
       makeDefault={() => ({ trigger: "TASK_AFTER_COMPLETE", action: "NOTIFY", notify: { to: [], template: "" } })}
     />
   )
 }
 
-/* ---------- 流程事件（流程实例生命周期：启动 / 结束 / 撤销 × 4 种动作） ---------- */
+/* ---------- 流程事件（流程实例生命周期：启动 / 结束 / 撤销 × 5 种动作） ---------- */
 
 function ProcessEventsSection({ value, onChange }: { value: ProcessEvent[]; onChange: (v: ProcessEvent[]) => void }) {
   return (
     <EventsSection
-      title="流程事件"
-      hint="在流程实例生命周期触发点执行 通知 / Webhook / 脚本 / API。"
+      hint="在流程实例生命周期触发点执行 通知 / Webhook / 脚本 / API / 自定义监听器。流程启动前可开启阻断发起。"
       value={value}
       onChange={onChange}
       triggerMeta={PROCESS_EVENT_TRIGGER_META}
+      blockingTriggers={BLOCKING_PROCESS_TRIGGERS}
       makeDefault={() => ({ trigger: "PROCESS_START", action: "NOTIFY", notify: { to: [], template: "" } })}
     />
   )

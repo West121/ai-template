@@ -251,7 +251,7 @@ export type EventTrigger =
   | "TASK_BEFORE_UNDO" // 撤办前
   | "TASK_AFTER_UNDO" // 撤办后
 
-export type EventAction = "NOTIFY" | "WEBHOOK" | "SCRIPT" | "API"
+export type EventAction = "NOTIFY" | "WEBHOOK" | "SCRIPT" | "API" | "DELEGATE"
 
 /**
  * 事件脚本体（action=SCRIPT 用）：与 flow/model.ts 的 `ScriptConfig`（lang+code）字节对齐/结构等价。
@@ -282,6 +282,12 @@ export interface EventApiConfig {
  */
 export interface EventActionConfig {
   action: EventAction
+  /**
+   * 阻断办理：仅前置触发点（TASK_BEFORE_COMPLETE/TASK_BEFORE_UNDO/PROCESS_START）有意义。
+   * true 时该动作失败（脚本 false/异常、API 非 2xx、DELEGATE 抛异常）中止本次办理并回滚；false（默认）fire-and-forget。
+   * 与后端 OaEventDelegate 的 blocking 契约对齐；AFTER 类触发点忽略此开关。
+   */
+  blocking?: boolean
   /** action=NOTIFY 用 */
   notify?: { to: OrgRef[]; template: string }
   /** action=WEBHOOK 用（保留：简单回调 URL） */
@@ -290,6 +296,11 @@ export interface EventActionConfig {
   script?: EventScript
   /** action=API 用：完整 HTTP（method/url/headers/body） */
   api?: EventApiConfig
+  /**
+   * action=DELEGATE 用：自定义监听器 = 后端受信 Spring bean 名（实现 WfEventHandler）。
+   * 运行时 applicationContext.getBean(bean, WfEventHandler.class).handle(ctx)。治理同 wf:script:write。
+   */
+  delegate?: { bean: string }
 }
 
 export interface NodeEvent extends EventActionConfig {
