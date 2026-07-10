@@ -331,13 +331,14 @@ function renderSourceConfig(
   }
   // 账户/角色/部门固定 → OrgPicker（按类型限定范围）
   if (source === "FIXED") {
-    const types = ASSIGNEE_FIXED_REF_TYPES[rule.kind]
+    const types = ASSIGNEE_FIXED_REF_TYPES[rule.kind] ?? []
+    const kindLabel = ASSIGNEE_KIND_META[rule.kind]?.label ?? "办理人"
     return (
       <>
         <OrgPickerField
           value={rule.refs ?? []}
           multiple
-          placeholder={`选择${ASSIGNEE_KIND_META[rule.kind].label}`}
+          placeholder={`选择${kindLabel}`}
           onOpen={() => setOrgPickerIndex(index)}
           onRemove={(ref) =>
             updateRule(index, {
@@ -349,7 +350,7 @@ function renderSourceConfig(
         <OrgPicker
           open={orgPickerIndex === index}
           onOpenChange={(open) => !open && setOrgPickerIndex(null)}
-          title={`选择${ASSIGNEE_KIND_META[rule.kind].label}`}
+          title={`选择${kindLabel}`}
           types={types}
           value={rule.refs ?? []}
           onConfirm={(refs) => updateRule(index, { ...rule, refs })}
