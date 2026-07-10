@@ -101,12 +101,15 @@ public class WfTaskService {
                 .listPage(Math.max(pageNum - 1, 0) * pageSize, pageSize);
         List<TaskItem> list = tasks.stream().map(t -> {
             WfInstanceExt inst = instanceRepository.findByProcInstId(t.getProcessInstanceId()).orElse(null);
+            // 已办：viewPath 由流程定义 form_view_path 模板 + 历史实例 businessKey 生成（无模板则 null）
+            String tpl = viewPathTemplate(t.getProcessDefinitionId());
+            String viewPath = tpl == null ? null : applyViewTemplate(tpl, historicBusinessKey(t.getProcessInstanceId()));
             return new TaskItem(t.getId(), t.getProcessInstanceId(),
                     inst != null ? inst.getTitle() : null,
                     inst != null ? inst.getDefName() : null,
                     t.getName(),
                     inst != null ? inst.getInitiatorName() : null,
-                    inst != null ? inst.getCreatedAt() : null, false, false);
+                    inst != null ? inst.getCreatedAt() : null, false, false, viewPath);
         }).toList();
         return new PageResult<>(list, total, pageNum, pageSize);
     }
@@ -119,41 +122,84 @@ public class WfTaskService {
         String defName = inst != null ? inst.getDefName() : null;
         String initiatorName = inst != null ? inst.getInitiatorName() : null;
         OffsetDateTime createdAt = inst != null ? inst.getCreatedAt() : null;
-        if (inst == null) {
-            // 无 wf_instance_ext 托管的实例（如公文办文经 RuntimeService 起）——从共享 Flowable 引擎回退取
-            // 流程名/标题(实例名)/发起人/起始时间。只读本引擎数据，workflow 不反向依赖起单方(office)。
-            FlowableMeta m = flowableMeta(t.getProcessInstanceId());
-            title = m.title();
-            defName = m.defName();
-            initiatorName = m.initiatorName();
-            createdAt = m.createdAt();
+        String viewPath = null;
+
+        // 流程定义 form_view_path 模板（任何流程都可配；普通流程为 null）→ 决定是否需实例 businessKey
+        String tpl = viewPathTemplate(t.getProcessDefinitionId());
+        if (inst == null || tpl != null) {
+            // 无 wf_instance_ext 托管（如公文办文经 RuntimeService 起）→ 从共享 Flowable 引擎回退取元数据；
+            // 有 form_view_path 模板 → 取 businessKey 生成 viewPath。只读本引擎数据，workflow 不反向依赖起单方(office)。
+            ProcessInstance pi = flowableInstance(t.getProcessInstanceId());
+            if (pi != null) {
+                if (inst == null) {
+                    title = StringUtils.hasText(pi.getName()) ? pi.getName() : null;
+                    defName = pi.getProcessDefinitionName();
+                    Object inm = safeVariable(pi.getId(), "initiatorName");
+                    initiatorName = inm != null ? String.valueOf(inm) : null;
+                    createdAt = pi.getStartTime() == null ? null
+                            : pi.getStartTime().toInstant().atZone(ZoneId.systemDefault()).toOffsetDateTime();
+                }
+                if (tpl != null) {
+                    viewPath = applyViewTemplate(tpl, pi.getBusinessKey());
+                }
+            }
         }
         return new TaskItem(t.getId(), t.getProcessInstanceId(),
-                title, defName, t.getName(), initiatorName, createdAt, claim, delegated);
+                title, defName, t.getName(), initiatorName, createdAt, claim, delegated, viewPath);
     }
 
-    /** 从 Flowable 运行时实例回退取元数据（实例名=标题、流程定义名、initiatorName 变量、起始时间）。 */
-    private FlowableMeta flowableMeta(String procInstId) {
+    /** 流程定义(defKey=procDefId 冒号前段)的 form_view_path 模板；无则 null。 */
+    private String viewPathTemplate(String procDefId) {
+        if (procDefId == null) {
+            return null;
+        }
+        String defKey = procDefId.contains(":") ? procDefId.substring(0, procDefId.indexOf(':')) : procDefId;
+        return processRepository.findByDefCode(defKey)
+                .map(WfProcessExt::getFormViewPath)
+                .filter(StringUtils::hasText)
+                .orElse(null);
+    }
+
+    /**
+     * 套用 view 模板：无 {id} 占位符直接返回模板；有 {id} 则用 businessKey 末段（如 GW:67 → 67）替换。
+     * businessKey 缺失/无末段时返回 null（前端回退通用实例详情）。
+     */
+    private String applyViewTemplate(String template, String businessKey) {
+        if (!template.contains("{id}")) {
+            return template;
+        }
+        if (!StringUtils.hasText(businessKey)) {
+            return null;
+        }
+        String id = businessKey.contains(":")
+                ? businessKey.substring(businessKey.lastIndexOf(':') + 1) : businessKey;
+        return StringUtils.hasText(id) ? template.replace("{id}", id) : null;
+    }
+
+    private ProcessInstance flowableInstance(String procInstId) {
         try {
-            ProcessInstance pi = runtimeService.createProcessInstanceQuery()
-                    .processInstanceId(procInstId).singleResult();
-            if (pi == null) {
-                return new FlowableMeta(null, null, null, null);
-            }
-            Object initiatorName = runtimeService.getVariable(procInstId, "initiatorName");
-            OffsetDateTime createdAt = pi.getStartTime() == null ? null
-                    : pi.getStartTime().toInstant().atZone(ZoneId.systemDefault()).toOffsetDateTime();
-            return new FlowableMeta(
-                    StringUtils.hasText(pi.getName()) ? pi.getName() : null,
-                    pi.getProcessDefinitionName(),
-                    initiatorName != null ? String.valueOf(initiatorName) : null,
-                    createdAt);
+            return runtimeService.createProcessInstanceQuery().processInstanceId(procInstId).singleResult();
         } catch (Exception e) {
-            return new FlowableMeta(null, null, null, null);
+            return null;
         }
     }
 
-    private record FlowableMeta(String title, String defName, String initiatorName, OffsetDateTime createdAt) {
+    private String historicBusinessKey(String procInstId) {
+        try {
+            var hpi = historyService.createHistoricProcessInstanceQuery()
+                    .processInstanceId(procInstId).singleResult();
+            return hpi != null ? hpi.getBusinessKey() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Object safeVariable(String procInstId, String name) {
+        try {
+            return runtimeService.getVariable(procInstId, name);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /* ---------------- 审批通过（委派感知） ---------------- */

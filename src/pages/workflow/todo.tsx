@@ -127,7 +127,7 @@ export function TodoList({ onCount }: { onCount?: (n: number) => void }) {
               className="h-7 px-2 text-xs text-primary hover:text-primary"
               onClick={(e) => {
                 e.stopPropagation()
-                navigate(wfInstancePath(row.original))
+                navigate(row.original.viewPath ?? wfInstancePath(row.original))
               }}
             >
               去处理
@@ -159,7 +159,7 @@ export function TodoList({ onCount }: { onCount?: (n: number) => void }) {
           loading={loading}
           searchKeys={["instanceTitle", "defName", "initiatorName"]}
           searchPlaceholder="搜索标题 / 流程 / 发起人"
-          onRowClick={(row) => navigate(wfInstancePath(row))}
+          onRowClick={(row) => navigate(row.viewPath ?? wfInstancePath(row))}
           onRefresh={() => void load()}
           exportFileName="我的待办"
         />

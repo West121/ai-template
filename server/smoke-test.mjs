@@ -246,6 +246,7 @@ check("非发起人(王经理)待办含签发任务", !!gwSignTask, (gwMgrTodo.b
 check("公文任务在通用待办显示流程名/标题/发起人(非空)",
   !!gwSignTask && gwSignTask.defName === "发文办理单" && gwSignTask.instanceTitle === "冒烟测试发文A：情况通报" && !!gwSignTask.initiatorName,
   JSON.stringify({ defName: gwSignTask?.defName, title: gwSignTask?.instanceTitle, initiator: gwSignTask?.initiatorName }))
+check("公文待办 viewPath 指向办文单(/document/send/{docId})", gwSignTask?.viewPath === `/document/send/${aId}`, gwSignTask?.viewPath)
 const isA = await call(admin.token, "POST", `/api/office/doc/${aId}/opinion`, { decision: "APPROVE", opinion: "同意签发" })
 const a = { id: aId, draft: drA.body, issued: isA.body }
 check("签发占正式号(ISSUED)", a.issued?.data?.status === "ISSUED" && a.issued?.data?.currentTask?.taskKey === "seal", JSON.stringify({ s: a.issued?.data?.status, t: a.issued?.data?.currentTask?.taskKey }))
@@ -546,6 +547,7 @@ check("wf 发起后当前节点=部门经理审批", (startA.body?.data?.current
 const mgrTodo = await call(manager.token, "GET", "/api/wf/tasks/todo?pageNum=1&pageSize=100")
 const taskA = (mgrTodo.body?.data?.list ?? []).find((t) => t.instanceTitle === titleA)
 check("wf 部门经理待办出现", !!taskA, JSON.stringify((mgrTodo.body?.data?.list ?? []).map((t) => t.instanceTitle)))
+check("普通流程待办 viewPath 为 null(不回归)", taskA ? (taskA.viewPath === null || taskA.viewPath === undefined) : true, JSON.stringify(taskA?.viewPath))
 const mgrUnreadAfter = (await call(manager.token, "GET", "/api/wf/notifies/unread-count")).body?.data ?? 0
 check("wf 部门经理收到 TODO 通知(未读+)", mgrUnreadAfter > mgrUnreadBefore, `${mgrUnreadBefore}->${mgrUnreadAfter}`)
 

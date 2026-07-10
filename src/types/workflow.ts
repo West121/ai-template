@@ -293,6 +293,12 @@ export interface WfTaskItem {
   groupClaim?: boolean
   /** 委派/代理产生的任务 */
   delegated?: boolean
+  /**
+   * 办理跳转路径（后端下发）：CODE 表单流程(如公文)带 form_view_path 时，
+   * 后端解析 businessKey 得到业务详情路由(如 /document/send/67)。
+   * 「去处理」优先用它——公文实例走 RuntimeService、无 wf_instance_ext，走通用实例详情会 404。
+   */
+  viewPath?: string
 }
 
 /** GET /api/wf/instances/done-by-me 已办项 */
