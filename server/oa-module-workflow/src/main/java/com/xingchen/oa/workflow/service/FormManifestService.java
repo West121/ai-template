@@ -2,6 +2,7 @@ package com.xingchen.oa.workflow.service;
 
 import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.workflow.convert.FormManifestExtractor;
+import com.xingchen.oa.workflow.dto.CodeFormItem;
 import com.xingchen.oa.workflow.dto.FieldDescriptor;
 import com.xingchen.oa.workflow.dto.FormFieldManifest;
 import com.xingchen.oa.workflow.entity.WfFormDef;
@@ -12,7 +13,10 @@ import org.springframework.util.StringUtils;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 表单字段清单（N-B-03，设计文档第二部分 2.2/2.3）。按 formKey(=wf_form_def.code) 取最新版本表单，
@@ -42,6 +46,32 @@ public class FormManifestService {
         // 默认按 ONLINE 处理（form_type 缺省 ONLINE）
         List<FieldDescriptor> fields = FormManifestExtractor.extract(def.getSchemaJson());
         return new FormFieldManifest(formKey, FormFieldManifest.TYPE_ONLINE, fields);
+    }
+
+    /** 已登记 CODE 表单清单（供绑定 UI 下拉）：同 code 取最高版本，返回 {formKey,name,fieldCount}。 */
+    public List<CodeFormItem> codeForms() {
+        List<CodeFormItem> out = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (WfFormDef def : repository.findByFormTypeOrderByCodeAscVersionDesc(WfFormDef.TYPE_CODE)) {
+            if (!seen.add(def.getCode())) {
+                continue; // 已收录该 code 的最高版本（排序 code asc, version desc）
+            }
+            out.add(new CodeFormItem(def.getCode(), def.getName(), fieldCount(def)));
+        }
+        return out;
+    }
+
+    private int fieldCount(WfFormDef def) {
+        if (!StringUtils.hasText(def.getFieldManifest())) {
+            return 0;
+        }
+        try {
+            return objectMapper.readValue(def.getFieldManifest(),
+                    new TypeReference<List<FieldDescriptor>>() {
+                    }).size();
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     /** CODE 表单：读后台登记的字段清单；无清单 → 404（前端 registry 兜底）。 */

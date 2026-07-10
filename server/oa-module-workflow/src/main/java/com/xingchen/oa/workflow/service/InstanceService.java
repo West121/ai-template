@@ -106,7 +106,7 @@ public class InstanceService {
                 .filter(p -> inStartScope(p, uid))
                 .map(p -> new StartableItem(p.getDefCode(), p.getName(), p.getCategory(), p.getIcon(),
                         p.getFormCode(), p.getFormVersion(), formSchema(p.getFormCode(), p.getFormVersion()),
-                        p.getFormType(), p.getFormSubmitPath(), p.getFormViewPath()))
+                        WfProcessExt.canonicalFormType(p.getFormType()), p.getFormSubmitPath(), p.getFormViewPath()))
                 .toList();
     }
 
@@ -359,8 +359,8 @@ public class InstanceService {
         if (canCancel && def != null && !operationEnabled(def, "cancel")) {
             canCancel = false;
         }
-        String formType = def != null && StringUtils.hasText(def.getFormType())
-                ? def.getFormType() : WfProcessExt.FORM_DYNAMIC;
+        // 术语归一：DYNAMIC→ONLINE、CUSTOM→CODE（兼容读旧值）
+        String formType = WfProcessExt.canonicalFormType(def != null ? def.getFormType() : null);
         String formViewPath = def != null ? def.getFormViewPath() : null;
 
         // 跟踪图分流：DINGTALK 定义额外回传 designerJson（钉钉模型），前端据 designerType 选钉钉跟踪图 / bpmn 图

@@ -19,4 +19,7 @@ public interface WfFormDefRepository extends JpaRepository<WfFormDef, Long> {
     Optional<WfFormDef> findTopByCodeAndStatusOrderByVersionDesc(String code, String status);
 
     Optional<WfFormDef> findTopByCodeOrderByVersionDesc(String code);
+
+    /** 按类型列出（CODE 表单清单用）；同 code 多版本取最高版由服务层去重。 */
+    List<WfFormDef> findByFormTypeOrderByCodeAscVersionDesc(String formType);
 }

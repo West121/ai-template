@@ -203,6 +203,29 @@ const pdefs = await call(admin.token, "GET", "/api/wf/process-defs?pageNum=1&pag
 const pdCodes = new Set((pdefs.body?.data?.list ?? []).map((p) => p.defCode))
 check("公文流程进入流程定义列表(gw_send/gw_recv)", pdCodes.has("gw_send") && pdCodes.has("gw_recv"), [...pdCodes].join(","))
 
+// CODE 表单字段识别：gw_send 字段清单含 needCountersign（驱动会签网关条件），不再 404
+const gwSendFields = await call(admin.token, "GET", "/api/wf/forms/gw_send/fields")
+const gwSendKeys = (gwSendFields.body?.data?.fields ?? []).map((f) => f.key)
+check("gw_send CODE 字段清单(formType=CODE, 含 needCountersign/docType)",
+  gwSendFields.body?.data?.formType === "CODE" && gwSendKeys.includes("needCountersign") && gwSendKeys.includes("docType"),
+  JSON.stringify({ t: gwSendFields.body?.data?.formType, keys: gwSendKeys }))
+const gwSendDocType = (gwSendFields.body?.data?.fields ?? []).find((f) => f.key === "docType")
+check("gw_send docType 带 select options(供条件运算)", (gwSendDocType?.options ?? []).length >= 5, JSON.stringify(gwSendDocType?.options?.slice(0, 2)))
+const gwRecvFields = await call(admin.token, "GET", "/api/wf/forms/gw_recv/fields")
+check("gw_recv CODE 字段清单(含 needCirculate)",
+  gwRecvFields.body?.data?.formType === "CODE" && (gwRecvFields.body?.data?.fields ?? []).some((f) => f.key === "needCirculate"))
+// CODE 表单列表（绑定 UI 下拉）
+const codeForms = await call(admin.token, "GET", "/api/wf/forms/code")
+check("CODE 表单列表含 gw_send(fieldCount≥10)/gw_recv",
+  (codeForms.body?.data ?? []).some((f) => f.formKey === "gw_send" && f.fieldCount >= 10) &&
+    (codeForms.body?.data ?? []).some((f) => f.formKey === "gw_recv"),
+  JSON.stringify(codeForms.body?.data))
+// 流程定义并入 CODE：startable 认 CODE + submitPath
+const gwStartable = await call(admin.token, "GET", "/api/wf/startable")
+const gwSendCard = (gwStartable.body?.data ?? []).find((p) => p.defCode === "gw_send")
+check("startable gw_send formType=CODE + submitPath",
+  gwSendCard?.formType === "CODE" && gwSendCard?.formSubmitPath === "/document/send?new=1", JSON.stringify(gwSendCard))
+
 const sendPrev = await call(admin.token, "POST", "/api/office/doc/number/preview", { docType: "通知" })
 check("文号预览含六角括号〔〕", /〔\d{4}〕/.test(sendPrev.body?.data?.number ?? ""), sendPrev.body?.data?.number)
 
@@ -1385,8 +1408,8 @@ const P_PREDICT = await mkProc(`p3predict_${TS}`, [
   })
   check("p1c 创建 CUSTOM 表单流程", create.body?.code === 0, JSON.stringify(create.body))
   check(
-    "p1c 定义返回 formType/paths",
-    create.body?.data?.formType === "CUSTOM" &&
+    "p1c 定义返回 formType/paths(旧 CUSTOM 归一读为 CODE)",
+    create.body?.data?.formType === "CODE" &&
       create.body?.data?.formSubmitPath === "/flow/custom/create" &&
       create.body?.data?.formViewPath === "/flow/custom/view",
     JSON.stringify(create.body?.data),
@@ -1403,8 +1426,8 @@ const P_PREDICT = await mkProc(`p3predict_${TS}`, [
   const startableC = await call(zhangsan.token, "GET", "/api/wf/startable")
   const cCard = (startableC.body?.data ?? []).find((s) => s.defCode === customCode)
   check(
-    "p1c startable 返回 formType=CUSTOM + submit/view 路径",
-    !!cCard && cCard.formType === "CUSTOM" &&
+    "p1c startable 返回 formType=CODE + submit/view 路径",
+    !!cCard && cCard.formType === "CODE" &&
       cCard.formSubmitPath === "/flow/custom/create" && cCard.formViewPath === "/flow/custom/view",
     JSON.stringify(cCard),
   )
@@ -1419,8 +1442,8 @@ const P_PREDICT = await mkProc(`p3predict_${TS}`, [
   const iid = startC.body?.data?.id
   const detC = await call(zhangsan.token, "GET", `/api/wf/instances/${iid}`)
   check(
-    "p1c 详情返回 formType=CUSTOM + formViewPath",
-    detC.body?.data?.formType === "CUSTOM" && detC.body?.data?.formViewPath === "/flow/custom/view",
+    "p1c 详情返回 formType=CODE + formViewPath",
+    detC.body?.data?.formType === "CODE" && detC.body?.data?.formViewPath === "/flow/custom/view",
     JSON.stringify({ formType: detC.body?.data?.formType, formViewPath: detC.body?.data?.formViewPath }),
   )
 }

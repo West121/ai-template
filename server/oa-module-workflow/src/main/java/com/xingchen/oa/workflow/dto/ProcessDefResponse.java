@@ -29,6 +29,6 @@ public record ProcessDefResponse(
         return new ProcessDefResponse(e.getId(), e.getDefCode(), e.getName(), e.getCategory(), e.getIcon(),
                 e.getFormCode(), e.getFormVersion(), e.getDesignerType(), e.getDesignerJson(), e.getBpmnXml(),
                 e.getStatus(), e.getProcessDefinitionId(), e.getRemark(), e.getCreatedAt(),
-                e.getFormType(), e.getFormSubmitPath(), e.getFormViewPath(), e.getFlowConfig());
+                WfProcessExt.canonicalFormType(e.getFormType()), e.getFormSubmitPath(), e.getFormViewPath(), e.getFlowConfig());
     }
 }

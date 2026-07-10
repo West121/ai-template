@@ -27,9 +27,26 @@ public class WfProcessExt {
     /** 图直译：前端归一化 ProcessModel JSON（存 designer_json），发布时经 GraphToBpmnConverter 转 BpmnModel。 */
     public static final String TYPE_GRAPH = "GRAPH";
 
-    /** 表单类型：动态表单（可视化设计器）/ 自定义表单（React 路由页面）。 */
+    /**
+     * 表单类型（收敛术语）：ONLINE=在线设计器表单（字段从 schemaJson 派生）/ CODE=代码手写表单（字段从登记清单取，可带 formSubmitPath）。
+     * 旧值 DYNAMIC/CUSTOM 保留兼容读取：DYNAMIC→ONLINE、CUSTOM→CODE，见 {@link #canonicalFormType}。
+     */
+    public static final String FORM_ONLINE = "ONLINE";
+    public static final String FORM_CODE = "CODE";
+    // 旧术语（存量兼容；新写入统一用 ONLINE/CODE）
     public static final String FORM_DYNAMIC = "DYNAMIC";
     public static final String FORM_CUSTOM = "CUSTOM";
+
+    /** 归一化表单类型为 ONLINE|CODE（旧 DYNAMIC→ONLINE、旧 CUSTOM→CODE；空缺省 ONLINE）。 */
+    public static String canonicalFormType(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return FORM_ONLINE;
+        }
+        return switch (raw.trim().toUpperCase()) {
+            case FORM_CODE, FORM_CUSTOM -> FORM_CODE;
+            default -> FORM_ONLINE; // ONLINE / DYNAMIC / 其它
+        };
+    }
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
