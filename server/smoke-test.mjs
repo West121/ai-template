@@ -325,6 +325,23 @@ const dlRes = await fetch(`${BASE}/api/infra/files/${fileId}/download`, {
 })
 const dlText = await dlRes.text()
 check("infra 文件下载内容一致", dlRes.status === 200 && dlText === fileContent, `status=${dlRes.status}`)
+// B-04/B-19：文件下载越权 —— SELF 用户不得下载他人无关文件（鉴权拒绝为真 HTTP 403）
+const idorDl = await fetch(`${BASE}/api/infra/files/${fileId}/download`, {
+  headers: { Authorization: `Bearer ${zhangsan.token}` },
+})
+check("infra 越权下载他人文件 → 403 (B-04/B-19)", idorDl.status === 403, `status=${idorDl.status}`)
+// 正例：用户可下载自己上传的文件
+const zfd = new FormData()
+zfd.append("file", new Blob([`own-${Date.now()}`], { type: "text/plain" }), "own.txt")
+const zUp = await fetch(`${BASE}/api/infra/files/upload`, {
+  method: "POST", headers: { Authorization: `Bearer ${zhangsan.token}` }, body: zfd,
+}).then((r) => r.json()).catch(() => null)
+const zFileId = zUp?.data?.id
+const zOwnDl = await fetch(`${BASE}/api/infra/files/${zFileId}/download`, {
+  headers: { Authorization: `Bearer ${zhangsan.token}` },
+})
+check("infra 用户下载自己上传的文件 → 200", zOwnDl.status === 200, `status=${zOwnDl.status}`)
+await call(admin.token, "DELETE", `/api/infra/files/${zFileId}`)
 const delFile = await call(admin.token, "DELETE", `/api/infra/files/${fileId}`)
 check("infra 文件删除", delFile.body?.code === 0)
 // 字典 options 树（region：省 > 市 > 区）
