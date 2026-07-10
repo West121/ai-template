@@ -612,25 +612,36 @@ export function FlowDesigner({
                 />
               </label>
               <div className="min-h-0 flex-1 overflow-y-auto">
-                <PropertyPanel
-                  target={{ nodeId: selectedEdge.id, nodeType: "condition" }}
-                  config={{ condition: selectedEdge.data?.condition }}
-                  onChange={(next: WfNodeProps) => updateEdgeCondition(selectedEdge.id, next.condition)}
-                  formFields={fields}
-                  branchMeta={{ isDefault: selectedEdge.data?.isDefault ?? false, priority: 1 }}
-                />
-                {/* 高级公式条件（Tier 1）：与上方结构化条件二选一，非空时优先（见 model.ts 边条件三态） */}
-                <div className="space-y-1.5 border-t px-3.5 py-3">
-                  <div className="text-xs font-medium">高级公式条件（expression）</div>
-                  <p className="text-[11px] text-muted-foreground">
-                    结构化条件表达不了时用公式；与上方结构化条件二选一，配置后优先生效。前端仅即时校验/预览，提交以后端为准。
+                {selectedEdge.data?.isDefault ? (
+                  // 默认分支按 BPMN 规范无条件（附录 C.4）：不展示条件/公式编辑，给明确说明
+                  <p className="px-3.5 py-3 text-[11px] leading-relaxed text-muted-foreground">
+                    <span className="font-medium text-foreground">默认分支</span>：网关其它出边条件都不满足时进入，
+                    按 BPMN 规范<span className="font-medium">无需也不可配置条件</span>。
+                    如需改为「按条件进入」，请先关闭上方「默认分支」开关，再配置结构化条件或高级公式。
                   </p>
-                  <FormulaDesigner
-                    value={selectedEdge.data?.expression ?? ""}
-                    onChange={(expr) => updateEdgeExpression(selectedEdge.id, expr)}
-                    fields={fields}
-                  />
-                </div>
+                ) : (
+                  <>
+                    <PropertyPanel
+                      target={{ nodeId: selectedEdge.id, nodeType: "condition" }}
+                      config={{ condition: selectedEdge.data?.condition }}
+                      onChange={(next: WfNodeProps) => updateEdgeCondition(selectedEdge.id, next.condition)}
+                      formFields={fields}
+                      branchMeta={{ isDefault: false, priority: 1 }}
+                    />
+                    {/* 高级公式条件（Tier 1）：与上方结构化条件二选一，非空时优先（见 model.ts 边条件三态） */}
+                    <div className="space-y-1.5 border-t px-3.5 py-3">
+                      <div className="text-xs font-medium">高级公式条件（expression）</div>
+                      <p className="text-[11px] text-muted-foreground">
+                        结构化条件表达不了时用公式；与上方结构化条件二选一，配置后优先生效。前端仅即时校验/预览，提交以后端为准。
+                      </p>
+                      <FormulaDesigner
+                        value={selectedEdge.data?.expression ?? ""}
+                        onChange={(expr) => updateEdgeExpression(selectedEdge.id, expr)}
+                        fields={fields}
+                      />
+                    </div>
+                  </>
+                )}
               </div>
             </>
               ) : (
