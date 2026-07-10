@@ -143,6 +143,7 @@ export const menuTree: MenuItem[] = [
       { title: "表单设计器", path: "/demo/form-designer", icon: TextCursorInput },
       { title: "弹窗选择", path: "/demo/record-picker", icon: ListChecks },
       { title: "高级表单", path: "/demo/form", icon: FileStack },
+      { title: "富文本编辑器", path: "/demo/rich-text", icon: SquarePen },
       { title: "审批流设计器", path: "/demo/approval-flow", icon: GitFork },
       { title: "流程设计器", path: "/demo/flow-designer", icon: Workflow },
     ],

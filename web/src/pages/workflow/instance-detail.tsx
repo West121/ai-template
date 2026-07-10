@@ -29,6 +29,7 @@ import type { FieldPolicyMap } from "@/lib/form-manifest"
 import "@/pages/workflow/forms" // 触发 CODE 表单登记（registerForm 副作用）
 import { Modal } from "@/components/modal"
 import { Drawer } from "@/components/drawer"
+import { RichTextViewer } from "@/components/rich-text"
 import { WfOpBar } from "@/components/wf-op-dialogs"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -181,7 +182,12 @@ function Timeline({ items }: { items: WfTimelineItem[] }) {
               <div className="mt-0.5 text-xs text-muted-foreground">
                 {item.actorName ?? "系统"} · {wfFormatTime(item.createdAt)}
               </div>
-              {item.comment && <div className="mt-1 rounded bg-muted/60 px-2 py-1 text-xs">{item.comment}</div>}
+              {item.comment && (
+                <div className="mt-1 rounded bg-muted/60 px-2 py-1">
+                  {/* 意见可能是富文本 HTML（升级后）或存量纯文本，统一走 Viewer（内部 sanitize） */}
+                  <RichTextViewer html={item.comment} className="text-xs" />
+                </div>
+              )}
             </div>
           </div>
         )

@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/select"
 import { Drawer } from "@/components/drawer"
 import { cn } from "@/lib/utils"
-import { RichTextEditor } from "./rich-text"
+import { RichTextEditor } from "@/components/rich-text"
 import { createDoc, type GwDraftPayload } from "./mock"
 import { DOC_TYPES, type GwAttachment, type GwDirection, type GwDoc } from "./types"
 
@@ -274,7 +274,7 @@ export function DraftFormDialog({
 
         <div className="space-y-1.5">
           <Label>正文</Label>
-          <RichTextEditor value={content} onChange={setContent} />
+          <RichTextEditor preset="standard" value={content} onChange={setContent} minHeight={220} placeholder="请输入公文正文…" />
         </div>
 
         {isSend && (

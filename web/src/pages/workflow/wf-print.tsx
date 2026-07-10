@@ -9,6 +9,7 @@
 import { createPortal } from "react-dom"
 import { Printer, X } from "lucide-react"
 import { AuthImg } from "@/components/auth-img"
+import { stripHtml } from "@/components/rich-text/strip-html"
 import { Button } from "@/components/ui/button"
 import {
   widgetKey,
@@ -211,7 +212,8 @@ export function WfPrintView({
                     <td className="border border-gray-400 px-2 py-1">{t.nodeName ?? "—"}</td>
                     <td className="border border-gray-400 px-2 py-1">{t.actorName ?? "系统"}</td>
                     <td className="border border-gray-400 px-2 py-1">{ACTION_LABEL[t.action] ?? t.action}</td>
-                    <td className="border border-gray-400 px-2 py-1">{t.comment ?? ""}</td>
+                    {/* 意见可能是富文本 HTML：套打表格内取纯文本 */}
+                    <td className="border border-gray-400 px-2 py-1">{stripHtml(t.comment)}</td>
                     <td className="border border-gray-400 px-2 py-1">{wfFormatTime(t.createdAt)}</td>
                   </tr>
                 ))

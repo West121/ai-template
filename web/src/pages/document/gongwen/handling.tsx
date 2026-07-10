@@ -10,7 +10,7 @@ import { Check, RotateCcw, Send, Share2, Stamp, Archive, FileSignature } from "l
 import { cn } from "@/lib/utils"
 import { useHasPerm } from "@/stores/auth-store"
 import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
+import { RichTextEditor, RichTextViewer } from "@/components/rich-text"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -61,7 +61,10 @@ export function OpinionTimeline({
                 {item.userName} · {gwFormatTime(item.createdAt)}
               </div>
               {item.opinion && (
-                <div className="mt-1 rounded bg-muted/60 px-2 py-1 text-xs leading-relaxed">{item.opinion}</div>
+                <div className="mt-1 rounded bg-muted/60 px-2 py-1">
+                  {/* 意见可能是富文本 HTML（升级后）或存量纯文本，统一走 Viewer（内部 sanitize） */}
+                  <RichTextViewer html={item.opinion} className="text-xs leading-relaxed" />
+                </div>
               )}
             </div>
           </div>
@@ -301,12 +304,15 @@ export function OpinionActionBar({
               </div>
             )}
             <div className="space-y-1.5">
-              <Label htmlFor="opinion">办理意见</Label>
-              <Textarea
-                id="opinion"
+              <Label>办理意见</Label>
+              {/* 富文本意见（契约 §4）：minimal 档 + 2000 字上限；空文档由编辑器归一为 "" */}
+              <RichTextEditor
+                preset="minimal"
+                maxLength={2000}
+                minHeight={96}
+                maxHeight={240}
                 value={opinion}
-                onChange={(e) => setOpinion(e.target.value)}
-                rows={4}
+                onChange={setOpinion}
                 placeholder={
                   dialog?.mode === "REJECT"
                     ? "请填写退回理由…"

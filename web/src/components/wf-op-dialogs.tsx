@@ -43,6 +43,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { RichTextEditor } from "@/components/rich-text"
 import { HostedForm } from "@/components/hosted-form"
 import { buildFieldPolicyMap } from "@/components/field-perms-editor"
 import { getForm, isCodeForm, type HostedFormHandle } from "@/lib/form-registry"
@@ -109,6 +110,32 @@ function Field({ label, required, children }: { label: string; required?: boolea
       </Label>
       {children}
     </div>
+  )
+}
+
+/**
+ * 审批/办理意见富文本（契约 §4）：minimal 档 + 2000 字上限。
+ * 空文档由编辑器归一为 ""，故各弹窗既有 `comment.trim()` 的必填/判空逻辑不被 `<p></p>` 骗过。
+ */
+function OpinionEditor({
+  value,
+  onChange,
+  placeholder = "选填",
+}: {
+  value: string
+  onChange: (html: string) => void
+  placeholder?: string
+}) {
+  return (
+    <RichTextEditor
+      preset="minimal"
+      maxLength={2000}
+      minHeight={72}
+      maxHeight={200}
+      value={value}
+      onChange={onChange}
+      placeholder={placeholder}
+    />
   )
 }
 
@@ -194,7 +221,7 @@ function AddSignDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
           <OrgField value={refs} onChange={setRefs} title="选择加签人" placeholder="选择成员 / 部门 / 角色" />
         </Field>
         <Field label="意见">
-          <Textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder="选填" />
+          <OpinionEditor value={comment} onChange={setComment} />
         </Field>
       </div>
     </Modal>
@@ -240,7 +267,7 @@ function CounterSignDialog({ detail, open, onOpenChange, onDone }: DialogProps) 
           <OrgField value={refs} onChange={setRefs} title="选择并签人" />
         </Field>
         <Field label="意见">
-          <Textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder="选填" />
+          <OpinionEditor value={comment} onChange={setComment} />
         </Field>
       </div>
     </Modal>
@@ -360,7 +387,7 @@ function AssigneeDialog({
           <OrgField value={refs} onChange={setRefs} multiple={false} title={`选择${meta.title}对象`} />
         </Field>
         <Field label="意见">
-          <Textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder="选填" />
+          <OpinionEditor value={comment} onChange={setComment} />
         </Field>
       </div>
     </Modal>
@@ -403,12 +430,7 @@ function AssistDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
           <OrgField value={refs} onChange={setRefs} title="选择协办人" />
         </Field>
         <Field label="征求内容" required>
-          <Textarea
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            rows={3}
-            placeholder="请填写需要征求意见的内容"
-          />
+          <OpinionEditor value={comment} onChange={setComment} placeholder="请填写需要征求意见的内容" />
         </Field>
       </div>
     </Modal>
@@ -457,12 +479,7 @@ function RejectDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
     >
       <div className="space-y-4">
         <Field label="驳回意见" required>
-          <Textarea
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            rows={3}
-            placeholder="请填写驳回原因"
-          />
+          <OpinionEditor value={comment} onChange={setComment} placeholder="请填写驳回原因" />
         </Field>
         <Field label="退回到">
           <RadioGroup
@@ -906,12 +923,7 @@ function ApproveDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
           </div>
         )}
         <Field label="审批意见">
-          <Textarea
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            rows={3}
-            placeholder="选填，默认为「同意」"
-          />
+          <OpinionEditor value={comment} onChange={setComment} placeholder="选填，默认为「同意」" />
         </Field>
       </div>
     </Modal>

@@ -4,6 +4,8 @@ import type { ColumnDef } from "@tanstack/react-table"
 import { ShieldAlert } from "lucide-react"
 import { DataTable } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
+// 直接从纯函数模块引入，避免把 TipTap 编辑器拉进列表分片（index 会带出 editor）
+import { stripHtml } from "@/components/rich-text/strip-html"
 import { BackendDownCard } from "@/pages/approval/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -69,7 +71,8 @@ export function DoneList() {
         header: () => <span>审批意见</span>,
         cell: ({ row }) => (
           <span className="line-clamp-1 max-w-52 text-sm text-muted-foreground">
-            {row.original.comment || "—"}
+            {/* 意见升级富文本后列内展示纯文本摘要（存量纯文本幂等） */}
+            {stripHtml(row.original.comment, 50) || "—"}
           </span>
         ),
       },
