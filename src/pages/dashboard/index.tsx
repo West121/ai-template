@@ -23,7 +23,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { api, NetworkError } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
-import { useBadgeStore } from "@/stores/badge-store"
 import { typeLabel } from "@/pages/approval/shared"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
@@ -128,7 +127,6 @@ export default function DashboardPage() {
   const user = useAuthStore((s) => s.user)
   const offline = useAuthStore((s) => s.offline)
   const activeAssignmentId = useAuthStore((s) => s.activeAssignmentId)
-  const setBadge = useBadgeStore((s) => s.setBadge)
 
   const [data, setData] = useState<DashboardData | null>(null)
   const [degraded, setDegraded] = useState(false) // offline 或 NetworkError → 用离线演示数据渲染
@@ -146,12 +144,13 @@ export default function DashboardPage() {
       setData(d)
       setDegraded(false)
       setCheckIn(d.todayCheckIn ?? null)
-      setBadge("/workflow/tasks", d.pendingCount)
+      // 注意：工作台 pendingCount 是 office 旧审批(oa_approval)口径，与「我的审批」(wf 待办)不同，
+      // 不能用它驱动 /workflow/tasks 菜单角标——角标由 app-layout/tasks 页按 wf 待办真实数设置。
     } catch (err) {
       if (err instanceof NetworkError) setDegraded(true)
       else toast.error(err instanceof Error ? err.message : "工作台数据加载失败")
     }
-  }, [setBadge])
+  }, [])
 
   useEffect(() => {
     void load()
