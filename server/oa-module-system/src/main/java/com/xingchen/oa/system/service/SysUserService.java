@@ -34,6 +34,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -52,6 +53,7 @@ public class SysUserService {
     private final SysUserRepository userRepository;
     private final SysUserAssignmentRepository assignmentRepository;
     private final SysDeptRepository deptRepository;
+    private final SysDeptService deptService;
     private final SysPostRepository postRepository;
     private final SysRoleRepository roleRepository;
     private final PasswordEncoder passwordEncoder;
@@ -74,9 +76,12 @@ public class SysUserService {
                 predicates.add(cb.equal(root.get("enabled"), enabled));
             }
             if (deptId != null) {
+                // 含子部门：按父部门过滤时返回该部门 + 全部后代部门的用户（去重）。
+                // 复用 DEPT_AND_CHILD 的 ancestors 子树逻辑；in(子查询) 天然按用户去重。
+                Set<Long> deptIds = deptService.descendantDeptIds(deptId);
                 var sub = query.subquery(Long.class);
                 var a = sub.from(SysUserAssignment.class);
-                sub.select(a.get("userId")).where(cb.equal(a.get("dept").get("id"), deptId));
+                sub.select(a.get("userId")).where(a.get("dept").get("id").in(deptIds));
                 predicates.add(root.get("id").in(sub));
             }
             return cb.and(predicates.toArray(new Predicate[0]));

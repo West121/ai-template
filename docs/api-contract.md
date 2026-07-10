@@ -69,13 +69,13 @@ RECEIVE status: TO_SIGN(待签收)/PROCESSING(办理中)/FINISHED(已办结)；S
 - GET `/api/office/dashboard` → {pendingCount【DS】, todayMeetings, monthAttendanceDays, unreadAnnouncements, todayCheckIn?:"09:02", pendingList:前5条【DS】, announcements:前4条, todaySchedules:[...], weekApprovalStats:[{day:"周一",count}] }
 
 ## 系统管理（oa-module-system）
-- GET `/api/system/depts/tree` → [{id,name,parentId,sort,code,leaderId,leaderName,enabled,createdAt,userCount,children[]}]（userCount 含任职人数；leaderName 由后端按 leaderId 一次 findAllById 组装，无 N+1）
+- GET `/api/system/depts/tree` → [{id,name,parentId,sort,code,leaderId,leaderName,enabled,createdAt,userCount,children[]}]（userCount = 该部门自身 + 全部子孙部门的**去重用户数**（子树聚合，一人在子树内多任职/兼任只计一次；故父节点 userCount 可能小于各叶子直属之和，为多岗位模型的正常现象。前端「全公司」= 各顶层节点 userCount 之和）；leaderName 由后端按 leaderId 一次 findAllById 组装，无 N+1）
 - POST `/api/system/depts` {name,parentId,sort,code?,leaderId?,enabled?}（code 全局唯一 uk_sys_dept_code，重复→400"部门编码已存在"；leaderId 须存在→否则 400"负责人不存在"；enabled 缺省 true）【P:system:dept:edit】
 - PUT `/api/system/depts/{id}` 部分更新：仅覆盖请求中非 null 字段 {name?,sort?,code?,leaderId?,enabled?,parentId?}；leaderId=0 表示清空负责人，code 传空串表示清空编码；可单发 {enabled} 即时切换状态、{sort} 调整排序【P:system:dept:edit】
 - DELETE `/api/system/depts/{id}`（有子部门或任职→BusinessException）【P:system:dept:edit】
 - GET `/api/system/posts?keyword=&pageNum=` → {id,code,name,sort,userCount}
 - POST/PUT/DELETE `/api/system/posts...`【P:system:post:edit】
-- GET `/api/system/users?keyword=&deptId=&enabled=&pageNum=` → {id,username,name,empNo,phone,email,gender:MALE|FEMALE|UNKNOWN,birthday,hireDate,officeLocation,leaderId,leaderName,avatar,remark,enabled,createdAt,primaryDeptName,primaryPostName,roleNames[]}；keyword 匹配 name/username/empNo/phone；leaderName 由后端按 leaderId 一次 findAllById 组装（无 N+1）；GET `/{id}` 返回同样全字段
+- GET `/api/system/users?keyword=&deptId=&enabled=&pageNum=` → {id,username,name,empNo,phone,email,gender:MALE|FEMALE|UNKNOWN,birthday,hireDate,officeLocation,leaderId,leaderName,avatar,remark,enabled,createdAt,primaryDeptName,primaryPostName,roleNames[]}；keyword 匹配 name/username/empNo/phone；deptId 按**部门子树**过滤（含该部门 + 全部后代部门的用户，去重；复用 DEPT_AND_CHILD 的 ancestors 子树逻辑，点击父/公司部门可见其所有下级人员）；leaderName 由后端按 leaderId 一次 findAllById 组装（无 N+1）；GET `/{id}` 返回同样全字段
 - POST `/api/system/users` {username,name,phone,password,deptId,postId,roleIds[],empNo?,email?,gender?,birthday?,hireDate?,officeLocation?,leaderId?,avatar?,remark?}（建主任职；empNo 缺省自动生成 XC+4 位递增，传入则查重、唯一约束 uk_sys_user_emp_no）【P:system:user:edit】
 - PUT `/api/system/users/{id}` {name,phone,email?,gender?,birthday?,hireDate?,officeLocation?,leaderId?,avatar?,remark?}（工号不可改；leaderId 不能为本人、须存在）；PUT `/{id}/enabled` {enabled}；POST `/{id}/reset-password`（B-12：重置为一次性随机初始密码，响应 `R<String>` data=新明文密码，供管理员转交用户；不再固定 admin123）；DELETE `/{id}`【P:system:user:edit】
 - GET `/api/system/users/{id}/assignments` → AssignmentInfo[]；POST `/api/system/users/{id}/assignments` {deptId,postId,roleIds[],primary:false} 添加兼任；DELETE `/api/system/assignments/{aid}`（主任职不可删）【P:system:user:edit】

@@ -265,6 +265,25 @@ const tree = await call(admin.token, "GET", "/api/system/depts/tree")
 check("部门树(根=星辰科技)", tree.body?.data?.[0]?.name === "星辰科技" && (tree.body.data[0].children ?? []).length >= 4)
 check("部门树根节点 code=XC-ROOT", tree.body?.data?.[0]?.code === "XC-ROOT", tree.body?.data?.[0]?.code)
 check("子部门 leaderName 已组装", (tree.body?.data?.[0]?.children ?? []).some((d) => typeof d.leaderName === "string" && d.leaderName.length > 0))
+// 组织架构计数/查询语义（子树聚合去重 + deptId 含子部门）
+const company = tree.body?.data?.[0]
+// ① 公司节点 userCount = 子树聚合去重 = 5（admin/王经理/张三/李四/王五；王经理兼任财务部不重复计）
+check("公司节点 userCount=5（子树聚合去重）", company?.userCount === 5, `userCount=${company?.userCount}`)
+// ③ 叶子部门直属计数不变：人事行政部=3、财务部=1（王经理兼任）、技术部=1、产品部=1
+const leafByName = Object.fromEntries((company?.children ?? []).map((d) => [d.name, d.userCount]))
+check("叶子直属计数不变（人事行政部=3/财务部=1/技术部=1/产品部=1）",
+  leafByName["人事行政部"] === 3 && leafByName["财务部"] === 1 && leafByName["技术部"] === 1 && leafByName["产品部"] === 1,
+  JSON.stringify(leafByName))
+// ② 按公司/父部门 deptId 查询返回子部门的人（去重后应为全部 5 人）
+const companyUsers = await call(admin.token, "GET", `/api/system/users?pageNum=1&pageSize=100&deptId=${company.id}`)
+const companyUserNames = new Set((companyUsers.body?.data?.list ?? []).map((u) => u.name))
+check("按公司 deptId 查询含子部门人员（去重=5）",
+  companyUsers.body?.data?.total === 5 && ["系统管理员", "王经理", "张三", "李四", "王五"].every((n) => companyUserNames.has(n)),
+  `total=${companyUsers.body?.data?.total} names=${[...companyUserNames].join("/")}`)
+// 叶子部门精确查询仍按该部门返回：人事行政部(id=4) → 3 人
+const hrDept = (company?.children ?? []).find((d) => d.name === "人事行政部")
+const hrUsers = await call(admin.token, "GET", `/api/system/users?pageNum=1&pageSize=100&deptId=${hrDept.id}`)
+check("按叶子部门 deptId 查询返回该部门人员（人事行政部=3）", hrUsers.body?.data?.total === 3, `total=${hrUsers.body?.data?.total}`)
 const posts = await call(admin.token, "GET", "/api/system/posts?pageNum=1&pageSize=100")
 check("岗位列表", (posts.body?.data?.total ?? 0) >= 5)
 const roles = await call(admin.token, "GET", "/api/system/roles?pageNum=1&pageSize=100")

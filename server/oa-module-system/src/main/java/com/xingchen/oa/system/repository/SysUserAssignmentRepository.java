@@ -32,6 +32,13 @@ public interface SysUserAssignmentRepository extends JpaRepository<SysUserAssign
     List<Object[]> countGroupByDept();
 
     /**
+     * 全量去重的「部门-用户」对（deptId, userId）。
+     * 用于按子树聚合部门人数时去重（一个用户在同一部门的多条任职只出一次）。
+     */
+    @Query("select distinct a.dept.id, a.userId from SysUserAssignment a")
+    List<Object[]> findDistinctDeptUserPairs();
+
+    /**
      * 引用某角色的任职数。
      */
     @Query("select count(a) from SysUserAssignment a join a.roles r where r.id = :roleId")

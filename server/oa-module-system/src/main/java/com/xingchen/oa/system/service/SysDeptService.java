@@ -14,9 +14,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -35,10 +37,7 @@ public class SysDeptService {
     @Transactional(readOnly = true)
     public List<DeptTreeNode> tree() {
         List<SysDept> depts = deptRepository.findAll();
-        Map<Long, Long> userCounts = new HashMap<>();
-        for (Object[] row : assignmentRepository.countGroupByDept()) {
-            userCounts.put((Long) row[0], (Long) row[1]);
-        }
+        Map<Long, Long> userCounts = subtreeUserCounts(depts);
         // 负责人姓名：收集 leaderId 后一次 findAllById 组 map，避免 N+1
         List<Long> leaderIds = depts.stream()
                 .map(SysDept::getLeaderId)
@@ -82,6 +81,59 @@ public class SysDeptService {
 
     private long normalizeParent(Long parentId) {
         return parentId == null ? ROOT_PARENT_ID : parentId;
+    }
+
+    /**
+     * 每个部门的 userCount = 该部门自身 + 全部子孙部门中的<b>去重用户数</b>。
+     * 兼任（一个用户在子树内有多条任职）只计一次；因此父节点聚合值可能小于各叶子直属之和，
+     * 这是多岗位模型的正常现象（如公司节点去重=5，而叶子相加=6）。
+     */
+    private Map<Long, Long> subtreeUserCounts(List<SysDept> depts) {
+        // 直属：deptId -> 该部门去重用户集合
+        Map<Long, Set<Long>> directUsers = new HashMap<>();
+        for (Object[] row : assignmentRepository.findDistinctDeptUserPairs()) {
+            directUsers.computeIfAbsent((Long) row[0], k -> new HashSet<>()).add((Long) row[1]);
+        }
+        Map<Long, Long> counts = new HashMap<>();
+        for (SysDept d : depts) {
+            Set<Long> users = new HashSet<>();
+            for (Long subDeptId : descendantDeptIds(d.getId(), depts)) {
+                Set<Long> direct = directUsers.get(subDeptId);
+                if (direct != null) {
+                    users.addAll(direct);
+                }
+            }
+            counts.put(d.getId(), (long) users.size());
+        }
+        return counts;
+    }
+
+    /**
+     * 部门自身 + 全部子孙部门 id（通过 ancestors 祖先链段级匹配，避免 id=1 误命中 id=11）。
+     * 对外复用（如按父部门过滤用户"含子部门"），会一次性加载全部部门。
+     */
+    @Transactional(readOnly = true)
+    public Set<Long> descendantDeptIds(Long deptId) {
+        return descendantDeptIds(deptId, deptRepository.findAll());
+    }
+
+    private Set<Long> descendantDeptIds(Long deptId, List<SysDept> all) {
+        Set<Long> ids = new HashSet<>();
+        ids.add(deptId);
+        String target = String.valueOf(deptId);
+        for (SysDept d : all) {
+            String ancestors = d.getAncestors();
+            if (ancestors == null || ancestors.isBlank()) {
+                continue;
+            }
+            for (String segment : ancestors.split(",")) {
+                if (segment.equals(target)) {
+                    ids.add(d.getId());
+                    break;
+                }
+            }
+        }
+        return ids;
     }
 
     @Transactional
