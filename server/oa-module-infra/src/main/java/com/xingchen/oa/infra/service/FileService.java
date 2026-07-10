@@ -4,6 +4,7 @@ import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.common.security.CurrentUserHolder;
 import com.xingchen.oa.common.security.UserContext;
+import com.xingchen.oa.infra.access.FileAccessGrant;
 import com.xingchen.oa.infra.config.StorageProperties;
 import com.xingchen.oa.infra.dto.ChunkInitRequest;
 import com.xingchen.oa.infra.dto.ChunkInitResponse;
@@ -61,6 +62,9 @@ public class FileService {
     private final StorageService storageService;
     private final StorageProperties storageProperties;
     private final ObjectMapper objectMapper;
+
+    /** B-17：业务模块注册的文件下载附加放行 SPI（无实现时为空列表）。 */
+    private final List<FileAccessGrant> accessGrants;
 
     /** 分片会话元数据（暂存目录内 upload.meta.json，重启后依然可断点续传） */
     public record ChunkMeta(String fileName, Long size, String contentType, Long chunkSize, String fileHash) {
@@ -121,18 +125,34 @@ public class FileService {
     }
 
     /**
-     * 下载前的归属校验（B-04 IDOR 修复）：上传者本人、持有 system:file:list、
-     * 或数据权限为 ALL 的用户可下载；其余返回 403。
+     * 下载前的归属校验（B-04 IDOR 修复 + B-17 业务放行）：
+     * 上传者本人、持有 system:file:list、数据权限为 ALL，
+     * 或该文件被当前用户可合法查看的业务对象引用（{@link FileAccessGrant}）时可下载；其余返回 403。
      */
     @Transactional(readOnly = true)
     public SysFile getReadableOrThrow(Long id) {
         SysFile file = getOrThrow(id);
         UserContext user = currentUser();
         boolean owner = file.getUploaderId() != null && file.getUploaderId().equals(user.getUserId());
-        if (!owner && !canViewAll(user)) {
+        if (!owner && !canViewAll(user) && !grantedByBusiness(id, user)) {
             throw new BusinessException(403, "无权访问该文件");
         }
         return file;
+    }
+
+    /** B-17：逐个询问业务放行 SPI，任一放行即可下载；单个 grant 异常记日志并按不放行处理（fail-closed）。 */
+    private boolean grantedByBusiness(Long fileId, UserContext user) {
+        for (FileAccessGrant grant : accessGrants) {
+            try {
+                if (grant.canRead(fileId, user)) {
+                    return true;
+                }
+            } catch (Exception e) {
+                log.warn("文件业务放行检查失败 grant={} file={}: {}",
+                        grant.getClass().getSimpleName(), fileId, e.getMessage());
+            }
+        }
+        return false;
     }
 
     private UserContext currentUser() {

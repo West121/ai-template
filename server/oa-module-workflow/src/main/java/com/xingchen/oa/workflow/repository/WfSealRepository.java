@@ -8,4 +8,7 @@ import java.util.List;
 public interface WfSealRepository extends JpaRepository<WfSeal, Long> {
 
     List<WfSeal> findAllByOrderByIdDesc();
+
+    /** B-17：文件是否被某个电子章引用（印章图片是组织级登录可见资产）。 */
+    boolean existsByImageFileId(Long imageFileId);
 }

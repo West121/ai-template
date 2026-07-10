@@ -54,6 +54,14 @@ public class WfWebhookDelegate implements JavaDelegate {
             payload.put("defCode", inst.getDefCode());
             payload.put("title", inst.getTitle());
             payload.put("bizStatus", inst.getBizStatus());
+        } else {
+            // B-10：首节点 webhook 在 wf_instance_ext 落库前触发，从流程变量兜底取标题/定义编码，
+            // 避免 payload 里 title/defCode 缺失。此时实例刚启动，业务状态必为 RUNNING。
+            Object title = execution.getVariable("wfInstanceTitle");
+            Object defCode = execution.getVariable("wfDefCode");
+            payload.put("defCode", defCode != null ? defCode : keyOf(execution.getProcessDefinitionId()));
+            payload.put("title", title);
+            payload.put("bizStatus", WfInstanceExt.STATUS_RUNNING);
         }
         String body;
         try {
@@ -82,6 +90,15 @@ public class WfWebhookDelegate implements JavaDelegate {
                         log.info("WEBHOOK 投递完成 url={} status={}", url, resp.statusCode());
                     }
                 });
+    }
+
+    /** 进程定义 id（形如 {@code leave_approval:1:xxx}）→ 定义 key（==def_code）。 */
+    private String keyOf(String procDefId) {
+        if (procDefId == null) {
+            return null;
+        }
+        int colon = procDefId.indexOf(':');
+        return colon > 0 ? procDefId.substring(0, colon) : procDefId;
     }
 
     private String webhookUrl(String procDefId, String nodeId) {

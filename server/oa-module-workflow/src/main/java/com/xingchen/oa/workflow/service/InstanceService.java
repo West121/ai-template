@@ -174,6 +174,13 @@ public class InstanceService {
                     : initiatorName + "的" + def.getName();
         }
 
+        // B-10：若首节点是 webhook/trigger，引擎启动时会同步驱动其 delegate，
+        // 而此刻 wf_instance_ext 尚未落库（proc_inst_id 由 startEngine 生成，无法先存）。
+        // 因此把标题/定义编码作为流程变量注入，供 delegate 在 ext 未就绪时兜底取用。
+        // 使用 wf 前缀命名，避免与表单字段（条件网关求值）撞名。
+        vars.put("wfInstanceTitle", title);
+        vars.put("wfDefCode", def.getDefCode());
+
         ProcessInstance pi = startEngine(req.defCode(), vars);
 
         WfInstanceExt inst = new WfInstanceExt();

@@ -15,6 +15,10 @@ public interface WfInstanceExtRepository extends JpaRepository<WfInstanceExt, Lo
 
     Page<WfInstanceExt> findByInitiatorId(Long initiatorId, Pageable pageable);
 
+    /** B-17：当前用户发起的全部实例 proc_inst_id（判定可见实例范围）。 */
+    @Query("select i.procInstId from WfInstanceExt i where i.initiatorId = :initiatorId")
+    java.util.List<String> findProcInstIdsByInitiatorId(@Param("initiatorId") Long initiatorId);
+
     Page<WfInstanceExt> findByInitiatorIdAndBizStatus(Long initiatorId, String bizStatus, Pageable pageable);
 
     /** 管理员实例检索：status/keyword 均可空。 */

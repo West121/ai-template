@@ -1,6 +1,6 @@
 # OA 平台 API 契约（前后端开发共同遵守）
 
-> 最后更新：2026-07-09（含修复批次 1：文件下载/审批 logs 归属校验、日志接口 `system:log:list` 权限、DTO 化）。变更历史见 `CHANGELOG.md`。
+> 最后更新：2026-07-10（含 B-17：文件下载业务放行 SPI—电子章/审批附件；B-10：首节点 webhook 时序修复，内部无契约变更）。前次 2026-07-09 修复批次 1。变更历史见 `CHANGELOG.md`。
 
 - 基址：前端经 Vite 代理 `/api` → `http://localhost:8081`
 - 统一响应：`R<T> = { code: 0成功|其他失败, message, data }`；分页 `PageResult<T> = { list, total, pageNum, pageSize }`
@@ -102,6 +102,7 @@ FileRecord = {id,originalName,ext,size,contentType,storageType:LOCAL|MINIO|S3,ob
 - POST `/api/infra/files/upload` multipart(file) → FileRecord（小文件直传）
 - GET `/api/infra/files/{id}/download` → 文件流（attachment；MINIO/S3 也统一走后端流式转发）
   归属校验（B-04 IDOR 修复）：仅上传者本人 / 持有 system:file:list / 数据权限 ALL 可下载，其余 → 403
+  业务放行（B-17）：在上述判定之后，追加「文件被当前用户可合法查看的业务对象引用」兜底放行（infra `FileAccessGrant` SPI，业务模块实现，端点/URL 不变）。当前 workflow 覆盖：① 电子章图片（被任一 wf_seal 引用→放行任意登录用户，印章为组织级登录可见资产）；② 审批操作附件（approve/reject 的 attachments，被当前用户可见实例——其发起/办理/抄送——的操作引用时放行）。**未覆盖(TODO)**：表单上传控件产生、存于 form_data 的文件（需写入时建 file↔实例关联表）。
 - DELETE `/api/infra/files/{id}`【P:system:file:edit】（同时删存储对象）
 - 分片上传/断点续传/秒传：
   - POST `/api/infra/files/chunk/init` {fileName,size,contentType,chunkSize,fileHash} → {uploadId,uploaded:number[],instant:boolean,file?:FileRecord}
