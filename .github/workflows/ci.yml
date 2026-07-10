@@ -11,7 +11,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "chore/**", "fix/**", "feat/**"]
   pull_request:
   workflow_dispatch:
 
