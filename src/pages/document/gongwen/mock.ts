@@ -380,7 +380,10 @@ function mapDetail(r: RawDetail): GwDoc {
     sourceCode: isRecv ? r.code : undefined,
     registerNo: isRecv ? r.code : undefined,
     receivedAt: isRecv ? r.createdAt?.slice(0, 10) : undefined,
-    currentTask: r.currentTask?.taskKey,
+    // currentTask 用中文环节名（与 mock 数据、handling.tsx 动作派生口径一致：核稿/签发/…）。
+    // 后端 currentTask 是对象 {taskKey:"review", taskName:"核稿"}——办文动作条按 taskName 匹配，
+    // 若取 taskKey(review) 则永远匹配不上中文分支、动作条为空。
+    currentTask: r.currentTask?.taskName ?? r.currentTask?.taskKey,
     currentNode: r.currentTask?.taskName ?? r.currentTask?.taskKey,
     opinions: (r.timeline ?? []).map((t) => ({
       id: t.id,
