@@ -58,8 +58,16 @@ export interface BackendAssigneeRule {
 
 const KIND_LABEL: Record<OrgRefType, string> = { USER: "成员", DEPT: "部门", ROLE: "角色" }
 
-/** 设计器 AssigneeRule 的 OrgRef → 后端 {kind,id} */
-export const orgRefToBackend = (r: OrgRef): BackendOrgRef => ({ kind: r.type, id: r.id })
+/**
+ * 设计器 AssigneeRule 的 OrgRef → 后端 {kind,id,name}。
+ * name 必须随存：后端 AssigneeResolver 只读 kind/id（多带 name 无害），而回显靠它——
+ * 丢了 name 再载入只能显示占位「成员#5」（用户实测选王五显示成员#5 的根因）。
+ */
+export const orgRefToBackend = (r: OrgRef): BackendOrgRef => ({
+  kind: r.type,
+  id: r.id,
+  ...(r.name ? { name: r.name } : {}),
+})
 
 /**
  * 回显：后端引用 → OrgRef。

@@ -260,7 +260,12 @@ function coerceValue(value: string): string | number {
 
 /* ---------------- OrgRef <-> {kind,id} ---------------- */
 
-const orgRefToBackend = (r: OrgRef): BackendOrgRef => ({ kind: r.type, id: r.id })
+// name 随存：后端只读 kind/id，回显靠 name（丢了只能显示占位「成员#N」）
+const orgRefToBackend = (r: OrgRef): BackendOrgRef => ({
+  kind: r.type,
+  id: r.id,
+  ...(r.name ? { name: r.name } : {}),
+})
 
 const KIND_LABEL: Record<OrgRefType, string> = { USER: "成员", DEPT: "部门", ROLE: "角色" }
 
