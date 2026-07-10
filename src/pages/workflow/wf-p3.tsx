@@ -61,7 +61,7 @@ const NODE_ICON: Record<string, typeof UserCheck> = {
 
 /* ---------------- 流程预测面板 ---------------- */
 
-function PredictChain({ path }: { path: WfPredictNode[] }) {
+export function PredictChain({ path }: { path: WfPredictNode[] }) {
   if (path.length === 0) {
     return <div className="py-6 text-center text-sm text-muted-foreground">无后续节点（流程即将结束）</div>
   }

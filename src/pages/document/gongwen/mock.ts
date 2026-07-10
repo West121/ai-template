@@ -8,6 +8,7 @@
  */
 import { api, NetworkError } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
+import type { WfPredictResult } from "@/types/workflow-p3"
 import type {
   GwCirculation,
   GwDirection,
@@ -416,30 +417,34 @@ function mapDetail(r: RawDetail): GwDoc {
 
 interface FlowNodeStep {
   id: string
-  /** 对应中文环节名（currentTask） */
+  /** 对应中文环节名（currentTask 匹配用；start/end 为空） */
   task: string
+  /** 展示名（预测链节点名） */
+  name: string
+  /** 演示预计办理人（预测链用） */
+  assignees?: string[]
 }
 
 const SEND_FLOW_NODES: FlowNodeStep[] = [
-  { id: "start", task: "" },
-  { id: "draft", task: "拟稿" },
-  { id: "review", task: "核稿" },
-  { id: "countersign", task: "会签" },
-  { id: "issue", task: "签发" },
-  { id: "seal", task: "用印" },
-  { id: "publish", task: "分发" },
-  { id: "end", task: "" },
+  { id: "start", task: "", name: "开始" },
+  { id: "draft", task: "拟稿", name: "拟稿", assignees: ["拟稿人"] },
+  { id: "review", task: "核稿", name: "核稿", assignees: ["赵敏"] },
+  { id: "countersign", task: "会签", name: "会签", assignees: ["财务部经理", "法务部经理"] },
+  { id: "issue", task: "签发", name: "签发", assignees: ["王建国"] },
+  { id: "seal", task: "用印", name: "用印", assignees: ["综合办公室"] },
+  { id: "publish", task: "分发", name: "成文分发", assignees: ["综合办公室"] },
+  { id: "end", task: "", name: "办结归档" },
 ]
 
 const RECV_FLOW_NODES: FlowNodeStep[] = [
-  { id: "start", task: "" },
-  { id: "register", task: "签收登记" },
-  { id: "propose", task: "拟办" },
-  { id: "approve", task: "批办" },
-  { id: "handle", task: "承办" },
-  { id: "circulate", task: "传阅" },
-  { id: "finish", task: "办结" },
-  { id: "end", task: "" },
+  { id: "start", task: "", name: "开始" },
+  { id: "register", task: "签收登记", name: "签收登记" },
+  { id: "propose", task: "拟办", name: "拟办", assignees: ["李文"] },
+  { id: "approve", task: "批办", name: "批办", assignees: ["王建国"] },
+  { id: "handle", task: "承办", name: "承办", assignees: ["市场部"] },
+  { id: "circulate", task: "传阅", name: "传阅", assignees: ["张伟", "刘洋"] },
+  { id: "finish", task: "办结", name: "办结", assignees: ["综合办公室"] },
+  { id: "end", task: "", name: "归档" },
 ]
 
 /** 别名：成文=分发，登记=签收登记 */
@@ -463,6 +468,37 @@ export function deriveHighlight(doc: GwDoc): { completed: string[]; active: stri
     completed: nodes.slice(0, idx).map((n) => n.id),
     active: [nodes[idx].id],
   }
+}
+
+/* --------------------- 流程预测（后续节点链 + 预计办理人） --------------------- */
+
+/** 按当前环节静态演算后续将经过的节点 + 预计办理人（演示数据，与 wf PredictResponse 同构） */
+function predictMock(doc: GwDoc): WfPredictResult {
+  const nodes = doc.direction === "SEND" ? SEND_FLOW_NODES : RECV_FLOW_NODES
+  const terminal = doc.archived || ["ARCHIVED", "PUBLISHED", "FINISHED"].includes(doc.status)
+  const task = TASK_ALIAS[doc.currentTask ?? ""] ?? doc.currentTask ?? ""
+  const idx = terminal ? -1 : nodes.findIndex((n) => n.task && n.task === task)
+  if (idx < 0) {
+    return { path: [], note: "流程已办结或已归档，无后续节点。" }
+  }
+  const path = nodes.slice(idx + 1).map((n) => ({
+    nodeId: n.id,
+    nodeName: n.name,
+    type: n.id === "end" ? "end" : "approval",
+    assignees: n.assignees?.map((name) => ({ name })),
+  }))
+  return {
+    path,
+    note: "按当前办文环节静态演算的后续路径与预计办理人（演示数据，不落库）；实际以运行时取人规则为准。",
+  }
+}
+
+/** 流程预测：POST /api/office/doc/{id}/predict（未就绪 → mock 演算） */
+export async function predictDoc(doc: GwDoc): Promise<GwResult<WfPredictResult>> {
+  return withMock(
+    () => api<WfPredictResult>(`${DOC_BASE}/${doc.id}/predict`, { method: "POST" }),
+    () => predictMock(doc),
+  )
 }
 
 function mapListItem(r: RawListItem): GwDoc {

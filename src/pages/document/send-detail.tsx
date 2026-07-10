@@ -13,6 +13,7 @@ import { gwFormatDate, type GwDoc } from "./gongwen/types"
 import { DocTypeBadge, GwStatusBadge, SecretBadge, UrgencyBadge } from "./gongwen/badges"
 import { OpinionActionBar, OpinionTimeline } from "./gongwen/handling"
 import { DocFlowTrack } from "./gongwen/flow-track"
+import { GwPredictButton } from "./gongwen/predict"
 import { DemoBanner } from "./gongwen/shared"
 
 function MetaRow({ label, children }: { label: string; children: ReactNode }) {
@@ -99,9 +100,12 @@ export default function SendDetailPage() {
               <h1 className="truncate text-base font-semibold">{doc.title}</h1>
               <GwStatusBadge direction="SEND" status={doc.status} />
             </div>
-            <Button variant="ghost" size="icon" className="size-8 shrink-0" title="刷新" onClick={() => void load()}>
-              <RotateCw className="size-4" />
-            </Button>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <GwPredictButton doc={doc} />
+              <Button variant="ghost" size="icon" className="size-8" title="刷新" onClick={() => void load()}>
+                <RotateCw className="size-4" />
+              </Button>
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pl-10 text-xs text-muted-foreground">
             <span>文号：{doc.code}</span>
