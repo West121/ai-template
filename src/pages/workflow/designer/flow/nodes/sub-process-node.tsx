@@ -4,11 +4,11 @@
  * children（内联子图）的深度编辑推迟到后续切片，本节点仅承载与展示。
  */
 import { useState } from "react"
-import { Handle, Position, type NodeProps } from "@xyflow/react"
+import type { NodeProps } from "@xyflow/react"
 import { ChevronDown, ChevronRight, Layers } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { WfRfNode } from "../serialize"
-import { NodeToolbarActions, handleClass, nodeRing } from "./node-chrome"
+import { NodeHandles, NodeToolbarActions, nodeRing } from "./node-chrome"
 
 export function SubProcessNode({ id, data, selected }: NodeProps<WfRfNode>) {
   const [expanded, setExpanded] = useState(true)
@@ -18,7 +18,7 @@ export function SubProcessNode({ id, data, selected }: NodeProps<WfRfNode>) {
   return (
     <div
       className={cn(
-        "w-52 overflow-hidden rounded-lg border-2 border-indigo-500/70 bg-card shadow-sm transition-shadow hover:shadow-md",
+        "group w-52 overflow-hidden rounded-lg border-2 border-indigo-500/70 bg-card shadow-sm transition-shadow hover:shadow-md",
         nodeRing(selected, data.validation, data.highlight),
       )}
     >
@@ -46,8 +46,7 @@ export function SubProcessNode({ id, data, selected }: NodeProps<WfRfNode>) {
           </div>
         </div>
       )}
-      <Handle type="target" position={Position.Top} className={handleClass("!bg-indigo-600")} />
-      <Handle type="source" position={Position.Bottom} className={handleClass("!bg-indigo-600")} />
+      <NodeHandles color="!bg-indigo-600" />
     </div>
   )
 }

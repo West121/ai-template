@@ -2,7 +2,7 @@
  * 自定义节点共享外观：连线锚点样式、节点名标签、选中/校验高亮环、
  * 圆角矩形活动卡（ActivityCard）、菱形网关壳（GatewayShell）、节点悬浮操作条（NodeToolbarActions）。
  */
-import { createContext, useContext, type ComponentType, type ReactNode } from "react"
+import { createContext, Fragment, useContext, type ComponentType, type ReactNode } from "react"
 import { Handle, NodeToolbar, Position } from "@xyflow/react"
 import { Copy, Trash2, type LucideProps } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -23,9 +23,37 @@ export type ValidationRingState = "error" | "warning"
  */
 export type NodeHighlightState = "completed" | "active"
 
-/** 连线锚点基础样式（各节点按主题色再叠加 bg） */
+/**
+ * 连线锚点基础样式（各节点按主题色再叠加 bg）。
+ * bpmn-js 观感：平时**隐形**（opacity-0，但保留命中区可拉出/接入连线），**节点 hover 时才浮现**
+ *（`group-hover` —— 需节点根壳带 `group` 类，见 NodeHandles 用法）。小而克制，暗色态描边走 `--background`。
+ */
 export const handleClass = (extra?: string) =>
-  cn("!size-2.5 !rounded-full !border-2 !border-background", extra)
+  cn(
+    "!size-2.5 !rounded-full !border-2 !border-background opacity-0 transition-opacity duration-150 group-hover:opacity-100",
+    extra,
+  )
+
+/**
+ * 四边连接锚点（对齐 bpmn-js：节点四边皆可作连线出入点，平时隐、hover 显）。
+ * 每条边叠一层 `source` + 一层 `target`（react-flow 默认 source 只出、target 只入）：任意边都能拉出/接入。
+ * 起点/终点语义（起始只出、结束只入…）由 validate.ts 的连接规则校验保证，视觉上锚点全给。
+ * react-flow 会据拖拽方向就近选边；实际成线由 sequence-flow-edge 的浮动几何决定，故 Handle id 不入序列化、往返无关。
+ */
+const HANDLE_SIDES = [Position.Top, Position.Right, Position.Bottom, Position.Left] as const
+
+export function NodeHandles({ color }: { color: string }) {
+  return (
+    <>
+      {HANDLE_SIDES.map((pos) => (
+        <Fragment key={pos}>
+          <Handle type="target" id={`t-${pos}`} position={pos} className={handleClass(color)} />
+          <Handle type="source" id={`s-${pos}`} position={pos} className={handleClass(color)} />
+        </Fragment>
+      ))}
+    </>
+  )
+}
 
 /** 选中态高亮环 */
 export function selectedRing(selected?: boolean): string | false {
@@ -142,7 +170,7 @@ export function ActivityCard({
   return (
     <div
       className={cn(
-        "w-52 overflow-hidden rounded-lg border bg-card shadow-sm transition-shadow hover:shadow-md",
+        "group w-52 overflow-hidden rounded-lg border bg-card shadow-sm transition-shadow hover:shadow-md",
         nodeRing(selected, validation, highlight),
         className,
       )}
@@ -153,8 +181,7 @@ export function ActivityCard({
         <span className="min-w-0 flex-1 truncate">{title}</span>
       </div>
       {children && <div className="truncate px-3 py-2 text-xs text-muted-foreground">{children}</div>}
-      <Handle type="target" position={Position.Top} className={handleClass(handleColor)} />
-      <Handle type="source" position={Position.Bottom} className={handleClass(handleColor)} />
+      <NodeHandles color={handleColor} />
     </div>
   )
 }
@@ -189,7 +216,7 @@ export function GatewayShell({
   highlight?: NodeHighlightState
 }) {
   return (
-    <div className="relative size-12">
+    <div className="group relative size-12">
       {id && <NodeToolbarActions id={id} />}
       <div
         className={cn(
@@ -201,9 +228,7 @@ export function GatewayShell({
         <Icon className={cn("size-4 -rotate-45", iconClass)} />
       </div>
       <NodeLabel>{name}</NodeLabel>
-      <Handle type="target" position={Position.Top} className={handleClass(handleColor)} />
-      <Handle type="source" position={Position.Bottom} className={handleClass(handleColor)} />
-      <Handle id="right" type="source" position={Position.Right} className={handleClass(handleColor)} />
+      <NodeHandles color={handleColor} />
     </div>
   )
 }

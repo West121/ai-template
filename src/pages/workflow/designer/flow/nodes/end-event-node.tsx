@@ -2,16 +2,16 @@
  * 结束事件节点（BPMN endEvent）：粗圈，仅入边（target）。
  * terminate 型（整实例终止）用玫红配色 + 方形标记以示区分。
  */
-import { Handle, Position, type NodeProps } from "@xyflow/react"
+import type { NodeProps } from "@xyflow/react"
 import { Circle, Square } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { WfRfNode } from "../serialize"
-import { NodeLabel, NodeToolbarActions, handleClass, nodeRing } from "./node-chrome"
+import { NodeHandles, NodeLabel, NodeToolbarActions, nodeRing } from "./node-chrome"
 
 export function EndEventNode({ id, data, selected }: NodeProps<WfRfNode>) {
   const terminate = data.terminate ?? false
   return (
-    <div className="relative size-12">
+    <div className="group relative size-12">
       <NodeToolbarActions id={id} />
       <div
         className={cn(
@@ -28,7 +28,7 @@ export function EndEventNode({ id, data, selected }: NodeProps<WfRfNode>) {
         {data.name}
         {terminate && <span className="text-rose-500"> · 终止</span>}
       </NodeLabel>
-      <Handle type="target" position={Position.Top} className={handleClass("!bg-slate-500")} />
+      <NodeHandles color="!bg-slate-500" />
     </div>
   )
 }

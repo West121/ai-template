@@ -1,15 +1,15 @@
 /**
  * 起始事件节点（BPMN startEvent）：绿色细圈，仅出边（source）。
  */
-import { Handle, Position, type NodeProps } from "@xyflow/react"
+import type { NodeProps } from "@xyflow/react"
 import { Play } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { WfRfNode } from "../serialize"
-import { NodeLabel, NodeToolbarActions, handleClass, nodeRing } from "./node-chrome"
+import { NodeHandles, NodeLabel, NodeToolbarActions, nodeRing } from "./node-chrome"
 
 export function StartEventNode({ id, data, selected }: NodeProps<WfRfNode>) {
   return (
-    <div className="relative size-12">
+    <div className="group relative size-12">
       <NodeToolbarActions id={id} />
       <div
         className={cn(
@@ -20,7 +20,7 @@ export function StartEventNode({ id, data, selected }: NodeProps<WfRfNode>) {
         <Play className="size-4 fill-current" />
       </div>
       <NodeLabel>{data.name}</NodeLabel>
-      <Handle type="source" position={Position.Bottom} className={handleClass("!bg-emerald-500")} />
+      <NodeHandles color="!bg-emerald-500" />
     </div>
   )
 }

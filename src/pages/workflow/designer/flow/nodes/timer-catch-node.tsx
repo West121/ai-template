@@ -2,16 +2,16 @@
  * 中间捕获定时事件（BPMN intermediateCatchEvent + timerEventDefinition）：
  * 双圈圆形 + 时钟图标（BPMN 中间事件"双细圈"语义）。入/出边俱全，到点进入下一步。
  */
-import { Handle, Position, type NodeProps } from "@xyflow/react"
+import type { NodeProps } from "@xyflow/react"
 import { Clock } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { WfRfNode } from "../serialize"
 import { summarizeTimer } from "../summary"
-import { NodeLabel, NodeToolbarActions, handleClass, nodeRing } from "./node-chrome"
+import { NodeHandles, NodeLabel, NodeToolbarActions, nodeRing } from "./node-chrome"
 
 export function TimerCatchNode({ id, data, selected }: NodeProps<WfRfNode>) {
   return (
-    <div className="relative size-12">
+    <div className="group relative size-12">
       <NodeToolbarActions id={id} />
       <div
         className={cn(
@@ -28,8 +28,7 @@ export function TimerCatchNode({ id, data, selected }: NodeProps<WfRfNode>) {
         {data.name}
         <span className="block text-[10px] font-normal text-muted-foreground">{summarizeTimer(data.timer)}</span>
       </NodeLabel>
-      <Handle type="target" position={Position.Top} className={handleClass("!bg-indigo-500")} />
-      <Handle type="source" position={Position.Bottom} className={handleClass("!bg-indigo-500")} />
+      <NodeHandles color="!bg-indigo-500" />
     </div>
   )
 }

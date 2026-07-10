@@ -4,17 +4,17 @@
  * 附着关系走 data.attachedTo（不走 edge）；仅出边（source），无入边。
  * 配色归入「结构/定时」indigo 家族（rose 归还异常语义），本切片自由摆放，贴附宿主推迟。
  */
-import { Handle, Position, type NodeProps } from "@xyflow/react"
+import type { NodeProps } from "@xyflow/react"
 import { AlarmClock } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { WfRfNode } from "../serialize"
 import { summarizeTimer } from "../summary"
-import { NodeLabel, NodeToolbarActions, handleClass, nodeRing } from "./node-chrome"
+import { NodeHandles, NodeLabel, NodeToolbarActions, nodeRing } from "./node-chrome"
 
 export function TimerBoundaryNode({ id, data, selected }: NodeProps<WfRfNode>) {
   const interrupting = data.cancelActivity ?? true
   return (
-    <div className="relative size-12">
+    <div className="group relative size-12">
       <NodeToolbarActions id={id} />
       <div
         className={cn(
@@ -38,7 +38,7 @@ export function TimerBoundaryNode({ id, data, selected }: NodeProps<WfRfNode>) {
           {interrupting ? "中断" : "非中断"} · {summarizeTimer(data.timer)}
         </span>
       </NodeLabel>
-      <Handle type="source" position={Position.Bottom} className={handleClass("!bg-indigo-500")} />
+      <NodeHandles color="!bg-indigo-500" />
     </div>
   )
 }
