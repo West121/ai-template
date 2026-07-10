@@ -525,8 +525,9 @@ export function DataTable<TData>({
               </TableRow>
             ))}
           </TableHeader>
-          <TableBody>
-            {loading ? (
+          {/* 刷新/翻页时不整体换骨架（会整表闪烁）：保留旧行 + 半透明禁交互；骨架仅用于首载（无数据） */}
+          <TableBody className={cn(loading && filteredData.length > 0 && "pointer-events-none opacity-55 transition-opacity")}>
+            {loading && filteredData.length === 0 ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <TableRow key={i}>
                   {table.getVisibleLeafColumns().map((col) => (
