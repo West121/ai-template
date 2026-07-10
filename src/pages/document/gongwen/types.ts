@@ -48,6 +48,8 @@ export interface GwDoc {
   title: string
   /** 文种：通知/通报/报告/请示/批复/意见/函/纪要/决定… */
   docType: string
+  /** 文头类型：RED 红头正式公文（发文机关标志+红反线+发文字号）/ PLAIN 白头普通文件（标题+主送+正文+日期）。缺省 RED */
+  headerType?: "RED" | "PLAIN"
   /** 密级：PUBLIC 公开 / INTERNAL 内部 / SECRET 秘密 / CONFIDENTIAL 机密 */
   secret: string
   /** 紧急程度：NORMAL 普通 / URGENT 加急 / EXTRA 特急 */
@@ -108,6 +110,8 @@ export interface GwDoc {
   currentNode?: string
   /** 当前环节 task key（决定操作面板呈现哪些动作） */
   currentTask?: string
+  /** 当前环节办理人（后端 currentTask.assignee） */
+  currentAssignee?: string
   /** 办理时间线（各环节意见 / 签发 / 用印留痕） */
   opinions?: GwOpinion[]
   /** 传阅单 */

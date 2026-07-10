@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Drawer } from "@/components/drawer"
+import { cn } from "@/lib/utils"
 import { RichTextEditor } from "./rich-text"
 import { createDoc, type GwDraftPayload } from "./mock"
 import { DOC_TYPES, type GwAttachment, type GwDirection, type GwDoc } from "./types"
@@ -37,6 +38,7 @@ export function DraftFormDialog({
   const isSend = direction === "SEND"
   const [title, setTitle] = useState("")
   const [docType, setDocType] = useState("通知")
+  const [headerType, setHeaderType] = useState<"RED" | "PLAIN">("RED")
   const [secret, setSecret] = useState("PUBLIC")
   const [urgency, setUrgency] = useState("NORMAL")
   const [issuingOrg, setIssuingOrg] = useState("星辰科技有限公司文件")
@@ -54,6 +56,7 @@ export function DraftFormDialog({
   const reset = () => {
     setTitle("")
     setDocType("通知")
+    setHeaderType("RED")
     setSecret("PUBLIC")
     setUrgency("NORMAL")
     setIssuingOrg("星辰科技有限公司文件")
@@ -90,12 +93,14 @@ export function DraftFormDialog({
         direction,
         title: title.trim(),
         docType,
+        headerType,
         secret,
         urgency,
         content: content.trim() || undefined,
         attachments: attachments.length ? attachments : undefined,
         ...(isSend
           ? {
+              // 白头文件通常无红色发文机关标志，机关名仍作版记印发机关用
               issuingOrg: issuingOrg.trim() || undefined,
               mainRecipients: mainRecipients.trim() || undefined,
               ccRecipients: ccRecipients.trim() || undefined,
@@ -210,9 +215,38 @@ export function DraftFormDialog({
 
         {isSend && (
           <>
+            <div className="space-y-1.5">
+              <Label>文头类型</Label>
+              <div className="grid grid-cols-2 gap-2.5">
+                {(
+                  [
+                    { type: "RED", label: "红头正式公文", desc: "发文机关标志 + 红反线 + 发文字号（GB/T 9704）" },
+                    { type: "PLAIN", label: "白头普通文件", desc: "无红头，标题 + 主送 + 正文 + 日期" },
+                  ] as const
+                ).map((opt) => {
+                  const active = headerType === opt.type
+                  return (
+                    <button
+                      key={opt.type}
+                      type="button"
+                      onClick={() => setHeaderType(opt.type)}
+                      className={cn(
+                        "flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors",
+                        active ? "border-primary/50 bg-primary/5" : "hover:bg-accent",
+                      )}
+                    >
+                      <span className="text-sm font-medium">{opt.label}</span>
+                      <span className="text-xs text-muted-foreground">{opt.desc}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="issuing-org">发文机关标志（红头）</Label>
+                <Label htmlFor="issuing-org">
+                  {headerType === "RED" ? "发文机关标志（红头）" : "印发机关"}
+                </Label>
                 <Input id="issuing-org" value={issuingOrg} onChange={(e) => setIssuingOrg(e.target.value)} placeholder="如：星辰科技有限公司文件" />
               </div>
               <div className="space-y-1.5">

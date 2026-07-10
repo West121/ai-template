@@ -134,6 +134,17 @@
   color: #000;
 }
 
+/* ---- 白头（PLAIN）普通文件变体：无红色机关标志/红反线/发文字号，标题上移居中 ---- */
+.gw-typearea--plain .gw-header,
+.gw-typearea--plain .gw-docnum,
+.gw-typearea--plain .gw-red-line {
+  display: none;
+}
+.gw-typearea--plain .gw-title {
+  /* 无红头占位，标题从版心上部起排 */
+  margin-top: 10mm;
+}
+
 /* ---- 主送机关（左顶格，末尾补冒号） ---- */
 .gw-recipients {
   font-family: var(--gw-font-fs);

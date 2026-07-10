@@ -132,6 +132,35 @@ const SEND_DOCS: GwDoc[] = [
     currentNode: "拟稿",
     currentTask: "拟稿",
   },
+  {
+    id: 8105,
+    direction: "SEND",
+    code: "星辰办便〔2026〕007号",
+    title: "关于召开第三季度部门负责人例会的通知",
+    docType: "通知",
+    headerType: "PLAIN",
+    secret: "PUBLIC",
+    urgency: "NORMAL",
+    status: "ISSUED",
+    issuingOrg: "星辰科技有限公司办公室",
+    issuer: "李文",
+    mainRecipients: "各部门负责人",
+    content:
+      "<p>经研究，定于2026年7月18日（周五）下午14:30在公司三楼会议室召开第三季度部门负责人例会，现将有关事项通知如下：</p>" +
+      "<p>一、参会人员：各部门负责人。</p>" +
+      "<p>二、会议议题：上半年工作总结、下半年重点安排。</p>" +
+      "<p>请准时参加，如有特殊情况需请假的，提前报办公室。</p>",
+    docDate: "2026-07-10",
+    drafter: "李文",
+    deptName: "综合办公室",
+    createdAt: "2026-07-10T09:10:00",
+    opinions: [
+      { id: 1, taskKey: "拟稿", userName: "李文", opinion: "普通事务通知，走白头。", decision: "SUBMIT", createdAt: "2026-07-10T09:12:00" },
+      { id: 2, taskKey: "签发", userName: "李文", opinion: "同意发文。", decision: "SIGN", createdAt: "2026-07-10T10:00:00" },
+    ],
+    currentNode: "用印",
+    currentTask: "用印",
+  },
 ]
 
 const RECV_DOCS: GwDoc[] = [
@@ -294,6 +323,7 @@ interface RawDetail {
   code: string
   title: string
   docType: string
+  headerType?: "RED" | "PLAIN"
   issuingOrg?: string
   secret: string
   urgency: string
@@ -358,6 +388,7 @@ function mapDetail(r: RawDetail): GwDoc {
     code: r.code,
     title: r.title,
     docType: r.docType,
+    headerType: r.headerType ?? "RED",
     secret: r.secret,
     urgency: r.urgency,
     status: r.status,
@@ -388,6 +419,7 @@ function mapDetail(r: RawDetail): GwDoc {
     // 若取 taskKey(review) 则永远匹配不上中文分支、动作条为空。
     currentTask: r.currentTask?.taskName ?? r.currentTask?.taskKey,
     currentNode: r.currentTask?.taskName ?? r.currentTask?.taskKey,
+    currentAssignee: r.currentTask?.assignee,
     opinions: (r.timeline ?? []).map((t) => ({
       id: t.id,
       taskKey: t.taskKey,
@@ -668,6 +700,8 @@ export interface GwDraftPayload {
   direction: GwDirection
   title: string
   docType: string
+  /** 文头类型：RED 红头 / PLAIN 白头，缺省 RED */
+  headerType?: "RED" | "PLAIN"
   secret: string
   urgency: string
   issuingOrg?: string
@@ -693,6 +727,7 @@ export async function createDoc(payload: GwDraftPayload): Promise<GwResult<GwDoc
           ? {
               title: payload.title,
               docType: payload.docType,
+              headerType: payload.headerType ?? "RED",
               issuingOrg: payload.issuingOrg,
               mainRecipients: payload.mainRecipients,
               ccRecipients: payload.ccRecipients,
@@ -708,6 +743,7 @@ export async function createDoc(payload: GwDraftPayload): Promise<GwResult<GwDoc
               code: payload.sourceCode,
               unit: payload.sourceUnit,
               docType: payload.docType,
+              headerType: payload.headerType ?? "RED",
               secret: payload.secret,
               urgency: payload.urgency,
               content: payload.content,
@@ -724,6 +760,7 @@ export async function createDoc(payload: GwDraftPayload): Promise<GwResult<GwDoc
         code: isSend ? "（草稿）" : `收〔2026〕${String(60 + store.length).padStart(3, "0")}号`,
         title: payload.title,
         docType: payload.docType,
+        headerType: payload.headerType ?? "RED",
         secret: payload.secret,
         urgency: payload.urgency,
         status: isSend ? "DRAFT" : "REGISTERED",
@@ -1014,7 +1051,9 @@ export function renderMockHtml(doc: GwDoc): string {
         .map((p) => `<p>${escapeHtml(p)}</p>`)
         .join("")
 
-  const printOrg = org.replace(/文件$/, "") + "办公室"
+  // 印发机关：去掉"文件"后缀；若机关名已以"办公室"结尾则不再叠加（避免"…办公室办公室"）
+  const orgBase = org.replace(/文件$/, "")
+  const printOrg = /办公室$/.test(orgBase) ? orgBase : `${orgBase}办公室`
   const printDate = formatChineseDate(doc.docDate)
 
   // 顶部标注：份号（左1）/密级★期限（左2）/紧急程度（右）
@@ -1047,12 +1086,15 @@ export function renderMockHtml(doc: GwDoc): string {
   // 版记（抄送 + 印发机关和日期）
   const record = `<div class="gw-record">${doc.ccRecipients ? `<div class="gw-cc">抄送：${escapeHtml(doc.ccRecipients)}。</div>` : ""}<div class="gw-print-info"><span class="gw-print-org">${escapeHtml(printOrg)}</span><span class="gw-print-date">${printDate}印发</span></div></div>`
 
+  // 白头（PLAIN）普通文件：不画红色发文机关标志 / 红反线 / 发文字号，走「标题 + 主送 + 正文 + 日期」版式。
+  const isPlain = doc.headerType === "PLAIN"
+
   // 与后端 GongwenRenderer 一致：返回含 .gw-typearea 包裹的完整片段（前端只套 .gongwen-paper>.gw-page 外壳）
   const inner = [
     marks,
-    `<div class="gw-header">${escapeHtml(org)}</div>`,
-    docnum,
-    `<hr class="gw-red-line" />`,
+    isPlain ? "" : `<div class="gw-header">${escapeHtml(org)}</div>`,
+    isPlain ? "" : docnum,
+    isPlain ? "" : `<hr class="gw-red-line" />`,
     `<div class="gw-title">${escapeHtml(doc.title)}</div>`,
     doc.mainRecipients ? `<div class="gw-recipients">${escapeHtml(doc.mainRecipients)}</div>` : "",
     `<div class="gw-body">${bodyHtml}</div>`,
@@ -1062,7 +1104,7 @@ export function renderMockHtml(doc: GwDoc): string {
   ]
     .filter(Boolean)
     .join("\n")
-  return `<div class="gw-typearea">\n${inner}\n</div>`
+  return `<div class="gw-typearea${isPlain ? " gw-typearea--plain" : ""}">\n${inner}\n</div>`
 }
 
 function secretMark(secret: string): string {
