@@ -66,13 +66,12 @@ public class GongwenRenderer {
         // 标题
         sb.append("<div class=\"gw-title\">").append(esc(doc.getTitle())).append("</div>");
 
-        // 主送机关（末尾补全角冒号）
+        // 主送机关：全角冒号由 CSS .gw-recipients::after 统一补，这里**不再追加**，
+        // 并剥掉数据自带的尾部冒号，避免出现「各部门：：」(渲染器 + CSS 各加一次)。
         String recipients = firstNonBlank(doc.getMainRecipients(), doc.getUnit(), "");
         if (StringUtils.hasText(recipients)) {
             recipients = recipients.replace("；", "、").replace(";", "、").trim();
-            if (!recipients.endsWith("：")) {
-                recipients = recipients + "：";
-            }
+            recipients = recipients.replaceAll("[：:]+$", "");
             sb.append("<div class=\"gw-recipients\">").append(esc(recipients)).append("</div>");
         }
 
