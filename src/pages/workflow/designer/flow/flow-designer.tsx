@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils"
 import { FormulaDesigner } from "@/components/formula-designer"
 import { ScriptEditor } from "@/components/script-editor"
 import { FieldPermsEditor } from "@/components/field-perms-editor"
+import { ErrorBoundary } from "@/components/error-boundary"
 import "@/pages/workflow/forms" // 触发 CODE 表单登记（registerForm 副作用）
 import { PropertyPanel } from "../shared/property-panel"
 import { defaultFlowConfig, type FormFieldOption, type ProcessBase, type ProcessConfig } from "../shared/config"
@@ -537,6 +538,7 @@ export function FlowDesigner({
             </div>
 
             <aside className="flex w-80 shrink-0 flex-col overflow-hidden border-l">
+          <ErrorBoundary key={`panel:${selection.kind}:${selectedNode?.id ?? selectedEdge?.id ?? "process"}`} label="designer-panel">
           {selectedNode ? (
             <div className="min-h-0 flex-1 overflow-y-auto">
               <PropertyPanel
@@ -629,6 +631,7 @@ export function FlowDesigner({
               ) : (
                 <PropertyPanel target="process" config={processConfig} onChange={handleProcessConfigChange} formFields={fields} />
               )}
+          </ErrorBoundary>
             </aside>
           </div>
         </FormFieldsContext.Provider>

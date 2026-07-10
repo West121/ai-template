@@ -237,19 +237,19 @@ export function AssigneeRulesEditor({
             ))}
           </div>
 
-          {/* 来源下拉（快捷类型不显示） */}
-          {!isQuickKind(rule.kind) && ASSIGNEE_SOURCE_MATRIX[rule.kind].length > 1 && (
+          {/* 来源下拉（快捷类型不显示）；rule.kind 缺省/非法时兜底空数组，避免面板崩溃 */}
+          {!isQuickKind(rule.kind) && (ASSIGNEE_SOURCE_MATRIX[rule.kind]?.length ?? 0) > 1 && (
             <div className="flex items-center gap-1.5">
               <span className="text-xs text-muted-foreground">来源</span>
               <Select
-                value={rule.source ?? ASSIGNEE_SOURCE_MATRIX[rule.kind][0]}
+                value={rule.source ?? ASSIGNEE_SOURCE_MATRIX[rule.kind]?.[0]}
                 onValueChange={(v) => changeSource(index, rule, v as AssigneeSource)}
               >
                 <SelectTrigger size="sm" className="h-8 flex-1 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {ASSIGNEE_SOURCE_MATRIX[rule.kind].map((s) => (
+                  {(ASSIGNEE_SOURCE_MATRIX[rule.kind] ?? []).map((s) => (
                     <SelectItem key={s} value={s}>
                       {ASSIGNEE_SOURCE_META[s].label}
                     </SelectItem>

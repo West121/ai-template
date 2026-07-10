@@ -133,11 +133,27 @@ function attachBoundaryNodes(nodes: WfRfNode[]): WfRfNode[] {
  */
 export function needsLayout(nodes: WfRfNode[]): boolean {
   if (nodes.length < 2) return false
+  // 1) 坐标重合（多个节点挤在同一兜底点）
   const seen = new Set<string>()
   for (const n of nodes) {
     const key = `${snap(n.position.x)},${snap(n.position.y)}`
     if (seen.has(key)) return true
     seen.add(key)
   }
+  // 2) 包围盒明显重叠（节点卡相互压盖，如坐标偏紧/导入的旧数据）—— 需自动整理
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      if (boxesOverlap(nodes[i], nodes[j])) return true
+    }
+  }
   return false
+}
+
+/** 两节点包围盒是否明显重叠（各方向交叠 > 8px 才算，避免相邻/相切误判）。 */
+function boxesOverlap(a: WfRfNode, b: WfRfNode): boolean {
+  const sa = sizeOf(a)
+  const sb = sizeOf(b)
+  const ox = Math.min(a.position.x + sa.w, b.position.x + sb.w) - Math.max(a.position.x, b.position.x)
+  const oy = Math.min(a.position.y + sa.h, b.position.y + sb.h) - Math.max(a.position.y, b.position.y)
+  return ox > 8 && oy > 8
 }
