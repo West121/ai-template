@@ -28,6 +28,10 @@ function cleanupTestData() {
     "act_ru_timer_job,act_ru_suspended_job,act_ru_deadletter_job,act_ru_external_job,act_ru_entitylink,",
     "act_ru_event_subscr,act_ru_history_job,act_hi_procinst,act_hi_taskinst,act_hi_actinst,act_hi_varinst,",
     "act_hi_identitylink,act_hi_comment,act_hi_detail,act_hi_attachment,act_hi_entitylink,act_hi_tsk_log CASCADE;",
+    // 中国式公文（V20）测试数据：删办文流程公文（有 process_instance_id）+ 清办文意见/传阅/文号台账/序号池
+    "DELETE FROM oa_document WHERE process_instance_id IS NOT NULL;",
+    "TRUNCATE oa_doc_opinion,oa_doc_circulation RESTART IDENTITY;",
+    "DELETE FROM oa_doc_number_ledger; DELETE FROM oa_doc_number_seq;",
   ].join(" ")
   const pg = process.env.OA_PG_CONTAINER ?? "oa-postgres"
   try {
@@ -175,6 +179,96 @@ const is = await call(manager.token, "POST", `/api/office/documents/${newDoc.bod
 check("发文签发(signer)", is.body?.code === 0)
 const delDenied = await call(zhangsan.token, "DELETE", `/api/office/documents/${newDoc.body.data.id}`)
 check("zhangsan 删公文 → 403", delDenied.status === 403)
+
+/* ---------- 4b. 中国式公文高级化（V20：发文/收文办文 + 文号防跳 + 台账 + 权限码） ---------- */
+// 六角括号 + 年度序号（星辰发〔2026〕001号）
+const seqOf = (code) => {
+  const m = /〔\d{4}〕(\d+)号/.exec(code ?? "")
+  return m ? parseInt(m[1], 10) : NaN
+}
+// —— 发文全链路：拟稿 → 核稿 → 签发(占号) → 用印 → 成文 → 归档 ——
+async function draftAndIssue(title) {
+  const dr = await call(admin.token, "POST", "/api/office/doc/send/draft", {
+    title, docType: "通知", issuingOrg: "星辰科技有限公司文件", mainRecipients: "各部门",
+    ccRecipients: "档案室", secret: "INTERNAL", urgency: "NORMAL", content: "关于测试的通知正文。",
+  })
+  const id = dr.body?.data?.id
+  await call(admin.token, "POST", `/api/office/doc/${id}/opinion`, { decision: "APPROVE", opinion: "核稿通过" })
+  const is = await call(admin.token, "POST", `/api/office/doc/${id}/opinion`, { decision: "APPROVE", opinion: "同意签发" })
+  return { id, draft: dr.body, issued: is.body }
+}
+const sendPrev = await call(admin.token, "POST", "/api/office/doc/number/preview", { docType: "通知" })
+check("文号预览含六角括号〔〕", /〔\d{4}〕/.test(sendPrev.body?.data?.number ?? ""), sendPrev.body?.data?.number)
+
+const a = await draftAndIssue("冒烟测试发文A：情况通报")
+check("发文拟稿起流程(status=REVIEWING,当前核稿)", a.draft?.data?.status === "REVIEWING" && a.draft?.data?.currentTask?.taskKey === "review", JSON.stringify(a.draft?.data?.currentTask))
+check("发文拟稿占位号=待编号", a.draft?.data?.code === "待编号", a.draft?.data?.code)
+check("签发占正式号(ISSUED)", a.issued?.data?.status === "ISSUED" && a.issued?.data?.currentTask?.taskKey === "seal", JSON.stringify({ s: a.issued?.data?.status, t: a.issued?.data?.currentTask?.taskKey }))
+check("文号六角括号〔〕格式", /^星辰[发办]〔\d{4}〕\d{3}号$/.test(a.issued?.data?.code ?? ""), a.issued?.data?.code)
+// 用印
+const seal = await call(admin.token, "POST", `/api/office/doc/${a.id}/seal`, { opinion: "用印" })
+check("用印(SEALED)", seal.body?.data?.status === "SEALED" && seal.body?.data?.sealStatus === "SEALED" && seal.body?.data?.currentTask?.taskKey === "publish", JSON.stringify({ s: seal.body?.data?.status, ss: seal.body?.data?.sealStatus }))
+// 红头正文渲染
+const render = await call(admin.token, "POST", `/api/office/doc/${a.id}/render`)
+const html = render.body?.data?.html ?? ""
+check("render 返回 .gw-* 片段(gw-typearea/gw-header)", html.includes("gw-typearea") && html.includes("gw-header"), html.slice(0, 60))
+check("render 含文号六角括号", html.includes(a.issued?.data?.code) && html.includes("〔"), a.issued?.data?.code)
+check("render 已用印→渲染印章(gw-seal)", html.includes("gw-seal"))
+// 成文分发
+const sendPub = await call(admin.token, "POST", `/api/office/doc/${a.id}/opinion`, { decision: "APPROVE", opinion: "成文分发" })
+check("成文(PUBLISHED,流程结束)", sendPub.body?.data?.status === "PUBLISHED" && !sendPub.body?.data?.currentTask, JSON.stringify({ s: sendPub.body?.data?.status, t: sendPub.body?.data?.currentTask }))
+// 归档
+const arch = await call(admin.token, "POST", `/api/office/doc/${a.id}/archive`, {})
+check("发文归档(ARCHIVED,卷宗号)", arch.body?.data?.status === "ARCHIVED" && /^\d{4}-.+-\d{4}$/.test(arch.body?.data?.archiveNo ?? ""), arch.body?.data?.archiveNo)
+// 时间线留痕：至少 拟稿/核稿/签发/用印/成文
+check("办文时间线留痕(≥5 条意见)", (arch.body?.data?.timeline?.length ?? 0) >= 5, String(arch.body?.data?.timeline?.length))
+
+// —— 文号防跳：连续两次占号序号 +1 ——
+const b = await draftAndIssue("冒烟测试发文B：工作安排")
+check("文号防跳(第二次序号 = 第一次 +1)", seqOf(b.issued?.data?.code) === seqOf(a.issued?.data?.code) + 1, `${a.issued?.data?.code} → ${b.issued?.data?.code}`)
+
+// —— 台账连续可查 ——
+const ledger = await call(admin.token, "GET", `/api/office/doc/ledger?year=${new Date().getFullYear()}&pageNum=1&pageSize=100`)
+const lrows = ledger.body?.data?.list ?? []
+check("文号台账含两条占号记录", lrows.length >= 2 && lrows.every((r) => r.status === "OCCUPIED"), String(lrows.length))
+const lseqs = lrows.map((r) => seqOf(r.docNumber)).filter((n) => !Number.isNaN(n))
+const lastTwo = lseqs.slice(-2)
+check("台账序号连续(末两条 +1)", lastTwo.length === 2 && lastTwo[1] === lastTwo[0] + 1, lastTwo.join(","))
+
+// —— 收文全链路：登记 → 拟办 → 批办 → 承办 → 传阅(回执) → 办结 → 归档 ——
+const reg = await call(admin.token, "POST", "/api/office/doc/recv/register", {
+  title: "冒烟测试收文：上级来文", code: "外来〔2026〕88号", unit: "上级机关", docType: "通知", needCirculate: true,
+})
+const gwRid = reg.body?.data?.id
+check("收文登记起流程(REGISTERED→ASSIGNING,当前拟办)", reg.body?.data?.status === "ASSIGNING" && reg.body?.data?.currentTask?.taskKey === "propose", JSON.stringify({ s: reg.body?.data?.status, t: reg.body?.data?.currentTask?.taskKey }))
+const propose = await call(admin.token, "POST", `/api/office/doc/${gwRid}/opinion`, { decision: "APPROVE", opinion: "拟办：请王经理阅处" })
+check("拟办→批办(APPROVING)", propose.body?.data?.status === "APPROVING" && propose.body?.data?.currentTask?.taskKey === "approve")
+const approve = await call(admin.token, "POST", `/api/office/doc/${gwRid}/opinion`, { decision: "APPROVE", opinion: "批办：同意办理" })
+check("批办→承办(HANDLING)+意见留痕", approve.body?.data?.status === "HANDLING" && approve.body?.data?.currentTask?.taskKey === "handle" && (approve.body?.data?.timeline ?? []).some((o) => o.taskKey === "approve"))
+const handle = await call(admin.token, "POST", `/api/office/doc/${gwRid}/opinion`, { decision: "APPROVE", opinion: "承办完毕，转传阅" })
+check("承办→传阅(CIRCULATING)", handle.body?.data?.status === "CIRCULATING" && handle.body?.data?.currentTask?.taskKey === "circulate", JSON.stringify({ s: handle.body?.data?.status, t: handle.body?.data?.currentTask?.taskKey }))
+const urge = await call(admin.token, "POST", `/api/office/doc/${gwRid}/urge`)
+check("催办(不 404,留痕 urge)", urge.body?.code === 0 && (urge.body?.data?.timeline ?? []).some((o) => o.taskKey === "urge"), `status=${urge.status}`)
+const circ = await call(admin.token, "POST", `/api/office/doc/${gwRid}/circulate`, { readers: [{ id: 3, name: "张三" }, { id: 2, name: "王经理" }] })
+check("发起传阅(2 人,PENDING)", (circ.body?.data?.circulations?.length ?? 0) === 2 && circ.body?.data?.circulations.every((c) => c.status === "PENDING"), String(circ.body?.data?.circulations?.length))
+check("传阅后当前=办结", circ.body?.data?.currentTask?.taskKey === "finish")
+const cid = circ.body?.data?.circulations?.[0]?.id
+const readr = await call(admin.token, "POST", `/api/office/doc/circulation/${cid}/read`, { opinion: "已阅" })
+check("传阅已阅回执(READ)", (readr.body?.data?.circulations ?? []).some((c) => c.id === cid && c.status === "READ"))
+const rfin = await call(admin.token, "POST", `/api/office/doc/${gwRid}/opinion`, { decision: "APPROVE", opinion: "办结" })
+check("收文办结(FINISHED,流程结束)", rfin.body?.data?.status === "FINISHED" && !rfin.body?.data?.currentTask)
+const rarch = await call(admin.token, "POST", `/api/office/doc/${gwRid}/archive`, { category: "收文" })
+check("收文归档(ARCHIVED)", rarch.body?.data?.status === "ARCHIVED" && !!rarch.body?.data?.archiveNo)
+
+// —— 权限码（@PreAuthorize 硬 403） ——
+const gwDenySend = await call(zhangsan.token, "POST", "/api/office/doc/send/draft", { title: "无权拟稿" })
+check("zhangsan 拟稿 → 403(office:doc:send)", gwDenySend.status === 403, `status=${gwDenySend.status}`)
+const gwDenyRecv = await call(zhangsan.token, "POST", "/api/office/doc/recv/register", { title: "无权登记" })
+check("zhangsan 收文登记 → 403(office:doc:recv)", gwDenyRecv.status === 403, `status=${gwDenyRecv.status}`)
+const gwRules = await call(admin.token, "GET", "/api/office/doc/number/rules")
+check("admin 文号规则列表(≥2,含预览)", (gwRules.body?.data?.length ?? 0) >= 2 && /〔\d{4}〕/.test(gwRules.body?.data?.[0]?.nextPreview ?? ""), JSON.stringify(gwRules.body?.data?.map((r) => r.nextPreview)))
+const gwRulesDeny = await call(zhangsan.token, "GET", "/api/office/doc/number/rules")
+check("zhangsan 文号规则 → 403(office:doc:number)", gwRulesDeny.status === 403, `status=${gwRulesDeny.status}`)
 
 /* ---------- 5. 会议（含冲突 409） ---------- */
 // 时间脆弱性修复（Q-03）：会议日期取「明天」（本地日历日），任何时刻跑都必然是 UPCOMING，

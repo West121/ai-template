@@ -41,5 +41,14 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
+        <!--
+          中国式公文办文流程复用平台内置的 Flowable 引擎（单例 ProcessEngine 由 oa-boot 装配）。
+          这里引入的是「引擎库」而非 oa-module-workflow「业务模块」——不违反「业务模块互不依赖」约束，
+          等同 spring-data-jpa 之类的共享基础设施；运行时 RuntimeService/TaskService/HistoryService 由同一上下文注入。
+        -->
+        <dependency>
+            <groupId>org.flowable</groupId>
+            <artifactId>flowable-spring-boot-starter-process</artifactId>
+        </dependency>
     </dependencies>
 </project>

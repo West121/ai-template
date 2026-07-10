@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:flowable="http://flowable.org/bpmn"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             targetNamespace="http://xingchen.oa/gongwen">
+  <!--
+    收文办理单 gw_recv：签收登记(创建时) → 拟办 → 批办 → 承办 → 传阅(可选) → 办结归档。
+    CODE 表单驱动；businessKey = "GW:" + documentId；assignee = ${initiator}。
+    传阅节点由 GongwenService.circulate 完成并生成传阅单；办结落 FINISHED，归档另走 /archive。
+  -->
+  <process id="gw_recv" name="收文办理单" isExecutable="true">
+    <startEvent id="start"/>
+
+    <userTask id="propose" name="拟办" flowable:assignee="${initiator}"/>
+
+    <userTask id="approve" name="批办" flowable:assignee="${initiator}"/>
+
+    <userTask id="handle" name="承办" flowable:assignee="${initiator}"/>
+
+    <exclusiveGateway id="gwCirculate" default="flowToFinish"/>
+
+    <userTask id="circulate" name="传阅" flowable:assignee="${initiator}"/>
+
+    <userTask id="finish" name="办结归档" flowable:assignee="${initiator}"/>
+
+    <endEvent id="end"/>
+
+    <sequenceFlow id="r1" sourceRef="start" targetRef="propose"/>
+    <sequenceFlow id="r2" sourceRef="propose" targetRef="approve"/>
+    <sequenceFlow id="r3" sourceRef="approve" targetRef="handle"/>
+    <sequenceFlow id="r4" sourceRef="handle" targetRef="gwCirculate"/>
+    <sequenceFlow id="flowToCirculate" sourceRef="gwCirculate" targetRef="circulate">
+      <conditionExpression xsi:type="tFormalExpression">${needCirculate == true}</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="flowToFinish" sourceRef="gwCirculate" targetRef="finish"/>
+    <sequenceFlow id="r5" sourceRef="circulate" targetRef="finish"/>
+    <sequenceFlow id="r6" sourceRef="finish" targetRef="end"/>
+  </process>
+</definitions>

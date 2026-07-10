@@ -40,6 +40,31 @@ RECEIVE status: TO_SIGN(待签收)/PROCESSING(办理中)/FINISHED(已办结)；S
 - POST `/api/office/documents/{id}/review` DRAFT→REVIEWING；POST `/{id}/issue` REVIEWING→ISSUED（signer=当前人）
 - DELETE `/api/office/documents/{id}`【P:office:document:edit】
 
+## 中国式公文高级化（oa-module-office，前缀 `/api/office/doc`，V20）
+> 复用平台 Flowable 引擎：发文 `gw_send`（拟稿→核稿→会签(可选)→签发→用印→成文/分发）、收文 `gw_recv`（登记→拟办→批办→承办→传阅(可选)→办结归档）。businessKey=`GW:{documentId}`。文号用**六角括号〔〕**，签发节点占号且幂等，作废不回收（台账连续）。红头正文渲染输出 `.gw-*` class 片段（见 `docs/design/gongwen-format-spec.md`）。
+>
+> Document 扩字段：copyNo(份号)/issuer(签发人,上行文)/issuingOrg(红头文字)/docType(文种)/mainRecipients/ccRecipients/attachments/annotation(附注)/templateId/sealStatus(NONE|PENDING|SEALED)/sealedBy/sealedAt/processInstanceId/archived/archiveNo/archivedAt/secretExpire。
+> 发文 status：DRAFT→REVIEWING→ISSUED→SEALED→PUBLISHED→ARCHIVED（作废 VOIDED）；收文 status：REGISTERED→ASSIGNING→APPROVING→HANDLING→CIRCULATING→FINISHED→ARCHIVED。
+> Decision（办理）：APPROVE 同意 / REJECT 退回（删实例、状态回 DRAFT/REGISTERED） / TRANSFER 转办（换 assignee，须 targetUserId）。
+
+- POST `/send/draft` 【P:office:doc:send】{title*,docType?,issuingOrg?,mainRecipients?,ccRecipients?,secret?,urgency?,copyNo?,issuer?,annotation?,content?,attachments?(JSON:文件id/名列表),templateId?,numberRuleId?,needCountersign?} → 起 gw_send，status=REVIEWING，返回详情
+- POST `/recv/register` 【P:office:doc:recv】{title*,code?(来文字号),unit?(来文单位),docType?,secret?,urgency?,content?,needCirculate?} → 起 gw_recv，status=ASSIGNING
+- GET `/{id}` 详情：版式字段 + currentTask{taskId,taskKey,taskName,assignee} + timeline[办文意见] + circulations[传阅回执]
+- POST `/{id}/opinion` {opinion?,decision?,targetUserId?} 办理当前节点（核稿/会签/签发/拟办/批办/承办/成文）；签发节点占号回写 code+ISSUED；节点权限服务层按环节校验（review→office:doc:review、issue/publish→office:doc:issue、拟办批办承办→office:doc:assign）
+- POST `/{id}/seal` 【P:office:doc:seal】{opinion?} 完成用印节点 → sealStatus=SEALED,status=SEALED
+- POST `/{id}/circulate` 【P:office:doc:assign】{readers:[{id,name}]} 完成传阅节点，生成传阅单，status=CIRCULATING
+- POST `/circulation/{cid}/read` {opinion?} 已阅回执 → status=READ,readAt
+- POST `/{id}/archive` 【P:office:doc:archive】{category?} 仅 FINISHED/PUBLISHED 可归档 → archived=true,archiveNo=`{year}-{类别}-{id4位}`,status=ARCHIVED
+- POST `/{id}/urge` 催办：对当前承办环节承办人发催办提醒（best-effort 写 wf_notify + 留痕 urge 意见）
+- GET `/list?direction=&status=&docType=&secret=&urgency=&keyword=&from=&to=&pageNum=&pageSize=`【DS】 发文/收文台账列表（多筛）
+- GET `/ledger?year=&keyword=&status=&pageNum=` 文号台账（连续，按 id 升序；作废=VOID 不回收号）
+- GET `/archive?direction=&year=&keyword=&pageNum=`【DS】 归档卷宗检索（year=年度，direction=类别）
+- GET `/number/rules` 【P:office:doc:number】文号规则列表（含 nextPreview）
+- POST `/number/preview` {ruleId?,docType?} → {number}（不占号）
+- GET `/templates`、GET `/templates/{id}` 红头/正文套版模板
+- POST `/{id}/render` → {documentId,templateId,upward,html} 渲染 `.gw-typearea` 内部 HTML（六角括号、上行文签发人居右、印章仅 SEALED）
+- 新权限码：office:doc:send/review/issue/seal/recv/assign/archive/number；授权 ADMIN=全部，DEPT_MANAGER=send/review/issue/recv/assign/archive
+
 ## 会议（oa-module-office）
 - GET `/api/office/meeting-rooms?date=2026-07-07` → [{id,name,floor,capacity,devices:string[],status:FREE|BUSY|MAINTAIN, bookings:[{startHour,endHour,subject,booker}]}]（bookings 为该日）
 - POST `/api/office/meetings` {roomId,subject,date,startHour,endHour} 时段冲突 → BusinessException(409,"该时段已被预订")
@@ -88,6 +113,8 @@ RECEIVE status: TO_SIGN(待签收)/PROCESSING(办理中)/FINISHED(已办结)；S
 新权限码：office:document:list/edit、office:announcement:publish、system:dept:edit、system:post:edit、system:user:edit、system:role:edit
 授权：ADMIN=全部；DEPT_MANAGER 增加 office:document:list/edit、office:announcement:publish；EMPLOYEE/FINANCE 增加 office:document:list。
 其余列表接口只要求登录（不加 @PreAuthorize），保证演示不 403 满屏。
+
+V20 中国式公文权限码：office:doc:send/review/issue/seal/recv/assign/archive/number（详见「中国式公文高级化」节）。授权 ADMIN=全部；DEPT_MANAGER=send/review/issue/recv/assign/archive（不含 seal/number）。
 
 ## 前端离线兜底约定
 所有接真实数据的页面：捕获 NetworkError（`@/lib/api`）→ 显示"后端未启动"卡片 + 重试按钮（参考 `src/pages/approval/pending.tsx`），不得白屏。
