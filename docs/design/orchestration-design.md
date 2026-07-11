@@ -111,3 +111,32 @@
 - **磐石**:§3 全部 + §4(先行,API 契约冻结后疾风接)。
 - **疾风**:§5(mock 先行可并行;API 形状按本文档,偏差找主控对账)。
 - 主控:集成对账/端到端验证/提交。审批流侧后续可加事件动作「执行编排」(P1,本期不做)。
+
+## 8. n8n 能力对齐路线图(用户要求:n8n 支持的尽量支持)
+
+**P0(并入当前批,成本低)**:
+- **通用凭据体系**:orch_credential 加 `type`(LLM / HTTP_BEARER / HTTP_BASIC / HTTP_HEADER),
+  http 节点 config 加 `credentialId?`——执行时按类型注入 Authorization/自定义头(key 仍加密、不回显)。
+- **HTTP 增强**:retry 加指数退避(`backoff:true`);`responseType: JSON/TEXT`。
+- **错误工作流**(n8n Error Workflow):orch_flow 加 `error_flow_id?`——整流失败时以
+  `{error, failedNodeId, payload}` 为载荷触发另一条编排(防递归:错误流失败不再级联)。
+- **子编排节点 `subFlow`**(n8n Execute Workflow):config `{flowCode, payload 映射, waitResult:boolean}`;
+  编译为调用 OrchExecService,深度护栏(≤5 层)防循环调用。
+- **Switch 多路**:condition 节点多出边天然覆盖(每边一条件+默认支),文档/面板明示即可,不新增类型。
+- **并行汇合取数**(n8n Merge):parallel JOIN 后各支 outputs 天然都在 `outputs[nodeId]`,
+  dataMap 直接引用——JOIN 语义文档明示,不新增类型。
+- **内置模板函数**:Aviator 注册 `now()/today()/uuid()/dateFormat()/jsonGet()` 等常用函数
+  (已有 @FormulaFunction 注册机制,补一批编排常用),变量选择器里展示。
+
+**P1(下一批)**:
+- 从失败节点**续跑**(exec 断点续,复用已成功节点 output)。
+- **Wait for Webhook**(n8n Wait):流水挂起等待回调 URL 恢复(exec 状态 WAITING + 恢复 token)。
+- **Webhook 同步响应**(respond 节点):webhook 触发的流可自定义 HTTP 响应体/状态码。
+- 集合操作节点(Filter/Sort/Aggregate/Dedup —— n8n 数据转换族;先看 dataMap+Aviator 覆盖度再定)。
+- flow **版本历史**(每次发布存版本,可回看/回滚)。
+- 轮询触发(定时+条件满足才执行)。
+
+**P2**:
+- **AI Agent 节点**(带工具调用循环:LLM 决策→调 http/script 工具→回填→迭代,上限步数护栏)。
+- n8n 式**多 item 流转模型**(节点对 items 数组逐项执行;现 loop 节点已覆盖主场景,评估收益再做)。
+- 邮件触发/邮件节点(依赖邮件基建,项目暂无)。
