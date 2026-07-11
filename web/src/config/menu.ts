@@ -40,6 +40,7 @@ import {
   BriefcaseBusiness,
   Inbox,
   Activity,
+  Zap,
 } from "lucide-react"
 
 export interface MenuItem {
@@ -70,6 +71,7 @@ export const menuTree: MenuItem[] = [
       { title: "电子章", path: "/workflow/seals", icon: Stamp },
     ],
   },
+  { title: "自动化编排", path: "/automation", icon: Zap },
   {
     title: "公文管理",
     path: "/document",

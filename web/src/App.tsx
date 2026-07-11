@@ -18,6 +18,8 @@ const WorkflowDesignerPage = lazy(() => import("@/pages/workflow/designer-page")
 const WorkflowFormDefsPage = lazy(() => import("@/pages/workflow/form-defs"))
 const WorkflowInstanceDetailPage = lazy(() => import("@/pages/workflow/instance-detail"))
 const WorkflowSealsPage = lazy(() => import("@/pages/workflow/seals"))
+const AutomationPage = lazy(() => import("@/pages/automation"))
+const AutomationDesignerPage = lazy(() => import("@/pages/automation/designer-page"))
 const DocumentReceivePage = lazy(() => import("@/pages/document/receive"))
 const DocumentReceiveDetailPage = lazy(() => import("@/pages/document/receive-detail"))
 const DocumentSendPage = lazy(() => import("@/pages/document/send"))
@@ -126,6 +128,11 @@ export default function App() {
               <Route path="delegate" element={<Navigate to="/workflow/tasks?tab=delegate" replace />} />
               <Route path="admin" element={<Navigate to="/workflow/monitor" replace />} />
               <Route path="instances/:id" element={<WorkflowInstanceDetailPage />} />
+            </Route>
+            <Route path="automation">
+              <Route index element={<AutomationPage />} />
+              {/* 设计器整页（/automation/new/design 新建；:code 编辑） */}
+              <Route path=":code/design" element={<AutomationDesignerPage />} />
             </Route>
             <Route path="document">
               <Route index element={<Navigate to="/document/receive" replace />} />
