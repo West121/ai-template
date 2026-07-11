@@ -13,6 +13,7 @@ import com.xingchen.oa.office.entity.BizDocPrintTpl;
 import com.xingchen.oa.office.repository.BizDocRepository;
 import com.xingchen.oa.office.support.DeptNameResolver;
 import com.xingchen.oa.office.support.SecuritySupport;
+import com.xingchen.oa.system.repository.SysUserRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.criteria.Predicate;
@@ -53,6 +54,7 @@ public class BizDocService {
     private final BizDocDefService defService;
     private final DocNumberService docNumberService;
     private final DeptNameResolver deptNameResolver;
+    private final SysUserRepository userRepository;
     private final RuntimeService runtimeService;
     private final ObjectMapper objectMapper;
 
@@ -217,9 +219,24 @@ public class BizDocService {
         }
         Map<String, Object> data = new LinkedHashMap<>();
         JsonNode form = parse(doc.getFormData());
+        Map<String, String> pickers = pickerFieldTypes(def); // user/dept 选人类字段（按 form_schema widget type）
         if (form != null && form.isObject()) {
-            form.properties().forEach(e -> data.put(e.getKey(),
-                    e.getValue().isValueNode() ? e.getValue().asString("") : e.getValue().toString()));
+            form.properties().forEach(e -> {
+                String pickerType = pickers.get(e.getKey());
+                if (pickerType != null) {
+                    // 关联字段解析为 {id,name[,username]}（数组→对象数组），模板经 {{field.name}} 取显示属性；
+                    // 另给平铺便利键 {field}_names="张三、李四"。解析失败保留原值不阻断打印。
+                    Object resolved = resolvePicker(e.getValue(), pickerType);
+                    data.put(e.getKey(), resolved);
+                    String names = joinNames(resolved);
+                    if (names != null) {
+                        data.put(e.getKey() + "_names", names);
+                    }
+                } else {
+                    data.put(e.getKey(),
+                            e.getValue().isValueNode() ? e.getValue().asString("") : e.getValue().toString());
+                }
+            });
         }
         // 系统字段（sysfield/qrcode 插值用）
         data.put("docNo", doc.getDocNo());
@@ -272,6 +289,109 @@ public class BizDocService {
             // 审批记录尽力而为，失败不阻断打印
         }
         return out;
+    }
+
+    // ==================== 选人类字段解析（打印数据） ====================
+
+    /** 定义私有 form_schema 中 user/dept 类字段：key → type（无 schema/解析失败 → 空）。 */
+    private Map<String, String> pickerFieldTypes(BizDocDef def) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (!StringUtils.hasText(def.getFormSchema())) {
+            return out;
+        }
+        try {
+            collectPickerTypes(objectMapper.readTree(def.getFormSchema()), out);
+        } catch (Exception ignored) {
+            // schema 非法按无选人字段
+        }
+        return out;
+    }
+
+    private void collectPickerTypes(JsonNode node, Map<String, String> out) {
+        if (node == null) {
+            return;
+        }
+        if (node.isObject()) {
+            String key = node.path("key").asString(null);
+            String type = node.path("type").asString(null);
+            if (StringUtils.hasText(key) && ("user".equals(type) || "dept".equals(type))) {
+                out.put(key, type);
+            }
+            node.properties().forEach(e -> collectPickerTypes(e.getValue(), out));
+        } else if (node.isArray()) {
+            node.forEach(n -> collectPickerTypes(n, out));
+        }
+    }
+
+    /** 解析存储值（id / OrgRef 对象 / 数组）为 {id,name[,username]}；失败保留原值。 */
+    private Object resolvePicker(JsonNode value, String type) {
+        try {
+            if (value == null || value.isNull() || value.isMissingNode()) {
+                return null;
+            }
+            if (value.isArray()) {
+                List<Object> list = new ArrayList<>();
+                value.forEach(v -> list.add(resolveOne(v, type)));
+                return list;
+            }
+            return resolveOne(value, type);
+        } catch (Exception e) {
+            return value.isValueNode() ? value.asString("") : value.toString();
+        }
+    }
+
+    private Object resolveOne(JsonNode v, String type) {
+        Long id = null;
+        String fallbackName = null;
+        if (v.isNumber()) {
+            id = v.asLong();
+        } else if (v.isTextual()) {
+            try {
+                id = Long.parseLong(v.asString("").trim());
+            } catch (NumberFormatException e) {
+                return v.asString(""); // 非 id 文本原样保留
+            }
+        } else if (v.isObject()) {
+            id = v.path("id").isNumber() || v.path("id").isTextual() ? v.path("id").asLong(0) : null;
+            fallbackName = v.path("name").asString(null);
+        }
+        if (id == null || id <= 0) {
+            return v.isValueNode() ? v.asString("") : v.toString();
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("id", id);
+        if ("dept".equals(type)) {
+            String name = deptNameResolver.name(id);
+            out.put("name", name != null ? name : fallbackName);
+            return out;
+        }
+        var user = userRepository.findById(id).orElse(null);
+        if (user != null) {
+            out.put("name", StringUtils.hasText(user.getName()) ? user.getName() : user.getUsername());
+            out.put("username", user.getUsername());
+        } else {
+            out.put("name", fallbackName);
+        }
+        return out;
+    }
+
+    /** 便利键 {field}_names：单值取 name；数组 join「、」。无可用名 → null（不加键）。 */
+    @SuppressWarnings("unchecked")
+    private String joinNames(Object resolved) {
+        if (resolved instanceof Map<?, ?> m) {
+            Object n = m.get("name");
+            return n != null ? String.valueOf(n) : null;
+        }
+        if (resolved instanceof List<?> list) {
+            List<String> names = new ArrayList<>();
+            for (Object o : list) {
+                if (o instanceof Map<?, ?> m && m.get("name") != null) {
+                    names.add(String.valueOf(m.get("name")));
+                }
+            }
+            return names.isEmpty() ? null : String.join("、", names);
+        }
+        return null;
     }
 
     // ==================== 内部 ====================

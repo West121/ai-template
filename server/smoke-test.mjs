@@ -3255,17 +3255,28 @@ async function hlCompleted(token, iid) {
     formSchema: { widgets: [
       { key: "amount", label: "金额", type: "number", required: true },
       { key: "memo", label: "备注", type: "textarea" },
+      { key: "applicant", label: "用车人", type: "user" },
     ] },
     listConfig: { columns: [{ field: "amount", label: "金额" }] },
   })
-  check("bizdoc INLINE 定义创建(回传 formSchema)", inlineDef.body?.code === 0 && (inlineDef.body?.data?.formSchema?.widgets ?? []).length === 2, JSON.stringify(inlineDef.body?.data?.formType))
+  check("bizdoc INLINE 定义创建(回传 formSchema)", inlineDef.body?.code === 0 && (inlineDef.body?.data?.formSchema?.widgets ?? []).length === 3, JSON.stringify(inlineDef.body?.data?.formType))
   const inlinePub = await call(admin.token, "POST", `/api/bizdoc/defs/${inlineDef.body?.data?.id}/publish`)
   check("bizdoc INLINE 发布(私有 schema 校验通过)", inlinePub.body?.code === 0, JSON.stringify(inlinePub.body?.message))
   const inlineDoc = await call(admin.token, "POST", "/api/bizdoc/docs", {
-    defCode: `smoke_bd_inline_${TS}`, formData: { amount: 5, memo: "内置表单" },
+    defCode: `smoke_bd_inline_${TS}`, formData: { amount: 5, memo: "内置表单", applicant: 3 },
   })
   const inlineSub = await call(admin.token, "POST", `/api/bizdoc/docs/${inlineDoc.body?.data?.id}/submit`)
   check("bizdoc INLINE 单据提交生效", inlineSub.body?.data?.status === "EFFECTIVE", JSON.stringify(inlineSub.body?.data?.status))
+  // 关联字段显示属性：print data 中 user 字段解析为 {id,name}（模板 {{applicant.name}}）+ 便利键 {field}_names
+  await call(admin.token, "POST", `/api/bizdoc/defs/${inlineDef.body?.data?.id}/print-tpls`, {
+    name: "内置模板", paper: "A4", content: { schemaVersion: 2, paper: "A4", elements: [] },
+  })
+  const inlinePrint = await call(admin.token, "GET", `/api/bizdoc/docs/${inlineDoc.body?.data?.id}/print`)
+  const applicantVal = inlinePrint.body?.data?.data?.applicant
+  check("bizdoc print user 字段解析为对象含 name(=张三)+便利键 _names",
+    applicantVal?.id === 3 && applicantVal?.name === "张三" && applicantVal?.username === "zhangsan" &&
+      inlinePrint.body?.data?.data?.applicant_names === "张三",
+    JSON.stringify({ v: applicantVal, n: inlinePrint.body?.data?.data?.applicant_names }))
   // bizdoc:{code} 统一字段清单（流程设计器条件/取人识别单据字段）
   const bdManifest = await call(admin.token, "GET", `/api/wf/forms/bizdoc:smoke_bd_inline_${TS}/fields`)
   check("bizdoc:{code} manifest 返回字段(formType=BIZDOC,含 amount)",
