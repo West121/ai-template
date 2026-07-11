@@ -83,9 +83,10 @@ export function TokenText({ text, ctx, mode }: { text: string; ctx: BdRenderCtx;
       {parts.map((p, i) => {
         const m = /^\{\{\s*([\w.]+)\s*\}\}$/.exec(p)
         if (!m) return <span key={i}>{p}</span>
+        // 裸蓝字 `{{人话名}}`（视觉对齐规范 §0.2/§3 裁定）；title 保留原始表达式便于排查
         return (
-          <span key={i} className="bd-chip" data-expr={m[1]}>
-            {tokenLabel(m[1], ctx.fields)}
+          <span key={i} className="bd-token" data-expr={m[1]} title={m[1]}>
+            {`{{${tokenLabel(m[1], ctx.fields)}}}`}
           </span>
         )
       })}
@@ -189,8 +190,9 @@ export function V2BlockBody({
       )
     case "docInfo": {
       const align = block.style?.align ?? "right"
+      // 横排后对齐语义在主轴（视觉对齐规范 §5）
       return (
-        <div className="bd-blk-docinfo" style={{ alignItems: alignFlex(align), ...blkFont({ ...block.style, align: undefined }) }}>
+        <div className="bd-blk-docinfo" style={{ justifyContent: alignFlex(align), ...blkFont({ ...block.style, align: undefined }) }}>
           {block.items.map((it, i) => (
             <div key={i} style={{ display: "flex", alignItems: "baseline", gap: "1mm" }}>
               {it.label && <span style={{ whiteSpace: "nowrap" }}>{it.label}：</span>}
@@ -302,14 +304,18 @@ export function V2BlockBody({
           </thead>
           <tbody>
             {rows == null ? (
-              <tr>
-                {block.showIndex && <td style={{ textAlign: "center" }}>1</td>}
-                {block.columns.map((c, i) => (
-                  <td key={i}>
-                    <span className="bd-chip">{`${block.field}.${c.field}`}</span>
-                  </td>
-                ))}
-              </tr>
+              /* 设计态两行「⋯」占位（视觉对齐规范 §4）：预感循环出 N 行；绑定关系走 hover title 与列配置；
+                 final 态永远有 rows（空数组走空行分支），天然不进打印 */
+              [1, 2].map((n) => (
+                <tr key={n}>
+                  {block.showIndex && <td style={{ textAlign: "center" }}>{n}</td>}
+                  {block.columns.map((c, i) => (
+                    <td key={i} style={{ textAlign: "center", color: "var(--bd-ghost)" }} title={`绑定：${block.field}.${c.field || "(未绑定)"}`}>
+                      ⋯
+                    </td>
+                  ))}
+                </tr>
+              ))
             ) : rows.length === 0 ? (
               <tr>
                 {block.showIndex && <td>&nbsp;</td>}

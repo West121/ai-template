@@ -234,6 +234,11 @@ const BIND_FIELDS: Record<string, DefField[]> = {
     { key: "project", label: "费用归属项目", type: "input" },
     { key: "handler", label: "经办人", type: "user" },
     { key: "memo", label: "费用说明", type: "textarea" },
+    // 端点同款子表形状（视觉对齐规范拾取器裁定）：subform 条目 + `子表key.列key` 列条目
+    { key: "items", label: "费用明细", type: "subform" },
+    { key: "items.name", label: "费用明细项", type: "input" },
+    { key: "items.amount", label: "金额（元）", type: "number" },
+    { key: "items.remark", label: "备注", type: "input" },
   ],
   vehicle_form: [
     { key: "plate", label: "车牌号", type: "input" },

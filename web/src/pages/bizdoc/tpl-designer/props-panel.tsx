@@ -4,9 +4,10 @@
  * 文本输入失焦提交（一次编辑一步撤销），开关/下拉即时提交。
  */
 import { useEffect, useRef, useState } from "react"
-import { Plus, Trash2, Upload } from "lucide-react"
+import { Braces, Minus, Plus, Trash2, Upload, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
@@ -133,6 +134,52 @@ function ColorSwatches({ value, onChange }: { value: string; onChange: (c: strin
         className="size-5 cursor-pointer rounded border bg-transparent p-0"
       />
     </div>
+  )
+}
+
+/** 通用拾取按钮（视觉对齐规范 §6 + 主控裁定：明细数据源/列字段升级为拾取器，端点已下发 subform 及其列） */
+function PickButton({
+  options,
+  onPick,
+  title,
+  emptyText,
+}: {
+  options: { key: string; label: string }[]
+  onPick: (key: string) => void
+  title: string
+  emptyText: string
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="icon" className="size-7 shrink-0 text-primary" title={title}>
+          <Braces className="size-3.5" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-56 p-1.5">
+        <div className="max-h-52 space-y-0.5 overflow-y-auto">
+          {options.length === 0 ? (
+            <p className="px-1.5 py-2 text-xs text-muted-foreground">{emptyText}</p>
+          ) : (
+            options.map((o) => (
+              <button
+                key={o.key}
+                type="button"
+                className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs hover:bg-accent"
+                onClick={() => {
+                  onPick(o.key)
+                  setOpen(false)
+                }}
+              >
+                <span className="min-w-0 truncate">{o.label}</span>
+                <span className="ml-2 shrink-0 font-mono text-[10px] text-muted-foreground">{o.key}</span>
+              </button>
+            ))
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -275,11 +322,17 @@ export function BlockPanel({
   block,
   fields,
   calcVars,
+  subformOptions = [],
+  columnsBySource = {},
   onPatch,
 }: {
   block: BdBlock
   fields: FieldOption[]
   calcVars?: FieldOption[]
+  /** 明细数据源候选（子表字段：schema/端点 subform ∪ 模板 detailTable 引用） */
+  subformOptions?: { key: string; label: string }[]
+  /** 各子表已知列（端点 `子表key.列key` ∪ 模板 detailTable columns） */
+  columnsBySource?: Record<string, { field: string; label: string }[]>
   onPatch: (patch: Partial<BdBlock>) => void
 }) {
   const style = (block.style ?? {}) as BdBlockStyle
@@ -298,7 +351,13 @@ export function BlockPanel({
 
   return (
     <div className="space-y-3 p-3" key={block.id}>
-      <h3 className="text-xs font-semibold">{BLOCK_META[block.type]?.label ?? block.type} 属性</h3>
+      <h3 className="flex items-center gap-1.5 text-xs font-semibold">
+        {(() => {
+          const Icon = BLOCK_META[block.type]?.icon
+          return Icon ? <Icon className="size-3.5 text-muted-foreground" /> : null
+        })()}
+        {BLOCK_META[block.type]?.label ?? block.type} 属性
+      </h3>
 
       {block.type === "title" && (
         <>
@@ -317,17 +376,23 @@ export function BlockPanel({
           <div className="space-y-1.5">
             <Label className="text-[11px] text-muted-foreground">信息行</Label>
             {block.items.map((it, i) => (
-              <div key={i} className="space-y-1 rounded-md border p-1.5">
+              <div key={i} className="space-y-1.5 rounded-lg border bg-muted/30 p-2">
                 <div className="flex items-center gap-1">
+                  <Label className="w-10 shrink-0 text-[11px] text-muted-foreground">标签</Label>
                   <CommitInput value={it.label} placeholder="标签" onCommit={(v) => onPatch({ items: block.items.map((x, xi) => (xi === i ? { ...x, label: v } : x)) })} />
-                  <Button variant="ghost" size="icon" className="size-6 shrink-0 text-muted-foreground hover:text-red-600" onClick={() => onPatch({ items: block.items.filter((_, xi) => xi !== i) })}>
+                  <Button variant="ghost" size="icon" className="size-6 shrink-0 text-muted-foreground hover:bg-red-50 hover:text-red-600" onClick={() => onPatch({ items: block.items.filter((_, xi) => xi !== i) })}>
                     <Trash2 className="size-3" />
                   </Button>
                 </div>
-                <TokenInput value={it.value} placeholder="值（可插字段）" onCommit={(v) => onPatch({ items: block.items.map((x, xi) => (xi === i ? { ...x, value: v } : x)) })} fields={fields} calcVars={calcVars} />
+                <div className="flex items-start gap-1">
+                  <Label className="mt-1.5 w-10 shrink-0 text-[11px] text-muted-foreground">值</Label>
+                  <div className="min-w-0 flex-1">
+                    <TokenInput value={it.value} placeholder="值（可插字段）" onCommit={(v) => onPatch({ items: block.items.map((x, xi) => (xi === i ? { ...x, value: v } : x)) })} fields={fields} calcVars={calcVars} />
+                  </div>
+                </div>
               </div>
             ))}
-            <Button variant="outline" size="sm" className="h-6 w-full gap-1 text-[11px]" onClick={() => onPatch({ items: [...block.items, { label: "标签", value: "" }] })}>
+            <Button variant="outline" size="sm" className="h-7 w-full gap-1 border-dashed text-[11px]" onClick={() => onPatch({ items: [...block.items, { label: "标签", value: "" }] })}>
               <Plus className="size-3" /> 加一行
             </Button>
           </div>
@@ -349,20 +414,26 @@ export function BlockPanel({
           <div className="space-y-1.5">
             <Label className="text-[11px] text-muted-foreground">单元格（标签 + 值）</Label>
             {block.cells.map((c, i) => (
-              <div key={i} className="space-y-1 rounded-md border p-1.5">
+              <div key={i} className="space-y-1.5 rounded-lg border bg-muted/30 p-2">
                 <div className="flex items-center gap-1">
+                  <Label className="w-10 shrink-0 text-[11px] text-muted-foreground">标签</Label>
                   <CommitInput value={c.label} placeholder="标签" onCommit={(v) => onPatch({ cells: block.cells.map((x, xi) => (xi === i ? { ...x, label: v } : x)) })} />
-                  <div className="w-14 shrink-0">
+                  <div className="w-12 shrink-0" title="跨组数">
                     <CommitNumber value={c.span ?? 1} min={1} max={block.columnsPerRow} onCommit={(v) => onPatch({ cells: block.cells.map((x, xi) => (xi === i ? { ...x, span: v } : x)) })} />
                   </div>
-                  <Button variant="ghost" size="icon" className="size-6 shrink-0 text-muted-foreground hover:text-red-600" onClick={() => onPatch({ cells: block.cells.filter((_, xi) => xi !== i) })}>
+                  <Button variant="ghost" size="icon" className="size-6 shrink-0 text-muted-foreground hover:bg-red-50 hover:text-red-600" onClick={() => onPatch({ cells: block.cells.filter((_, xi) => xi !== i) })}>
                     <Trash2 className="size-3" />
                   </Button>
                 </div>
-                <TokenInput value={c.value} placeholder="值（可插字段）" onCommit={(v) => onPatch({ cells: block.cells.map((x, xi) => (xi === i ? { ...x, value: v } : x)) })} fields={fields} calcVars={calcVars} />
+                <div className="flex items-start gap-1">
+                  <Label className="mt-1.5 w-10 shrink-0 text-[11px] text-muted-foreground">值</Label>
+                  <div className="min-w-0 flex-1">
+                    <TokenInput value={c.value} placeholder="值（可插字段）" onCommit={(v) => onPatch({ cells: block.cells.map((x, xi) => (xi === i ? { ...x, value: v } : x)) })} fields={fields} calcVars={calcVars} />
+                  </div>
+                </div>
               </div>
             ))}
-            <Button variant="outline" size="sm" className="h-6 w-full gap-1 text-[11px]" onClick={() => onPatch({ cells: [...block.cells, { label: "字段", value: "" }] })}>
+            <Button variant="outline" size="sm" className="h-7 w-full gap-1 border-dashed text-[11px]" onClick={() => onPatch({ cells: [...block.cells, { label: "字段", value: "" }] })}>
               <Plus className="size-3" /> 加一格
             </Button>
             <p className="text-[10px] text-muted-foreground">格右侧数字 = 跨组数（占几个 标签+值）。</p>
@@ -401,28 +472,92 @@ export function BlockPanel({
 
       {block.type === "detailTable" && (
         <>
-          <Row label="子表字段">
-            <CommitInput value={block.field} mono placeholder="如 items" onCommit={(v) => onPatch({ field: v })} />
-          </Row>
+          {/* 数据源置顶（§6）：拾取器直接做（主控裁定，端点已下发 subform 及其列） */}
+          <div className="space-y-1.5">
+            <Label className="text-[11px] text-muted-foreground">数据源（子表字段）</Label>
+            <div className="flex items-center gap-1">
+              <CommitInput value={block.field} mono placeholder="如 items" onCommit={(v) => onPatch({ field: v })} />
+              <PickButton
+                title="选择子表字段"
+                emptyText="当前表单无子表字段"
+                options={subformOptions}
+                onPick={(key) => onPatch({ field: key })}
+              />
+            </div>
+          </div>
           <Row label="序号列">
             <Switch checked={block.showIndex ?? false} onCheckedChange={(v) => onPatch({ showIndex: v })} />
           </Row>
-          <div className="space-y-1.5">
-            <Label className="text-[11px] text-muted-foreground">列（字段 / 表头 / 宽mm）</Label>
+          <div className="space-y-2">
+            <Label className="text-[11px] text-muted-foreground">列</Label>
             {block.columns.map((c, i) => (
-              <div key={i} className="flex items-center gap-1">
-                <CommitInput value={c.field} mono placeholder="字段" onCommit={(v) => onPatch({ columns: block.columns.map((x, xi) => (xi === i ? { ...x, field: v } : x)) })} />
-                <CommitInput value={c.label} placeholder="表头" onCommit={(v) => onPatch({ columns: block.columns.map((x, xi) => (xi === i ? { ...x, label: v } : x)) })} />
-                <div className="w-14 shrink-0">
-                  <CommitNumber value={c.w ?? 0} min={0} max={180} onCommit={(v) => onPatch({ columns: block.columns.map((x, xi) => (xi === i ? { ...x, w: v || undefined } : x)) })} />
+              <div key={i} className="space-y-1.5 rounded-lg border bg-muted/30 p-2">
+                <div className="flex items-center gap-1">
+                  <Label className="w-10 shrink-0 text-[11px] text-muted-foreground">字段</Label>
+                  <div className="relative min-w-0 flex-1">
+                    <CommitInput value={c.field} mono placeholder="字段 key" onCommit={(v) => onPatch({ columns: block.columns.map((x, xi) => (xi === i ? { ...x, field: v } : x)) })} />
+                    {c.field && (
+                      <button
+                        type="button"
+                        aria-label="清空"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        onClick={() => onPatch({ columns: block.columns.map((x, xi) => (xi === i ? { ...x, field: "" } : x)) })}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    )}
+                  </div>
+                  <PickButton
+                    title="选择子表列"
+                    emptyText={block.field ? "该子表暂无列信息（可手填 key）" : "先选择数据源"}
+                    options={(columnsBySource[block.field] ?? []).map((col) => ({ key: col.field, label: col.label || col.field }))}
+                    onPick={(key) =>
+                      onPatch({
+                        columns: block.columns.map((x, xi) =>
+                          xi === i
+                            ? { ...x, field: key, label: x.label || (columnsBySource[block.field] ?? []).find((col) => col.field === key)?.label || key }
+                            : x,
+                        ),
+                      })
+                    }
+                  />
+                  <Button variant="ghost" size="icon" className="size-6 shrink-0 text-muted-foreground hover:bg-red-50 hover:text-red-600" onClick={() => onPatch({ columns: block.columns.filter((_, xi) => xi !== i) })}>
+                    <Trash2 className="size-3" />
+                  </Button>
                 </div>
-                <Button variant="ghost" size="icon" className="size-6 shrink-0 text-muted-foreground hover:text-red-600" onClick={() => onPatch({ columns: block.columns.filter((_, xi) => xi !== i) })}>
-                  <Trash2 className="size-3" />
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Label className="w-10 shrink-0 text-[11px] text-muted-foreground">显示名</Label>
+                  <CommitInput value={c.label} placeholder="表头" onCommit={(v) => onPatch({ columns: block.columns.map((x, xi) => (xi === i ? { ...x, label: v } : x)) })} />
+                </div>
+                <div className="flex items-center gap-1">
+                  <Label className="w-10 shrink-0 text-[11px] text-muted-foreground">列宽</Label>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="size-6 shrink-0"
+                    aria-label="减小列宽"
+                    onClick={() => onPatch({ columns: block.columns.map((x, xi) => (xi === i ? { ...x, w: Math.max(0, (x.w ?? 0) - 5) || undefined } : x)) })}
+                  >
+                    <Minus className="size-3" />
+                  </Button>
+                  <div className="w-14 shrink-0">
+                    <CommitNumber value={c.w ?? 0} min={0} max={180} onCommit={(v) => onPatch({ columns: block.columns.map((x, xi) => (xi === i ? { ...x, w: v || undefined } : x)) })} />
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="size-6 shrink-0"
+                    aria-label="增大列宽"
+                    onClick={() => onPatch({ columns: block.columns.map((x, xi) => (xi === i ? { ...x, w: Math.min(180, (x.w ?? 0) + 5) } : x)) })}
+                  >
+                    <Plus className="size-3" />
+                  </Button>
+                  <span className="shrink-0 text-[10px] text-muted-foreground">{c.w ? "mm" : "自动"}</span>
+                </div>
               </div>
             ))}
-            <Button variant="outline" size="sm" className="h-6 w-full gap-1 text-[11px]" onClick={() => onPatch({ columns: [...block.columns, { field: "", label: "列" }] })}>
-              <Plus className="size-3" /> 加一列
+            <Button variant="outline" size="sm" className="h-7 w-full gap-1 border-dashed text-[11px]" onClick={() => onPatch({ columns: [...block.columns, { field: "", label: "列" }] })}>
+              <Plus className="size-3" /> 添加列
             </Button>
             <p className="text-[10px] text-muted-foreground">宽 0 = 自动均分；子表字段的值须是行数组。</p>
           </div>
@@ -435,20 +570,26 @@ export function BlockPanel({
           <div className="space-y-1.5">
             <Label className="text-[11px] text-muted-foreground">审批步骤（列）</Label>
             {block.steps.map((s, i) => (
-              <div key={i} className="space-y-1 rounded-md border p-1.5">
+              <div key={i} className="space-y-1.5 rounded-lg border bg-muted/30 p-2">
                 <div className="flex items-center gap-1">
-                  <CommitInput value={s.label} placeholder="列头（如 部门审批）" onCommit={(v) => onPatch({ steps: block.steps.map((x, xi) => (xi === i ? { ...x, label: v } : x)) })} />
-                  <Button variant="ghost" size="icon" className="size-6 shrink-0 text-muted-foreground hover:text-red-600" onClick={() => onPatch({ steps: block.steps.filter((_, xi) => xi !== i) })}>
+                  <Label className="w-10 shrink-0 text-[11px] text-muted-foreground">列头</Label>
+                  <CommitInput value={s.label} placeholder="如 部门审批" onCommit={(v) => onPatch({ steps: block.steps.map((x, xi) => (xi === i ? { ...x, label: v } : x)) })} />
+                  <Button variant="ghost" size="icon" className="size-6 shrink-0 text-muted-foreground hover:bg-red-50 hover:text-red-600" onClick={() => onPatch({ steps: block.steps.filter((_, xi) => xi !== i) })}>
                     <Trash2 className="size-3" />
                   </Button>
                 </div>
-                <TokenInput multiline value={s.value} placeholder="内容（插审批字段）" onCommit={(v) => onPatch({ steps: block.steps.map((x, xi) => (xi === i ? { ...x, value: v } : x)) })} fields={fields} calcVars={calcVars} />
+                <div className="flex items-start gap-1">
+                  <Label className="mt-1.5 w-10 shrink-0 text-[11px] text-muted-foreground">内容</Label>
+                  <div className="min-w-0 flex-1">
+                    <TokenInput multiline value={s.value} placeholder="内容（插审批字段）" onCommit={(v) => onPatch({ steps: block.steps.map((x, xi) => (xi === i ? { ...x, value: v } : x)) })} fields={fields} calcVars={calcVars} />
+                  </div>
+                </div>
               </div>
             ))}
             <Button
               variant="outline"
               size="sm"
-              className="h-6 w-full gap-1 text-[11px]"
+              className="h-7 w-full gap-1 border-dashed text-[11px]"
               onClick={() =>
                 onPatch({ steps: [...block.steps, { label: `审批${block.steps.length + 1}`, value: `{{_approvals.${block.steps.length}.assigneeName}}` }] })
               }

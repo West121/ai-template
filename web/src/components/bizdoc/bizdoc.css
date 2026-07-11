@@ -19,6 +19,17 @@
   color: #000;
   box-shadow: 0 2px 16px rgba(0, 0, 0, 0.15);
   overflow: hidden;
+  /* 设计态色板（视觉对齐规范 §0.3）：纸面语境局部变量，一律写死值（自有变量不违反"禁主题 token"红线） */
+  --bd-line: #d8dde3; /* 表格细灰线 */
+  --bd-label-bg: #f7f8fa; /* label 列/表头浅灰底 */
+  --bd-label-fg: #4b5563; /* label 深灰字 */
+  --bd-token: #2563eb; /* 裸蓝 token（blue-600） */
+  --bd-card-bd: #e6e8ec; /* 块卡默认边框 */
+  --bd-card-hover: #93c5fd; /* hover 淡蓝框（blue-300） */
+  --bd-card-active: #3b82f6; /* 选中蓝框（blue-500） */
+  --bd-card-tint: #f7faff; /* 选中整卡淡蓝底 */
+  --bd-type-fg: #9aa1ad; /* 类型标签灰 */
+  --bd-ghost: #c2cad4; /* 占位"⋯"/空值提示灰 */
 }
 
 /* 元素：绝对定位（left/top/width/height 由 mm 值内联生成） */
@@ -72,7 +83,8 @@
   min-width: 0;
 }
 
-/* 智能表格 / 明细 / 审批区：黑边框合并表格 */
+/* 智能表格 / 明细 / 审批区（视觉对齐规范 §2）：细灰线 + label 浅灰底深灰字，WYSIWYG 进打印
+   （print-color-adjust 兜底；"正式黑线件"走 P1 线色开关，只改 --bd-line） */
 .bd-tbl {
   width: 100%;
   border-collapse: collapse;
@@ -80,16 +92,20 @@
 }
 .bd-tbl th,
 .bd-tbl td {
-  border: 0.3mm solid #000;
-  padding: 1.2mm 2mm;
-  vertical-align: top;
+  border: 0.2mm solid var(--bd-line); /* 细灰线（原 0.3mm 纯黑） */
+  padding: 1.8mm 2.5mm; /* 行高 ~32px：1.8mm 上下 + 1.5 行高 ≈ 8.5mm */
+  vertical-align: middle; /* 单行值居中更舒适 */
   word-break: break-all;
   white-space: pre-wrap;
   text-align: left;
   font-weight: inherit;
 }
+.bd-tbl tr {
+  height: 8.5mm; /* ≈32px；表格里 height 即 min-height */
+}
 .bd-tbl-label {
-  background: #f2f2f2;
+  background: var(--bd-label-bg);
+  color: var(--bd-label-fg);
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
 }
@@ -102,10 +118,15 @@ th.bd-tbl-label {
   height: 16mm;
 }
 
+/* 单据信息：单行扁块、多组并排（视觉对齐规范 §5）；缺省右对齐，内联 style 按 align 覆盖主轴 */
 .bd-blk-docinfo {
   display: flex;
-  flex-direction: column;
-  gap: 0.8mm;
+  flex-direction: row;
+  flex-wrap: wrap;
+  column-gap: 6mm;
+  row-gap: 1mm;
+  justify-content: flex-end;
+  align-items: baseline;
 }
 .bd-blk-text {
   white-space: pre-wrap;
@@ -166,19 +187,11 @@ th.bd-tbl-label {
   min-width: 0;
 }
 
-/* 字段 token 蓝 chip（设计态专属；打印/最终态不会渲染 chip） */
-.bd-chip {
-  display: inline-block;
-  margin: 0 0.5mm;
-  padding: 0 1.5mm;
-  border-radius: 1mm;
-  background: #dbeafe;
-  border: 1px solid #93c5fd;
-  color: #1d4ed8;
-  font-size: 0.85em;
-  line-height: 1.6;
+/* 字段 token：裸蓝字 `{{人话名}}`（视觉对齐规范 §0.2/§3 裁定，胶囊 chip 删；
+   「插入变量」浮层的 .bd-var-chip 是拾取器控件，保留胶囊） */
+.bd-token {
+  color: var(--bd-token);
   white-space: nowrap;
-  vertical-align: baseline;
 }
 
 /* 占位框（barcode/image 未设置等，仅编辑/预览态） */
@@ -193,56 +206,121 @@ th.bd-tbl-label {
 
 /* ============ 设计器画布 chrome（不进打印；纸面语境内用写死色值） ============ */
 
-.bd-shell {
-  border: 1px dashed transparent;
-  border-radius: 2px;
-  transition: border-color 0.1s;
-}
-.bd-shell:hover {
-  border-color: #93c5fd;
-}
-.bd-shell--selected,
-.bd-shell--selected:hover {
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 1px #3b82f6;
+/* 块卡片化（视觉对齐规范 §1）：卡片 chrome 只在 .bd-paper--canvas（设计画布），
+   预览/打印仍走 .bd-flow-list gap:2mm、零卡片边距（§0.1 隔离口径）。
+   代价：卡内水平 padding 12px 使画布行宽比打印窄 ~24px，换行位置可能略有出入——版式精确以「预览」为准（参考编辑器同款取舍）。 */
+.bd-paper--canvas .bd-flow-list {
+  gap: 12px;
 }
 
-/* hover 工具条：悬于块右上 */
+/* 块卡：白底 + 发丝边框 + 极轻投影（三层白层次：桌面灰阴影纸面、纸面发丝边框块卡，§7） */
+.bd-paper--canvas .bd-shell {
+  position: relative;
+  background: #fff;
+  border: 1px solid var(--bd-card-bd);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(23, 26, 31, 0.04);
+  padding: 28px 12px 12px; /* 顶部 28px 容纳类型标签行 */
+  transition:
+    border-color 0.12s,
+    background-color 0.12s,
+    box-shadow 0.12s;
+}
+.bd-paper--canvas .bd-shell:hover {
+  border-color: var(--bd-card-hover);
+}
+.bd-paper--canvas .bd-shell--selected,
+.bd-paper--canvas .bd-shell--selected:hover {
+  border-color: var(--bd-card-active);
+  box-shadow:
+    0 0 0 1px var(--bd-card-active),
+    0 1px 2px rgba(23, 26, 31, 0.04);
+  background: var(--bd-card-tint); /* 整卡淡蓝底：值格无底色，tint 透出 = 参考的选中效果 */
+}
+
+/* 类型标签：卡内左上，非交互（复用 BLOCK_META 图标+文案） */
+.bd-shell-type {
+  position: absolute;
+  top: 7px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--bd-type-fg);
+  pointer-events: none;
+  user-select: none;
+}
+.bd-shell-type svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* 拖拽把手：块外左侧垂直居中（根级块；嵌套块用工具条内拖拽钮） */
+.bd-shell-grip {
+  position: absolute;
+  left: -24px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 28px;
+  border-radius: 4px;
+  color: #a3a9b3;
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.bd-shell-grip:active {
+  cursor: grabbing;
+}
+.bd-shell-grip:hover {
+  color: #6b7280;
+  background: rgba(23, 26, 31, 0.05);
+}
+.bd-paper--canvas .bd-shell:hover > .bd-shell-grip,
+.bd-paper--canvas .bd-shell--selected > .bd-shell-grip {
+  opacity: 1;
+}
+
+/* 工具条：卡内右上，白底浮群（替换深蓝药丸） */
 .bd-shell-tools {
   position: absolute;
-  top: -18px;
-  right: 0;
+  top: 4px;
+  right: 6px;
   z-index: 10;
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 1px 3px;
-  border-radius: 3px;
-  background: #1e40af;
-  color: #fff;
+  padding: 2px;
+  border-radius: 6px;
+  background: #fff;
+  border: 1px solid var(--bd-card-bd);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   pointer-events: auto;
 }
 .bd-shell--selected .bd-shell-tools {
-  opacity: 1;
-}
-.bd-shell-name {
-  padding: 0 3px;
-  font-size: 10px;
-  line-height: 16px;
-  white-space: nowrap;
+  opacity: 1; /* 选中常显（保留现状） */
 }
 .bd-shell-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 2px;
-  color: #dbeafe;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: #6b7280;
 }
 .bd-shell-btn:hover {
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
+  background: #f3f4f6;
+  color: #111827;
+}
+.bd-shell-btn--danger:hover {
+  background: #fef2f2;
+  color: #dc2626;
 }
 
 /* 拖放落点指示线 */
@@ -257,11 +335,12 @@ th.bd-tbl-label {
   z-index: 9;
 }
 
-/* 行容器空栏放置区 */
+/* 行容器空栏放置区（与卡片语言一致，§1.3-5） */
 .bd-droplist--nested {
-  border: 1px dashed #e5e7eb;
-  border-radius: 2px;
-  padding: 1mm;
+  border: 1px dashed #dbe0e6;
+  border-radius: 6px;
+  padding: 6px;
+  background: #fafbfc;
 }
 
 .bd-empty-hint {

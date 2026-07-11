@@ -52,6 +52,33 @@ export function schemaKeyIssues(widgets: FormWidget[] | null | undefined): strin
   return [...seen.entries()].filter(([, n]) => n > 1).map(([k]) => `字段标识「${k}」重复（${seen.get(k)} 处），请在字段设计器里改唯一`)
 }
 
+/**
+ * 私有 schema → 子表字段及其列（与 /fields 端点同形状：subform 条目 + `子表key.列key` 点分条目）。
+ * 供模板设计器明细数据源/列拾取器（视觉对齐规范拾取器裁定）；主字段清单（deriveSchemaFields）
+ * 维持排除 subform 的口径不变（台账配置/字段选择器不受影响）。
+ */
+export function deriveSubformFields(widgets: FormWidget[] | null | undefined): DefField[] {
+  if (!Array.isArray(widgets) || widgets.length === 0) return []
+  const out: DefField[] = []
+  const walk = (list: FormWidget[]) => {
+    for (const w of list) {
+      const t = w.type as WidgetType
+      if (isContainerType(t)) {
+        if (Array.isArray(w.children)) walk(w.children)
+        continue
+      }
+      if (!isSubformType(t)) continue
+      const subKey = w.key?.trim() || w.id
+      out.push({ key: subKey, label: w.label, type: "subform" })
+      for (const col of deriveSchemaFields(w.children ?? [])) {
+        out.push({ key: `${subKey}.${col.key}`, label: col.label, type: col.type })
+      }
+    }
+  }
+  walk(widgets)
+  return out
+}
+
 /** 统一字段源：INLINE=本地派生（同步）；CODE/存量 ONLINE=统一清单（失败回空，由调用方兜底提示） */
 export async function fieldsForDef(def: Pick<BizDocDef, "formType" | "formCode" | "formSchema">): Promise<DefField[]> {
   if (def.formType === "INLINE") return deriveSchemaFields(def.formSchema)

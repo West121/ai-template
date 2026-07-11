@@ -185,10 +185,12 @@ export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks, onPat
 
   /* -------- 块外壳 + 容器列表 -------- */
 
-  const BlockShell = ({ block, at, count }: { block: BdBlock; at: DropAt; count: number }) => {
+  const BlockShell = ({ block, at, count, nested = false }: { block: BdBlock; at: DropAt; count: number; nested?: boolean }) => {
     const selected = selectedId === block.id
     const editing = editingId === block.id
     const editable = block.type === "title" || block.type === "text" || block.type === "labelField"
+    const meta = BLOCK_META[block.type]
+    const TypeIcon = meta?.icon
     return (
       <div
         className={`bd-shell group/blk relative ${selected ? "bd-shell--selected" : ""}`}
@@ -212,9 +214,13 @@ export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks, onPat
           handleDrop(e, { ...at, index: at.index + (before ? 0 : 1) })
         }}
       >
-        {/* hover 工具条 */}
-        <div className="bd-shell-tools opacity-0 transition-opacity group-hover/blk:opacity-100">
-          <span className="bd-shell-name">{BLOCK_META[block.type]?.label ?? block.type}</span>
+        {/* 类型标签（卡内左上，复用 BLOCK_META，非交互，视觉对齐规范 §1.3） */}
+        <span className="bd-shell-type">
+          {TypeIcon && <TypeIcon />}
+          {meta?.label ?? block.type}
+        </span>
+        {/* 拖拽把手：块外左侧垂直居中（仅根级；嵌套块会压到相邻栏，保留工具条内拖拽钮） */}
+        {!nested && (
           <button
             type="button"
             title="拖拽排序"
@@ -224,10 +230,28 @@ export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks, onPat
               e.dataTransfer.setData(DND_MOVE, block.id)
               e.dataTransfer.effectAllowed = "move"
             }}
-            className="bd-shell-btn cursor-grab active:cursor-grabbing"
+            className="bd-shell-grip"
           >
-            <GripVertical className="size-3" />
+            <GripVertical className="size-3.5" />
           </button>
+        )}
+        {/* hover 工具条（卡内右上白底浮群） */}
+        <div className="bd-shell-tools opacity-0 transition-opacity group-hover/blk:opacity-100">
+          {nested && (
+            <button
+              type="button"
+              title="拖拽排序"
+              draggable
+              onDragStart={(e) => {
+                e.stopPropagation()
+                e.dataTransfer.setData(DND_MOVE, block.id)
+                e.dataTransfer.effectAllowed = "move"
+              }}
+              className="bd-shell-btn cursor-grab active:cursor-grabbing"
+            >
+              <GripVertical className="size-3" />
+            </button>
+          )}
           <button
             type="button"
             title="上移"
@@ -273,7 +297,7 @@ export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks, onPat
           <button
             type="button"
             title="删除"
-            className="bd-shell-btn hover:!text-red-600"
+            className="bd-shell-btn bd-shell-btn--danger"
             onClick={(e) => {
               e.stopPropagation()
               onBlocks(removeBlock(tpl.blocks, block.id))
@@ -308,7 +332,7 @@ export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks, onPat
       {blocks.map((b, i) => (
         <div key={b.id} className="relative">
           {sameAt(indicator, { parent, col, index: i }) && <div className="bd-drop-line" />}
-          <BlockShell block={b} at={{ parent, col, index: i }} count={blocks.length} />
+          <BlockShell block={b} at={{ parent, col, index: i }} count={blocks.length} nested={nested} />
         </div>
       ))}
       {sameAt(indicator, { parent, col, index: blocks.length }) && <div className="bd-drop-line" />}
@@ -330,12 +354,13 @@ export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks, onPat
           onSelect(id)
         }}
       >
+        {/* 类型标签（左上，与块卡统一，§1.4） */}
+        <span className="bd-shell-type">{which === "header" ? "文档页眉" : "文档页脚"}</span>
         <div className="bd-shell-tools opacity-0 transition-opacity group-hover/band:opacity-100">
-          <span className="bd-shell-name">{which === "header" ? "文档页眉" : "文档页脚"}</span>
           <button
             type="button"
             title="删除"
-            className="bd-shell-btn hover:!text-red-600"
+            className="bd-shell-btn bd-shell-btn--danger"
             onClick={(e) => {
               e.stopPropagation()
               onPatchPage(which === "header" ? { header: null } : { footer: null })
@@ -352,7 +377,8 @@ export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks, onPat
 
   return (
     <div
-      className="bd-paper bd-paper--flow"
+      /* bd-paper--canvas：块卡片 chrome 只在设计画布（§0.1），预览/打印（V2Paper）零卡片痕迹 */
+      className="bd-paper bd-paper--flow bd-paper--canvas"
       style={{
         width: `${size.w}mm`,
         minHeight: `${size.h}mm`,

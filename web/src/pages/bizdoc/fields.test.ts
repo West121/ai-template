@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "vitest"
 import type { FormWidget } from "@/types/workflow"
-import { deriveSchemaFields, fieldsForDef, schemaKeyIssues } from "./fields"
+import { deriveSchemaFields, deriveSubformFields, fieldsForDef, schemaKeyIssues } from "./fields"
 
 const SCHEMA: FormWidget[] = [
   { id: "f1", type: "input", label: "车牌号", key: "plate" },
@@ -40,6 +40,32 @@ describe("deriveSchemaFields（INLINE 本地派生）", () => {
     expect(deriveSchemaFields([])).toEqual([])
     expect(deriveSchemaFields(null)).toEqual([])
     expect(deriveSchemaFields(undefined)).toEqual([])
+  })
+})
+
+describe("deriveSubformFields（子表及其列，端点同形状：拾取器用）", () => {
+  it("subform 条目 + `子表key.列key` 点分列；容器下钻；无子表回空", () => {
+    const out = deriveSubformFields(SCHEMA)
+    expect(out.map((f) => f.key)).toEqual(["items"])
+    const withCols = deriveSubformFields([
+      {
+        id: "s1",
+        type: "subform",
+        label: "费用明细",
+        key: "items",
+        children: [
+          { id: "c1", type: "input", label: "事项", key: "name" },
+          { id: "c2", type: "number", label: "金额" }, // 无 key → 回退 id
+        ],
+      } as FormWidget,
+    ])
+    expect(withCols).toEqual([
+      { key: "items", label: "费用明细", type: "subform" },
+      { key: "items.name", label: "事项", type: "input" },
+      { key: "items.c2", label: "金额", type: "number" },
+    ])
+    expect(deriveSubformFields([{ id: "a", type: "input", label: "x" }])).toEqual([])
+    expect(deriveSubformFields(null)).toEqual([])
   })
 })
 

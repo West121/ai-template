@@ -33,7 +33,7 @@ import {
 } from "@/components/bizdoc/model-v2"
 import { fetchDef, fetchPrintTpl, savePrintTpl, type BizDocDef } from "../mock"
 import { fetchTpl, fetchTplFields, publishTpl, saveTpl, type BizDocTpl } from "../tpls"
-import { fieldsForDef } from "../fields"
+import { deriveSubformFields, fieldsForDef } from "../fields"
 import { useHistory } from "./history"
 import { Palette } from "./palette"
 import { DesignerCanvas } from "./canvas"
@@ -100,9 +100,11 @@ export default function TplDesignerPage() {
         if (!alive) return
         setDef(defRes.data)
         if (defRes.data) {
-          // §10 统一字段源：INLINE=def.formSchema 本地派生；CODE/存量 ONLINE=统一清单
+          // §10 统一字段源：INLINE=def.formSchema 本地派生；CODE/存量 ONLINE=统一清单；
+          // 另并入子表字段及其列（与 /fields 端点同形状，供明细数据源/列拾取器）
           const fs = await fieldsForDef(defRes.data)
-          if (alive) setFields(fs)
+          const subs = defRes.data.formType === "INLINE" ? deriveSubformFields(defRes.data.formSchema) : []
+          if (alive) setFields([...fs, ...subs])
         }
         if (tplId !== "new") {
           const tplRes = await fetchPrintTpl(Number(tplId))
@@ -148,17 +150,32 @@ export default function TplDesignerPage() {
     return () => window.removeEventListener("keydown", onKey)
   }, [history])
 
+  /* ---- 字段源分流（视觉对齐规范拾取器裁定）：
+     端点/派生清单里的 subform 条目与其列（`子表key.列key` 点分键）只进拾取器，
+     不进 token 选择器/插入变量浮层（{{items}} 直插数组无意义） ---- */
+  const subformKeys = useMemo(() => new Set(fields.filter((f) => f.type === "subform").map((f) => f.key)), [fields])
+  const tokenFields = useMemo(
+    () =>
+      fields.filter((f) => {
+        if (f.type === "subform") return false
+        const dot = f.key.indexOf(".")
+        if (dot > 0 && subformKeys.has(f.key.slice(0, dot))) return false // 子表列只进拾取器
+        return true
+      }),
+    [fields, subformKeys],
+  )
+
   /* ---- §12 计算配置派生 ---- */
   const calcEnabled = !!tpl.calc
   const calcVars = useMemo(() => calcVarFields(tpl.calc), [tpl.calc])
   /** chip 显示名：表单字段 ∪ 计算变量 */
   const fieldMap = useMemo(
-    () => ({ ...Object.fromEntries(fields.map((f) => [f.key, f.label])), ...Object.fromEntries(calcVars.map((c) => [c.key, c.label])) }),
-    [fields, calcVars],
+    () => ({ ...Object.fromEntries(tokenFields.map((f) => [f.key, f.label])), ...Object.fromEntries(calcVars.map((c) => [c.key, c.label])) }),
+    [tokenFields, calcVars],
   )
   /** 「插入变量」浮层分组（与 field-picker 同源） */
-  const varGroups = useMemo(() => buildVarGroups(fields, calcVars), [fields, calcVars])
-  /** 聚合数据源候选：schema/字段清单里的 subform ∪ 模板 detailTable 引用的子表 */
+  const varGroups = useMemo(() => buildVarGroups(tokenFields, calcVars), [tokenFields, calcVars])
+  /** 数据源候选（明细/聚合共用）：字段清单 subform ∪ 模板 detailTable 引用的子表 */
   const subformOptions = useMemo(() => {
     const out = new Map<string, string>()
     for (const f of fields) if (f.type === "subform") out.set(f.key, f.label)
@@ -171,20 +188,31 @@ export default function TplDesignerPage() {
     scan(tpl.blocks)
     return [...out.entries()].map(([key, label]) => ({ key, label }))
   }, [fields, tpl.blocks])
-  /** 各子表已知列（来自模板 detailTable columns，聚合字段快捷 chips） */
+  /** 各子表已知列：端点点分键（`items.name`）∪ 模板 detailTable columns（明细列拾取 + 聚合 chips 共用） */
   const columnsBySource = useMemo(() => {
     const out: Record<string, { field: string; label: string }[]> = {}
+    const put = (source: string, field: string, label: string) => {
+      const list = (out[source] ??= [])
+      if (field && !list.some((c) => c.field === field)) list.push({ field, label })
+    }
+    // 字段端点下发的子表列：`子表key.列key`
+    for (const f of fields) {
+      const dot = f.key.indexOf(".")
+      if (dot > 0 && subformKeys.has(f.key.slice(0, dot))) {
+        put(f.key.slice(0, dot), f.key.slice(dot + 1), f.label)
+      }
+    }
     const scan = (blocks: BdBlock[]) => {
       for (const b of blocks) {
-        if (b.type === "detailTable" && b.field.trim() && !out[b.field]) {
-          out[b.field] = b.columns.filter((c) => c.field.trim()).map((c) => ({ field: c.field, label: c.label }))
+        if (b.type === "detailTable" && b.field.trim()) {
+          for (const c of b.columns) if (c.field.trim()) put(b.field, c.field, c.label)
         }
         if (b.type === "row") b.children.forEach(scan)
       }
     }
     scan(tpl.blocks)
     return out
-  }, [tpl.blocks])
+  }, [fields, subformKeys, tpl.blocks])
 
   const selectedBand = selectedId === HEADER_ID ? "header" : selectedId === FOOTER_ID ? "footer" : null
   const selected = selectedId && !selectedBand ? findBlock(tpl.blocks, selectedId)?.block ?? null : null
@@ -444,7 +472,7 @@ export default function TplDesignerPage() {
             <BandPanel
               which={selectedBand}
               band={tpl.page[selectedBand]!}
-              fields={fields}
+              fields={tokenFields}
               calcVars={calcVars}
               onChange={(b) => patchPage(selectedBand === "header" ? { header: b } : { footer: b })}
               onRemove={() => {
@@ -453,7 +481,14 @@ export default function TplDesignerPage() {
               }}
             />
           ) : selected ? (
-            <BlockPanel block={selected} fields={fields} calcVars={calcVars} onPatch={patchSelected} />
+            <BlockPanel
+              block={selected}
+              fields={tokenFields}
+              calcVars={calcVars}
+              subformOptions={subformOptions}
+              columnsBySource={columnsBySource}
+              onPatch={patchSelected}
+            />
           ) : (
             <PagePanel page={tpl.page} onPatch={patchPage} />
           )}
@@ -461,7 +496,7 @@ export default function TplDesignerPage() {
       </div>
       )}
 
-      <PreviewDialog tpl={tpl} fields={fields} open={preview} onClose={() => setPreview(false)} />
+      <PreviewDialog tpl={tpl} fields={tokenFields} open={preview} onClose={() => setPreview(false)} />
       <JsonDialog
         tpl={tpl}
         name={name}
