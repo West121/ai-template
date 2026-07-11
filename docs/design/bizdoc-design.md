@@ -163,3 +163,20 @@
 打印数据接口 `GET /docs/{id}/print` 的 `data` 增 **`_approvals` 数组**:绑流程单据从其流程实例取
 办理记录(nodeName/assigneeName/opinion/time,按办理顺序);无流程或未办为 []。其余接口不变
 (模板 content 存 v2 JSON 对后端透明)。
+
+## 10. 范式修正二(用户裁定):单据自带表单设计,与表单管理解耦
+
+单据的字段与录入界面是**单据模块自己的一套在线设计**(自包含),不依赖 wf 表单管理:
+
+- `oa_bizdoc_def` 加 **`form_schema` JSON**(单据私有表单 schema,widgets 结构与在线表单同构——
+  这样 FormRenderer/表单设计器组件可直接复用,但数据**只存在单据定义里**,不进 wf_form_def)。
+- `form_type` 语义:**`INLINE`(内置设计,默认/主路径)** | `CODE`(高级:绑手写表单,submitPath 场景保留)。
+  ONLINE 绑定选项**移除**(被内置设计替代);存量 ONLINE 定义兼容读(当外部引用渲染)。
+- **定义编辑**:②区改为「单据字段设计」——打开**表单设计器**(复用现有 designer/form 设计器组件,
+  产物存 def.form_schema);台账列/筛选配置、打印模板字段树、录入 FormRenderer **全部改从私有
+  schema 派生字段**,不再调 /api/wf/forms/{key}/fields(CODE 定义仍走统一清单)。
+- **与流程的字段识别联动**(单据绑审批流时,流程设计器的条件/取人要能选单据字段):
+  FormManifestService 增 bizdoc 分支——`formKey = "bizdoc:{defCode}"` 从 def.form_schema 派生
+  FieldDescriptor 清单;bizdoc 定义发布时该 key 即可用,流程定义绑定该 key 或直接在编排/流程中
+  引用。发布校验相应改(INLINE 校验 schema 非空且字段 key 唯一)。
+- 打印数据/状态机/占号/事件回写不变(form_data JSON 与表单来源无关)。
