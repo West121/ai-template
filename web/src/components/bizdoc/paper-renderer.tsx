@@ -105,6 +105,55 @@ function blkFont(style: BdBlockStyle | undefined): CSSProperties {
 
 const alignFlex = (a: "left" | "center" | "right") => (a === "left" ? "flex-start" : a === "right" ? "flex-end" : "center")
 
+/* -------- 单元格就地编辑接入（设计器交互，第五张截图） -------- */
+
+/** 可就地编辑的值区定位：块 id + 类别 + 序号（labelField 恒 0） */
+export interface CellRef {
+  blockId: string
+  kind: "infoTable" | "labelField" | "docInfo"
+  index: number
+}
+
+const sameCellRef = (a: CellRef | null | undefined, b: CellRef) =>
+  !!a && a.blockId === b.blockId && a.kind === b.kind && a.index === b.index
+
+/** 设计器注入：active 单元格渲染编辑器；其余值区点击打开（属性面板路径并存） */
+export interface CellEditApi {
+  active: CellRef | null
+  onOpen: (ref: CellRef, value: string) => void
+  renderEditor: (ref: CellRef) => ReactNode
+}
+
+/** 值区：design+cellEdit → 就地编辑；否则照常 TokenText（final/无注入零影响） */
+function EditableValue({
+  text,
+  ctx,
+  mode,
+  cellEdit,
+  cellRef,
+}: {
+  text: string
+  ctx: BdRenderCtx
+  mode: RenderMode
+  cellEdit?: CellEditApi
+  cellRef: CellRef
+}) {
+  if (mode !== "design" || !cellEdit) return <TokenText text={text} ctx={ctx} mode={mode} />
+  if (sameCellRef(cellEdit.active, cellRef)) return <>{cellEdit.renderEditor(cellRef)}</>
+  return (
+    <span
+      role="button"
+      tabIndex={-1}
+      title="点击编辑（可插入变量）"
+      className={`bd-cell-val${text ? "" : " bd-cell-val--empty"}`}
+      onClick={() => cellEdit.onOpen(cellRef, text)}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      {text ? <TokenText text={text} ctx={ctx} mode={mode} /> : "点击插入变量"}
+    </span>
+  )
+}
+
 /** 明细行数据：final 取子表数组；design / 缺数据给占位行 */
 function detailRows(field: string, ctx: BdRenderCtx, mode: RenderMode): Record<string, unknown>[] | null {
   const v = getByPath(ctx.data, field)
@@ -121,12 +170,15 @@ export function V2BlockBody({
   ctx,
   mode,
   renderColumn,
+  cellEdit,
 }: {
   block: BdBlock
   ctx: BdRenderCtx
   mode: RenderMode
   /** design 态 row 分栏的自定义渲染（塞 BlockShell 列表） */
   renderColumn?: (col: BdBlock[], colIndex: number) => ReactNode
+  /** design 态单元格就地编辑注入（infoTable/labelField/docInfo 值区） */
+  cellEdit?: CellEditApi
 }) {
   switch (block.type) {
     case "title":
@@ -140,9 +192,9 @@ export function V2BlockBody({
       return (
         <div className="bd-blk-docinfo" style={{ alignItems: alignFlex(align), ...blkFont({ ...block.style, align: undefined }) }}>
           {block.items.map((it, i) => (
-            <div key={i}>
-              {it.label && `${it.label}：`}
-              <TokenText text={it.value} ctx={ctx} mode={mode} />
+            <div key={i} style={{ display: "flex", alignItems: "baseline", gap: "1mm" }}>
+              {it.label && <span style={{ whiteSpace: "nowrap" }}>{it.label}：</span>}
+              <EditableValue text={it.value} ctx={ctx} mode={mode} cellEdit={cellEdit} cellRef={{ blockId: block.id, kind: "docInfo", index: i }} />
             </div>
           ))}
         </div>
@@ -151,25 +203,25 @@ export function V2BlockBody({
     case "infoTable": {
       const per = Math.max(1, block.columnsPerRow)
       const labelW = block.style?.labelWidth ?? 28
-      // 按 span 装行
-      const rows: { label: string; value: string; span: number }[][] = []
-      let cur: { label: string; value: string; span: number }[] = []
+      // 按 span 装行（idx=cells 原始下标，就地编辑寻址用）
+      const rows: { label: string; value: string; span: number; idx: number }[][] = []
+      let cur: { label: string; value: string; span: number; idx: number }[] = []
       let used = 0
-      for (const c of block.cells) {
+      block.cells.forEach((c, idx) => {
         const span = Math.max(1, Math.min(c.span ?? 1, per))
         if (used + span > per && cur.length > 0) {
           rows.push(cur)
           cur = []
           used = 0
         }
-        cur.push({ label: c.label, value: c.value, span })
+        cur.push({ label: c.label, value: c.value, span, idx })
         used += span
         if (used >= per) {
           rows.push(cur)
           cur = []
           used = 0
         }
-      }
+      })
       if (cur.length > 0) rows.push(cur)
       return (
         <table className="bd-tbl" style={blkFont({ ...block.style, align: undefined })}>
@@ -191,7 +243,7 @@ export function V2BlockBody({
                       {c.label}
                     </td>,
                     <td key={`v${ci}`} colSpan={c.span * 2 - 1 + pad}>
-                      <TokenText text={c.value} ctx={ctx} mode={mode} />
+                      <EditableValue text={c.value} ctx={ctx} mode={mode} cellEdit={cellEdit} cellRef={{ blockId: block.id, kind: "infoTable", index: c.idx }} />
                     </td>,
                   ]
                 })}
@@ -213,7 +265,7 @@ export function V2BlockBody({
             <tr>
               <td className="bd-tbl-label">{block.label}</td>
               <td>
-                <TokenText text={block.value} ctx={ctx} mode={mode} />
+                <EditableValue text={block.value} ctx={ctx} mode={mode} cellEdit={cellEdit} cellRef={{ blockId: block.id, kind: "labelField", index: 0 }} />
               </td>
             </tr>
           </tbody>

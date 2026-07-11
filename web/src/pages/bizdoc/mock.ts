@@ -7,7 +7,7 @@ import { api, ApiError, NetworkError, type PageResult } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
 import type { FormWidget } from "@/types/workflow"
 import type { BdTemplate } from "@/components/bizdoc/model"
-import { emptyTemplateV2, type AnyBdTemplate, type BdTemplateV2 } from "@/components/bizdoc/model-v2"
+import { emptyTemplateV2, evalCalcDemo, isV2, type AnyBdTemplate, type BdTemplateV2 } from "@/components/bizdoc/model-v2"
 
 /* ============================ 类型（对齐 §2 表结构） ============================ */
 
@@ -133,6 +133,14 @@ const EXPENSE_TPL_V2: BdTemplateV2 = {
     header: { text: "星辰科技 · 财务单据", align: "left", fontSize: 8.5 },
     footer: { text: "编号 {{docNo}}", align: "right", fontSize: 8.5 },
   },
+  // §12 计算配置演示：聚合（明细合计/大写）+ 计算字段（含税，引用聚合名）
+  calc: {
+    aggregates: [
+      { name: "total_amount", label: "合计金额", source: "items", field: "amount", fn: "SUM", format: "number", scale: 2 },
+      { name: "total_cn", label: "合计大写", source: "items", field: "amount", fn: "SUM", format: "chinese", scale: 2 },
+    ],
+    computed: [{ name: "amount_with_tax", label: "含税合计", expr: "round(total_amount * 1.06, 2)", format: "number", scale: 2 }],
+  },
   blocks: [
     { id: "b1", type: "title", text: "费用报销单", style: { fontSize: 18, bold: true, align: "center" } },
     {
@@ -172,7 +180,8 @@ const EXPENSE_TPL_V2: BdTemplateV2 = {
       showIndex: true,
       style: { fontSize: 10.5 },
     },
-    { id: "b6", type: "spacer", h: 4 },
+    { id: "b6", type: "labelField", label: "合计（大写）", value: "{{total_cn}}（含税 {{amount_with_tax}} 元）", style: { fontSize: 10.5, labelWidth: 30 } },
+    { id: "b6s", type: "spacer", h: 4 },
     {
       id: "b7",
       type: "approvalTable",
@@ -660,9 +669,7 @@ export function fetchPrintData(docId: number, tplId?: number): Promise<BdResult<
           approvals.push({ nodeName: "财务复核", assigneeName: "李会计", opinion: "已复核，金额无误。", time: `${doc.createdAt.slice(0, 10)} 16:30` })
         }
       }
-      return {
-        tpl,
-        data: {
+      const data: Record<string, unknown> = {
           ...doc.formData,
           docNo: doc.docNo ?? "",
           title: doc.title,
@@ -675,9 +682,10 @@ export function fetchPrintData(docId: number, tplId?: number): Promise<BdResult<
           date: doc.createdAt.slice(0, 10),
           status: doc.status,
           _approvals: approvals,
-        },
-        fields,
       }
+      // §12：含 calc 的 v2 模板 → 求值并入 data（真实由磐石在出数据时求值）
+      if (isV2(tpl.content)) Object.assign(data, evalCalcDemo(tpl.content.calc, data))
+      return { tpl, data, fields }
     },
   )
 }

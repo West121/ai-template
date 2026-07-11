@@ -281,6 +281,124 @@ th.bd-tbl-label {
   pointer-events: none;
 }
 
+/* ============ 单元格就地编辑 + 插入变量浮层（设计器 chrome，不进打印） ============ */
+
+/* 可编辑值区：hover 出淡蓝提示框 */
+.bd-cell-val {
+  display: inline-block;
+  min-width: 8mm;
+  min-height: 1.2em;
+  width: 100%;
+  border-radius: 2px;
+  outline: 1px dashed transparent;
+  outline-offset: 1px;
+  cursor: text;
+}
+.bd-cell-val:hover {
+  outline-color: #93c5fd;
+  background: rgba(59, 130, 246, 0.04);
+}
+.bd-cell-val--empty {
+  color: #c2cad4;
+  font-size: 8pt;
+}
+
+.bd-cell-editor {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+.bd-cell-editor-box {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid #3b82f6;
+  border-radius: 3px;
+  background: #fff;
+  padding: 0 2px;
+}
+.bd-cell-editor-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 0.5mm 1mm;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.bd-cell-editor-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #e5e7eb;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+.bd-cell-editor-clear:hover {
+  background: #d1d5db;
+  color: #111827;
+}
+
+/* 插入变量浮层（贴单元格下方；近底部上翻） */
+.bd-var-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  width: 264px;
+  max-width: 70vw;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.bd-var-pop--up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+.bd-var-pop-title {
+  padding: 6px 10px;
+  border-bottom: 1px solid #f1f5f9;
+  font-weight: 600;
+  color: #334155;
+}
+.bd-var-pop-body {
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 6px 10px 8px;
+}
+.bd-var-group + .bd-var-group {
+  margin-top: 6px;
+}
+.bd-var-group-title {
+  margin-bottom: 3px;
+  font-size: 10px;
+  color: #94a3b8;
+}
+.bd-var-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.bd-var-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.bd-var-chip:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
 /* ============ 打印隔离（照 gongwen.css） ============ */
 @media print {
   body * {

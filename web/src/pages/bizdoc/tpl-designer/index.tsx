@@ -1,21 +1,25 @@
 /**
- * 套打模板设计器 v2（bizdoc-design.md §9.2 文档流式 + §11 独立模板接入）。
+ * 套打模板设计器 v2（bizdoc-design.md §9.2 文档流式 + §11 独立模板接入 + §12 计算配置）。
  * 三栏：左=元素库（分组照参考图）｜中=纸面文档流画布｜右=属性面板（未选中=页面设置）。
- * 顶部：撤销/重做（≤20步，Ctrl+Z/Y）/ 预览（样例+审批样例）/ JSON 源码（导入导出）/ 保存（独立模板另有发布）。
+ * 顶部：撤销/重做（≤20步，Ctrl+Z/Y）/ 预览（样例+审批样例+计算演示）/ JSON 源码（导入导出）/
+ * 「启用计算配置」开关（§12：开启变两步向导 ① 计算配置 → ② 模板设计，步骤条+下一步）/ 保存（独立模板另有发布）。
  * 路由：/bizdoc/tpl/:defCode/:tplId（业务单据绑定，tplId=new 新建）｜/bizdoc/tpl/t/:tplId（§11 独立模板，
  * 字段树按绑定来源聚合端点取，FLOW 绑定 _approvals 组常驻）。v1 旧模板只读兼容不进设计器。
  */
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
-import { ArrowLeft, Braces, Eye, Loader2, Redo2, Save, Undo2, Upload } from "lucide-react"
+import { ArrowLeft, ArrowRight, Braces, Eye, Loader2, Redo2, Save, Undo2, Upload } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { Card, CardContent } from "@/components/ui/card"
 import { useHasPerm } from "@/stores/auth-store"
 import {
   FOOTER_ID,
   HEADER_ID,
+  calcIssues,
+  calcVarFields,
   emptyTemplateV2,
   findBlock,
   isV2,
@@ -35,7 +39,8 @@ import { Palette } from "./palette"
 import { DesignerCanvas } from "./canvas"
 import { PagePanel, BlockPanel, BandPanel } from "./props-panel"
 import { PreviewDialog, JsonDialog } from "./dialogs"
-import type { FieldOption } from "./field-picker"
+import { CalcConfig } from "./calc-config"
+import { buildVarGroups, type FieldOption } from "./token-vars"
 
 export default function TplDesignerPage() {
   const { defCode, tplId = "new" } = useParams()
@@ -56,6 +61,8 @@ export default function TplDesignerPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [preview, setPreview] = useState(false)
   const [jsonOpen, setJsonOpen] = useState(false)
+  /** §12 两步向导当前步（calc 段存在时才有意义） */
+  const [step, setStep] = useState<"calc" | "design">("design")
 
   const history = useHistory<BdTemplateV2>(emptyTemplateV2())
   const tpl = history.state
@@ -81,8 +88,12 @@ export default function TplDesignerPage() {
           const f = await fetchTplFields(res.data)
           if (!alive) return
           setFields(f.data)
-          if (isV2(res.data.content)) resetHistory(res.data.content)
-          else setLegacyV1(true)
+          if (isV2(res.data.content)) {
+            resetHistory(res.data.content)
+            setStep(res.data.content.calc ? "calc" : "design")
+          } else {
+            setLegacyV1(true)
+          }
           return
         }
         const defRes = await fetchDef(defCode ?? "")
@@ -101,6 +112,7 @@ export default function TplDesignerPage() {
             setTplDbId(tplRes.data.id)
             if (isV2(tplRes.data.content)) {
               resetHistory(tplRes.data.content)
+              setStep(tplRes.data.content.calc ? "calc" : "design")
             } else {
               setLegacyV1(true)
             }
@@ -136,7 +148,44 @@ export default function TplDesignerPage() {
     return () => window.removeEventListener("keydown", onKey)
   }, [history])
 
-  const fieldMap = useMemo(() => Object.fromEntries(fields.map((f) => [f.key, f.label])), [fields])
+  /* ---- §12 计算配置派生 ---- */
+  const calcEnabled = !!tpl.calc
+  const calcVars = useMemo(() => calcVarFields(tpl.calc), [tpl.calc])
+  /** chip 显示名：表单字段 ∪ 计算变量 */
+  const fieldMap = useMemo(
+    () => ({ ...Object.fromEntries(fields.map((f) => [f.key, f.label])), ...Object.fromEntries(calcVars.map((c) => [c.key, c.label])) }),
+    [fields, calcVars],
+  )
+  /** 「插入变量」浮层分组（与 field-picker 同源） */
+  const varGroups = useMemo(() => buildVarGroups(fields, calcVars), [fields, calcVars])
+  /** 聚合数据源候选：schema/字段清单里的 subform ∪ 模板 detailTable 引用的子表 */
+  const subformOptions = useMemo(() => {
+    const out = new Map<string, string>()
+    for (const f of fields) if (f.type === "subform") out.set(f.key, f.label)
+    const scan = (blocks: BdBlock[]) => {
+      for (const b of blocks) {
+        if (b.type === "detailTable" && b.field.trim() && !out.has(b.field)) out.set(b.field, `明细（${b.field}）`)
+        if (b.type === "row") b.children.forEach(scan)
+      }
+    }
+    scan(tpl.blocks)
+    return [...out.entries()].map(([key, label]) => ({ key, label }))
+  }, [fields, tpl.blocks])
+  /** 各子表已知列（来自模板 detailTable columns，聚合字段快捷 chips） */
+  const columnsBySource = useMemo(() => {
+    const out: Record<string, { field: string; label: string }[]> = {}
+    const scan = (blocks: BdBlock[]) => {
+      for (const b of blocks) {
+        if (b.type === "detailTable" && b.field.trim() && !out[b.field]) {
+          out[b.field] = b.columns.filter((c) => c.field.trim()).map((c) => ({ field: c.field, label: c.label }))
+        }
+        if (b.type === "row") b.children.forEach(scan)
+      }
+    }
+    scan(tpl.blocks)
+    return out
+  }, [tpl.blocks])
+
   const selectedBand = selectedId === HEADER_ID ? "header" : selectedId === FOOTER_ID ? "footer" : null
   const selected = selectedId && !selectedBand ? findBlock(tpl.blocks, selectedId)?.block ?? null : null
 
@@ -166,6 +215,31 @@ export default function TplDesignerPage() {
 
   const patchPage = (patch: Partial<BdPageV2>) => {
     history.push({ ...tpl, page: { ...tpl.page, ...patch } })
+  }
+
+  /* ---- §12：开关 + 向导 ---- */
+  const formFieldMap = useMemo(() => Object.fromEntries(fields.map((f) => [f.key, f.label])), [fields])
+
+  const toggleCalc = (on: boolean) => {
+    if (on) {
+      history.push({ ...tpl, calc: tpl.calc ?? { aggregates: [], computed: [] } })
+      setStep("calc")
+    } else {
+      const { calc: _calc, ...rest } = tpl
+      history.push(rest as BdTemplateV2)
+      setStep("design")
+      toast.info("已停用计算配置（可撤销恢复）")
+    }
+  }
+
+  /** 下一步（① → ②）：§12 校验拦截（重名/公式空/聚合未选子表） */
+  const goDesignStep = () => {
+    const issues = calcIssues(tpl.calc, formFieldMap)
+    if (issues.length > 0) {
+      toast.error(issues[0], { description: issues.length > 1 ? `等 ${issues.length} 个问题` : undefined })
+      return
+    }
+    setStep("design")
   }
 
   const doSave = async (silent = false) => {
@@ -201,9 +275,15 @@ export default function TplDesignerPage() {
     }
   }
 
-  /** §11 独立模板：先保存再发布（version+1） */
+  /** §11 独立模板：先保存再发布（version+1）；§12 计算配置校验拦截 */
   const doPublish = async () => {
     if (!sTpl) return
+    const issues = calcIssues(tpl.calc, formFieldMap)
+    if (issues.length > 0) {
+      toast.error(issues[0], { description: issues.length > 1 ? `等 ${issues.length} 个问题` : undefined })
+      setStep("calc")
+      return
+    }
     if (!(await doSave(true))) return
     setSaving(true)
     try {
@@ -265,6 +345,26 @@ export default function TplDesignerPage() {
           · {tpl.page.size}
           {tpl.page.landscape ? "·横" : ""}
         </span>
+        {/* §12 步骤条（启用计算配置后出现） */}
+        {calcEnabled && (
+          <div className="hidden items-center gap-1 md:flex">
+            <button
+              type="button"
+              onClick={() => setStep("calc")}
+              className={`rounded-full px-2.5 py-1 text-xs ${step === "calc" ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:bg-accent"}`}
+            >
+              ① 计算配置
+            </button>
+            <span className="text-muted-foreground/40">→</span>
+            <button
+              type="button"
+              onClick={goDesignStep}
+              className={`rounded-full px-2.5 py-1 text-xs ${step === "design" ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:bg-accent"}`}
+            >
+              ② 模板设计
+            </button>
+          </div>
+        )}
         <div className="ml-auto flex items-center gap-1.5">
           <Button variant="ghost" size="icon" className="size-8" title="撤销（Ctrl+Z）" disabled={!history.canUndo} onClick={history.undo}>
             <Undo2 className="size-4" />
@@ -279,6 +379,22 @@ export default function TplDesignerPage() {
           <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setJsonOpen(true)}>
             <Braces className="size-3.5" /> JSON
           </Button>
+          {/* §12 启用计算配置开关（保存前） */}
+          <label className="flex cursor-pointer items-center gap-1.5 px-1 text-xs text-muted-foreground" title="开启后进入两步向导：① 计算配置 → ② 模板设计">
+            <Switch checked={calcEnabled} onCheckedChange={toggleCalc} />
+            计算配置
+          </label>
+          {calcEnabled && step === "calc" ? (
+            <Button size="sm" className="h-8 gap-1.5" onClick={goDesignStep}>
+              下一步 <ArrowRight className="size-3.5" />
+            </Button>
+          ) : (
+            calcEnabled && (
+              <Button size="sm" variant="ghost" className="h-8 gap-1.5" onClick={() => setStep("calc")}>
+                <ArrowLeft className="size-3.5" /> 上一步
+              </Button>
+            )
+          )}
           <Button size="sm" variant={standalone ? "outline" : "default"} className="h-8 gap-1.5" disabled={saving} onClick={() => void doSave()}>
             <Save className="size-3.5" /> {saving ? "保存中…" : "保存"}
           </Button>
@@ -290,7 +406,17 @@ export default function TplDesignerPage() {
         </div>
       </div>
 
-      {/* 三栏 */}
+      {/* §12 第 ① 步：计算配置页（全宽）；第 ② 步/未启用：三栏模板设计 */}
+      {calcEnabled && step === "calc" ? (
+        <main className="min-h-0 flex-1 overflow-y-auto bg-muted/20">
+          <CalcConfig
+            calc={tpl.calc ?? { aggregates: [], computed: [] }}
+            subformOptions={subformOptions}
+            columnsBySource={columnsBySource}
+            onChange={(calc) => history.push({ ...tpl, calc })}
+          />
+        </main>
+      ) : (
       <div className="flex min-h-0 flex-1">
         {/* 左：元素库 */}
         <aside className="w-52 shrink-0 overflow-y-auto border-r bg-background/60">
@@ -307,6 +433,7 @@ export default function TplDesignerPage() {
               onSelect={setSelectedId}
               onBlocks={onBlocks}
               onPatchPage={patchPage}
+              varGroups={varGroups}
             />
           </div>
         </main>
@@ -318,6 +445,7 @@ export default function TplDesignerPage() {
               which={selectedBand}
               band={tpl.page[selectedBand]!}
               fields={fields}
+              calcVars={calcVars}
               onChange={(b) => patchPage(selectedBand === "header" ? { header: b } : { footer: b })}
               onRemove={() => {
                 patchPage(selectedBand === "header" ? { header: null } : { footer: null })
@@ -325,12 +453,13 @@ export default function TplDesignerPage() {
               }}
             />
           ) : selected ? (
-            <BlockPanel block={selected} fields={fields} onPatch={patchSelected} />
+            <BlockPanel block={selected} fields={fields} calcVars={calcVars} onPatch={patchSelected} />
           ) : (
             <PagePanel page={tpl.page} onPatch={patchPage} />
           )}
         </aside>
       </div>
+      )}
 
       <PreviewDialog tpl={tpl} fields={fields} open={preview} onClose={() => setPreview(false)} />
       <JsonDialog
@@ -341,6 +470,7 @@ export default function TplDesignerPage() {
         onApply={(next) => {
           history.push(next)
           setSelectedId(null)
+          setStep(next.calc ? "calc" : "design")
         }}
       />
     </div>

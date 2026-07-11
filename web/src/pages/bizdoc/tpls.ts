@@ -8,6 +8,7 @@ import { api, ApiError, NetworkError, type PageResult } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
 import {
   buildSampleData,
+  evalCalcDemo,
   isV2,
   type AnyBdTemplate,
   type BdPageSize,
@@ -385,6 +386,8 @@ export function fetchTplRenderData(tplId: number, instanceId: string | number): 
       // 离线演示：按模板 token + 字段清单生成样例数据（含 _approvals 样例）
       const data = isV2(tpl.content) ? buildSampleData(tpl.content, fields) : {}
       data.title = "演示实例"
+      // §12：含 calc 的模板 → 演示求值并入（真实由后端 render-data 求值）
+      if (isV2(tpl.content)) Object.assign(data, evalCalcDemo(tpl.content.calc, data))
       return { tpl: { ...tpl }, data, fields }
     },
   )

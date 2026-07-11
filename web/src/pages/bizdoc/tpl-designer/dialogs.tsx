@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch"
 import { PaperRenderer } from "@/components/bizdoc/paper-renderer"
 import {
   buildSampleData,
+  evalCalcDemo,
   pageSizeMm,
   parseAnyTemplate,
   staleTokensV2,
@@ -29,6 +30,8 @@ export function PreviewDialog({ tpl, fields, open, onClose }: { tpl: BdTemplateV
   const data = useMemo(() => {
     const d = buildSampleData(tpl, fieldMap)
     if (!withApprovals) d._approvals = []
+    // §12 计算配置：样例数据上演示求值（真实由后端出数据时求值）
+    Object.assign(d, evalCalcDemo(tpl.calc, d))
     return d
   }, [tpl, fieldMap, withApprovals])
   const stale = useMemo(() => staleTokensV2(tpl, { data, fields: fieldMap }), [tpl, data, fieldMap])

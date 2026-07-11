@@ -24,7 +24,7 @@ import { TokenInput, type FieldOption } from "./field-picker"
 
 /* -------- 失焦提交的文本/数字输入 -------- */
 
-function CommitInput({ value, onCommit, placeholder, mono = false }: { value: string; onCommit: (v: string) => void; placeholder?: string; mono?: boolean }) {
+export function CommitInput({ value, onCommit, placeholder, mono = false }: { value: string; onCommit: (v: string) => void; placeholder?: string; mono?: boolean }) {
   const [v, setV] = useState(value)
   const ref = useRef<HTMLInputElement>(null)
   useEffect(() => {
@@ -43,7 +43,7 @@ function CommitInput({ value, onCommit, placeholder, mono = false }: { value: st
   )
 }
 
-function CommitNumber({ value, onCommit, min, max, step = 1, suffix }: { value: number; onCommit: (v: number) => void; min?: number; max?: number; step?: number; suffix?: string }) {
+export function CommitNumber({ value, onCommit, min, max, step = 1, suffix }: { value: number; onCommit: (v: number) => void; min?: number; max?: number; step?: number; suffix?: string }) {
   const [v, setV] = useState(String(value))
   const ref = useRef<HTMLInputElement>(null)
   useEffect(() => {
@@ -233,12 +233,14 @@ export function BandPanel({
   which,
   band,
   fields,
+  calcVars,
   onChange,
   onRemove,
 }: {
   which: "header" | "footer"
   band: BdPageBand
   fields: FieldOption[]
+  calcVars?: FieldOption[]
   onChange: (b: BdPageBand) => void
   onRemove: () => void
 }) {
@@ -252,7 +254,7 @@ export function BandPanel({
       </div>
       <div className="space-y-1.5">
         <Label className="text-[11px] text-muted-foreground">内容（单行，支持 {"{{字段}}"} 插值）</Label>
-        <TokenInput value={band.text} onCommit={(v) => onChange({ ...band, text: v })} fields={fields} />
+        <TokenInput value={band.text} onCommit={(v) => onChange({ ...band, text: v })} fields={fields} calcVars={calcVars} />
       </div>
       <Row label="对齐">
         <AlignSelect value={band.align} onChange={(v) => onChange({ ...band, align: v })} />
@@ -272,10 +274,12 @@ export function BandPanel({
 export function BlockPanel({
   block,
   fields,
+  calcVars,
   onPatch,
 }: {
   block: BdBlock
   fields: FieldOption[]
+  calcVars?: FieldOption[]
   onPatch: (patch: Partial<BdBlock>) => void
 }) {
   const style = (block.style ?? {}) as BdBlockStyle
@@ -299,7 +303,7 @@ export function BlockPanel({
       {block.type === "title" && (
         <>
           <Row label="标题">
-            <TokenInput value={block.text} onCommit={(v) => onPatch({ text: v })} fields={fields} />
+            <TokenInput value={block.text} onCommit={(v) => onPatch({ text: v })} fields={fields} calcVars={calcVars} />
           </Row>
           {fontRows}
           <Row label="对齐">
@@ -320,7 +324,7 @@ export function BlockPanel({
                     <Trash2 className="size-3" />
                   </Button>
                 </div>
-                <TokenInput value={it.value} placeholder="值（可插字段）" onCommit={(v) => onPatch({ items: block.items.map((x, xi) => (xi === i ? { ...x, value: v } : x)) })} fields={fields} />
+                <TokenInput value={it.value} placeholder="值（可插字段）" onCommit={(v) => onPatch({ items: block.items.map((x, xi) => (xi === i ? { ...x, value: v } : x)) })} fields={fields} calcVars={calcVars} />
               </div>
             ))}
             <Button variant="outline" size="sm" className="h-6 w-full gap-1 text-[11px]" onClick={() => onPatch({ items: [...block.items, { label: "标签", value: "" }] })}>
@@ -355,7 +359,7 @@ export function BlockPanel({
                     <Trash2 className="size-3" />
                   </Button>
                 </div>
-                <TokenInput value={c.value} placeholder="值（可插字段）" onCommit={(v) => onPatch({ cells: block.cells.map((x, xi) => (xi === i ? { ...x, value: v } : x)) })} fields={fields} />
+                <TokenInput value={c.value} placeholder="值（可插字段）" onCommit={(v) => onPatch({ cells: block.cells.map((x, xi) => (xi === i ? { ...x, value: v } : x)) })} fields={fields} calcVars={calcVars} />
               </div>
             ))}
             <Button variant="outline" size="sm" className="h-6 w-full gap-1 text-[11px]" onClick={() => onPatch({ cells: [...block.cells, { label: "字段", value: "" }] })}>
@@ -373,7 +377,7 @@ export function BlockPanel({
             <CommitInput value={block.label} onCommit={(v) => onPatch({ label: v })} />
           </Row>
           <Row label="值">
-            <TokenInput value={block.value} onCommit={(v) => onPatch({ value: v })} fields={fields} />
+            <TokenInput value={block.value} onCommit={(v) => onPatch({ value: v })} fields={fields} calcVars={calcVars} />
           </Row>
           <Row label="标签宽">
             <CommitNumber value={style.labelWidth ?? 28} min={10} max={80} suffix="mm" onCommit={(v) => patchStyle({ labelWidth: v })} />
@@ -386,7 +390,7 @@ export function BlockPanel({
         <>
           <div className="space-y-1.5">
             <Label className="text-[11px] text-muted-foreground">内容（支持 {"{{字段}}"} 插值）</Label>
-            <TokenInput multiline value={block.content} onCommit={(v) => onPatch({ content: v })} fields={fields} />
+            <TokenInput multiline value={block.content} onCommit={(v) => onPatch({ content: v })} fields={fields} calcVars={calcVars} />
           </div>
           {fontRows}
           <Row label="对齐">
@@ -438,7 +442,7 @@ export function BlockPanel({
                     <Trash2 className="size-3" />
                   </Button>
                 </div>
-                <TokenInput multiline value={s.value} placeholder="内容（插审批字段）" onCommit={(v) => onPatch({ steps: block.steps.map((x, xi) => (xi === i ? { ...x, value: v } : x)) })} fields={fields} />
+                <TokenInput multiline value={s.value} placeholder="内容（插审批字段）" onCommit={(v) => onPatch({ steps: block.steps.map((x, xi) => (xi === i ? { ...x, value: v } : x)) })} fields={fields} calcVars={calcVars} />
               </div>
             ))}
             <Button
@@ -494,7 +498,7 @@ export function BlockPanel({
       {block.type === "qrcode" && (
         <>
           <Row label="内容">
-            <TokenInput value={block.value} onCommit={(v) => onPatch({ value: v })} fields={fields} />
+            <TokenInput value={block.value} onCommit={(v) => onPatch({ value: v })} fields={fields} calcVars={calcVars} />
           </Row>
           <Row label="边长">
             <CommitNumber value={block.size} min={10} max={60} suffix="mm" onCommit={(v) => onPatch({ size: v })} />

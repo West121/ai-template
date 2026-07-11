@@ -1,58 +1,26 @@
 /**
  * 字段选择器（§9.2：弹选择器插 `{{}}` token）。
- * 三组：表单字段 / 系统字段 / 审批数据（第 N 步 × 子项）。onPick 回插值表达式。
+ * 分组：表单字段 / 系统字段 / 审批数据（第 N 步 × 子项）/ 计算变量（§12，有则显示）。
+ * 目录数据与单元格「插入变量」浮层同源（token-vars.ts）。onPick 回插值表达式。
  */
 import { useEffect, useRef, useState } from "react"
 import { Braces } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { APPROVAL_SUBS, DISPLAY_ATTRS, SYS_FIELD_OPTIONS_V2, type FieldOption } from "./token-vars"
 
-export interface FieldOption {
-  key: string
-  label: string
-  /** widget/字段类型（user/dept 等关联类字段展开「显示属性」） */
-  type?: string
-}
-
-/**
- * 关联类字段的「显示属性」（对齐参考编辑器：绑定时可选对象子键）。
- * 磐石在打印数据里把 user/dept 等值解析为 {id,name,...} 对象，token 走点路径取子键。
- */
-const DISPLAY_ATTRS: Record<string, { sub: string; label: string }[]> = {
-  user: [
-    { sub: "name", label: "名称" },
-    { sub: "username", label: "账号" },
-  ],
-  dept: [{ sub: "name", label: "名称" }],
-  relation: [
-    { sub: "name", label: "名称" },
-    { sub: "id", label: "ID" },
-  ],
-}
-
-const SYS_FIELD_OPTIONS_V2: FieldOption[] = [
-  { key: "docNo", label: "单号" },
-  { key: "title", label: "标题" },
-  { key: "creatorName", label: "创建人" },
-  { key: "deptName", label: "部门" },
-  { key: "createdAt", label: "创建时间" },
-  { key: "status", label: "状态" },
-]
-
-const APPROVAL_SUBS: FieldOption[] = [
-  { key: "assigneeName", label: "办理人" },
-  { key: "opinion", label: "意见" },
-  { key: "time", label: "时间" },
-  { key: "nodeName", label: "节点名" },
-]
+export type { FieldOption }
 
 export function FieldPicker({
   fields,
+  calcVars,
   onPick,
   size = "sm",
 }: {
   fields: FieldOption[]
+  /** §12 计算变量（有则出「计算」组） */
+  calcVars?: FieldOption[]
   onPick: (expr: string) => void
   /** 触发按钮尺寸 */
   size?: "sm" | "icon"
@@ -91,6 +59,11 @@ export function FieldPicker({
             <TabsTrigger value="approval" className="h-6 flex-1 text-xs">
               审批
             </TabsTrigger>
+            {calcVars && calcVars.length > 0 && (
+              <TabsTrigger value="calc" className="h-6 flex-1 text-xs">
+                计算
+              </TabsTrigger>
+            )}
           </TabsList>
         </Tabs>
         <div className="mt-2 max-h-56 space-y-0.5 overflow-y-auto">
@@ -172,6 +145,18 @@ export function FieldPicker({
               <p className="text-[10px] leading-snug text-muted-foreground">审批数据来自流程办理记录（_approvals），按办理顺序取第 N 条。</p>
             </div>
           )}
+          {tab === "calc" &&
+            (calcVars ?? []).map((f) => (
+              <button
+                key={f.key}
+                type="button"
+                className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs hover:bg-accent"
+                onClick={() => pick(f.key)}
+              >
+                <span>{f.label}</span>
+                <span className="font-mono text-[10px] text-muted-foreground">{f.key}</span>
+              </button>
+            ))}
         </div>
       </PopoverContent>
     </Popover>
@@ -187,12 +172,14 @@ export function TokenInput({
   value,
   onCommit,
   fields,
+  calcVars,
   placeholder,
   multiline = false,
 }: {
   value: string
   onCommit: (v: string) => void
   fields: FieldOption[]
+  calcVars?: FieldOption[]
   placeholder?: string
   multiline?: boolean
 }) {
@@ -228,7 +215,7 @@ export function TokenInput({
           className="h-7 w-full rounded-md border border-input bg-transparent px-2 font-mono text-xs shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         />
       )}
-      <FieldPicker size="icon" fields={fields} onPick={(expr) => commit(`${v}{{${expr}}}`)} />
+      <FieldPicker size="icon" fields={fields} calcVars={calcVars} onPick={(expr) => commit(`${v}{{${expr}}}`)} />
     </div>
   )
 }

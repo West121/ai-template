@@ -7,6 +7,9 @@ import { getByPath, interpolate, type BdRenderCtx } from "./model"
 import {
   buildPrintPageCss,
   buildSampleData,
+  calcIssues,
+  calcVarFields,
+  evalCalcDemo,
   cloneBlock,
   collectTokens,
   cssPageContent,
@@ -18,11 +21,13 @@ import {
   moveBlock,
   newBlock,
   newPageBand,
+  numberToChinese,
   pageSizeMm,
   parseAnyTemplate,
   removeBlock,
   staleTokensV2,
   type BdBlock,
+  type BdCalc,
   type BdRowBlock,
   type BdTemplateV2,
 } from "./model-v2"
@@ -295,5 +300,112 @@ describe("页眉/页脚 band 与页码颜色（对齐参考编辑器四项差距
       },
     }
     expect(parseAnyTemplate(JSON.stringify(t))).toEqual(t)
+  })
+})
+
+/* ============================ §12 计算配置 ============================ */
+
+const CALC: BdCalc = {
+  aggregates: [
+    { name: "total_amount", label: "合计金额", source: "items", field: "amount", fn: "SUM", format: "number", scale: 2 },
+    { name: "total_cn", label: "合计大写", source: "items", field: "amount", fn: "SUM", format: "chinese", scale: 2 },
+    { name: "item_count", label: "条目数", source: "items", field: "", fn: "COUNT", format: "number", scale: 0 },
+    { name: "max_amount", label: "单笔最大", source: "items", field: "amount", fn: "MAX", format: "number", scale: 1 },
+  ],
+  computed: [
+    { name: "amount_with_tax", label: "含税合计", expr: "round(total_amount * 1.06, 2)", format: "number", scale: 2 },
+    { name: "tax_cn", label: "含税大写", expr: "numberToChinese(total_amount * 1.06)", format: "chinese", scale: 2 },
+    { name: "broken", label: "坏公式", expr: "amount *", format: "number", scale: 2 },
+  ],
+}
+
+const CALC_DATA = { items: [{ amount: 620.5 }, { amount: 1560 }, { amount: 200 }], quantity: 3 }
+
+describe("§12 计算配置：往返 / 求值 / 校验", () => {
+  it("calc 段随 v2 模板序列化往返不丢", () => {
+    const t: BdTemplateV2 = { ...TPL, calc: CALC }
+    const back = parseAnyTemplate(JSON.stringify(t))
+    expect(back).toEqual(t)
+    expect((back as BdTemplateV2).calc?.aggregates.length).toBe(4)
+  })
+
+  it("numberToChinese：人民币大写（元/角/分/整/负数/跨组零）", () => {
+    expect(numberToChinese(0)).toBe("零元整")
+    expect(numberToChinese(2380.5)).toBe("贰仟叁佰捌拾元伍角")
+    expect(numberToChinese(1002.03)).toBe("壹仟零贰元零叁分")
+    expect(numberToChinese(-45.67)).toBe("负肆拾伍元陆角柒分")
+  })
+
+  it("evalCalcDemo：聚合 SUM/COUNT/MAX + 格式化（定点/中文大写）", () => {
+    const out = evalCalcDemo(CALC, CALC_DATA)
+    expect(out.total_amount).toBe("2380.50")
+    expect(out.item_count).toBe("3")
+    expect(out.max_amount).toBe("1560.0")
+    expect(out.total_cn).toBe("贰仟叁佰捌拾元伍角")
+  })
+
+  it("evalCalcDemo：computed 引聚合名、numberToChinese 包裹；坏公式置 - 不阻断", () => {
+    const out = evalCalcDemo(CALC, CALC_DATA)
+    expect(out.amount_with_tax).toBe("2523.33")
+    expect(out.tax_cn).toContain("元")
+    expect(out.broken).toBe("-")
+  })
+
+  it("evalCalcDemo：数据源缺失/非数组 → 该变量置 -", () => {
+    const out = evalCalcDemo(CALC, { quantity: 1 })
+    expect(out.total_amount).toBe("-")
+  })
+
+  it("calcIssues：重名/公式空/聚合未选子表/非法名 全拦；合法配置通过", () => {
+    // 合法配置（剔除演示用坏公式）通过；坏公式被语法校验拦
+    const okCalc: BdCalc = { ...CALC, computed: CALC.computed.filter((c) => c.name !== "broken") }
+    expect(calcIssues(okCalc, { quantity: "数量" })).toEqual([])
+    expect(calcIssues(CALC, { quantity: "数量" }).some((s) => s.includes("语法错误"))).toBe(true)
+    // 与表单字段重名
+    expect(calcIssues(okCalc, { total_amount: "合计" }).some((s) => s.includes("重名"))).toBe(true)
+    // 与系统字段重名
+    const sysClash: BdCalc = { aggregates: [], computed: [{ name: "docNo", label: "", expr: "1+1", format: "number", scale: 0 }] }
+    expect(calcIssues(sysClash, {}).some((s) => s.includes("重名"))).toBe(true)
+    // 内部重复
+    const dup: BdCalc = {
+      aggregates: [{ name: "a", label: "", source: "items", field: "x", fn: "SUM", format: "number", scale: 0 }],
+      computed: [{ name: "a", label: "", expr: "1", format: "number", scale: 0 }],
+    }
+    expect(calcIssues(dup, {}).some((s) => s.includes("重复"))).toBe(true)
+    // 公式空 / 未选子表 / 非法名
+    const bad: BdCalc = {
+      aggregates: [{ name: "agg1", label: "", source: "", field: "x", fn: "SUM", format: "number", scale: 0 }],
+      computed: [
+        { name: "c1", label: "", expr: "  ", format: "number", scale: 0 },
+        { name: "1bad", label: "", expr: "1", format: "number", scale: 0 },
+      ],
+    }
+    const issues = calcIssues(bad, {})
+    expect(issues.some((s) => s.includes("数据源"))).toBe(true)
+    expect(issues.some((s) => s.includes("公式为空"))).toBe(true)
+    expect(issues.some((s) => s.includes("非法"))).toBe(true)
+  })
+
+  it("calcVarFields：字段树「计算变量」组（label 缺省回退 name）", () => {
+    expect(calcVarFields(CALC).map((f) => f.key)).toEqual([
+      "total_amount",
+      "total_cn",
+      "item_count",
+      "max_amount",
+      "amount_with_tax",
+      "tax_cn",
+      "broken",
+    ])
+    expect(calcVarFields({ aggregates: [], computed: [{ name: "x", label: "", expr: "1", format: "number", scale: 0 }] })[0].label).toBe("x")
+    expect(calcVarFields(undefined)).toEqual([])
+  })
+
+  it("staleTokensV2：计算变量 token 不算失效", () => {
+    const t: BdTemplateV2 = {
+      ...TPL,
+      calc: CALC,
+      blocks: [...TPL.blocks, { id: "c1", type: "labelField", label: "合计", value: "{{total_cn}}" } as BdBlock],
+    }
+    expect(staleTokensV2(t, CTX).filter((s) => s.expr === "total_cn")).toEqual([])
   })
 })

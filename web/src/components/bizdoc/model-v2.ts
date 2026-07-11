@@ -7,6 +7,7 @@
  * 本文件纯逻辑（无 React），供 paper-renderer / 套打设计器 / 单测共用。
  */
 import { getByPath, interpolate, type BdRenderCtx, type BdTemplate } from "./model"
+import { evaluate, validate as validateFormula } from "@/lib/formula-eval"
 
 /* ============================ 页面设置 ============================ */
 
@@ -183,10 +184,45 @@ export type BdBlock =
 
 export type BdBlockType = BdBlock["type"]
 
+/* ============================ 计算配置（§12） ============================ */
+
+export type CalcFn = "SUM" | "AVG" | "MAX" | "MIN" | "COUNT"
+export type CalcFormat = "number" | "chinese"
+
+/** 聚合字段：对子表列聚合，产出命名变量 */
+export interface BdCalcAggregate {
+  name: string
+  label: string
+  /** 子表字段 key（数据里为行数组） */
+  source: string
+  /** 聚合列（COUNT 可空 = 数行数） */
+  field: string
+  fn: CalcFn
+  format: CalcFormat
+  /** 小数位（number 格式） */
+  scale: number
+}
+
+/** 计算字段：Aviator 表达式（可引表单字段与聚合结果；求值权威在后端） */
+export interface BdCalcComputed {
+  name: string
+  label: string
+  expr: string
+  format: CalcFormat
+  scale: number
+}
+
+export interface BdCalc {
+  aggregates: BdCalcAggregate[]
+  computed: BdCalcComputed[]
+}
+
 export interface BdTemplateV2 {
   schemaVersion: 2
   page: BdPageV2
   blocks: BdBlock[]
+  /** §12 计算配置（存在即启用；求值顺序 aggregates → computed，失败置 "-" 不阻断打印） */
+  calc?: BdCalc
 }
 
 /** v1 / v2 联合（打印/预览两版都要认） */
@@ -466,8 +502,13 @@ export const SYS_KEYS_V2 = ["docNo", "title", "creatorName", "deptName", "create
  * detailTable 的 field 也参与检测。
  */
 export function staleTokensV2(tpl: BdTemplateV2, ctx: BdRenderCtx): { blockId: string; expr: string }[] {
+  const calcNames = new Set([...(tpl.calc?.aggregates ?? []), ...(tpl.calc?.computed ?? [])].map((c) => c.name))
   const known = (root: string) =>
-    root === "_approvals" || (SYS_KEYS_V2 as readonly string[]).includes(root) || root in ctx.fields || root in ctx.data
+    root === "_approvals" ||
+    (SYS_KEYS_V2 as readonly string[]).includes(root) ||
+    calcNames.has(root) ||
+    root in ctx.fields ||
+    root in ctx.data
   const stale = collectTokens(tpl).filter((t) => !known(t.expr.split(".")[0]))
   walkBlocks(tpl.blocks, (b) => {
     if (b.type === "detailTable" && !known(b.field)) stale.push({ blockId: b.id, expr: b.field })
@@ -588,6 +629,199 @@ export function buildPrintPageCss(tpl: AnyBdTemplate, data: Record<string, unkno
     boxCss += ` @${key} { content: ${box.parts.join(' "　" ')}; font-size: ${box.fontSize}pt; font-family: ${font}; color: ${box.color}; }`
   }
   return `@page { size: ${page.size} ${page.landscape ? "landscape" : "portrait"}; margin: ${mt}mm ${mr}mm ${mb}mm ${ml}mm;${boxCss} }`
+}
+
+/* ============================ 计算配置：求值/校验（§12，前端仅预览，权威在后端 Aviator） ============================ */
+
+/** 新聚合字段缺省 */
+export function newAggregate(): BdCalcAggregate {
+  return { name: "", label: "", source: "", field: "", fn: "SUM", format: "number", scale: 2 }
+}
+
+/** 新计算字段缺省 */
+export function newComputed(): BdCalcComputed {
+  return { name: "", label: "", expr: "", format: "number", scale: 2 }
+}
+
+/** 计算变量 → 字段树「计算变量」组条目 */
+export function calcVarFields(calc: BdCalc | undefined | null): { key: string; label: string; type?: string }[] {
+  if (!calc) return []
+  return [...calc.aggregates, ...calc.computed]
+    .filter((c) => c.name.trim())
+    .map((c) => ({ key: c.name.trim(), label: c.label.trim() || c.name.trim(), type: "calc" }))
+}
+
+const CN_DIGITS = ["零", "壹", "贰", "叁", "肆", "伍", "陆", "柒", "捌", "玖"]
+const CN_UNITS = ["", "拾", "佰", "仟"]
+const CN_GROUPS = ["", "万", "亿", "万亿"]
+
+/** 人民币大写（§12 chinese 格式；与后端 numberToChinese 同口径：元/角/分/整，负数前置"负"） */
+export function numberToChinese(input: number): string {
+  if (!Number.isFinite(input)) return "-"
+  const negative = input < 0
+  const n = Math.round(Math.abs(input) * 100)
+  const yuan = Math.floor(n / 100)
+  const jiao = Math.floor((n % 100) / 10)
+  const fen = n % 10
+
+  let intPart = ""
+  if (yuan === 0) {
+    intPart = "零"
+  } else {
+    let rest = yuan
+    let group = 0
+    while (rest > 0) {
+      const seg = rest % 10000
+      if (seg > 0) {
+        let segStr = ""
+        let zeroPending = false
+        let s = seg
+        for (let u = 0; s > 0; u++) {
+          const d = s % 10
+          if (d === 0) {
+            zeroPending = segStr !== ""
+          } else {
+            segStr = CN_DIGITS[d] + CN_UNITS[u] + (zeroPending ? "零" : "") + segStr
+            zeroPending = false
+          }
+          s = Math.floor(s / 10)
+        }
+        // 跨组补零（如 1000200 → 壹佰万零贰佰）
+        const needZero = intPart !== "" && seg < 1000
+        intPart = segStr + CN_GROUPS[group] + (needZero ? "零" : "") + intPart
+      } else if (intPart !== "" && !intPart.startsWith("零")) {
+        intPart = `零${intPart}`
+      }
+      rest = Math.floor(rest / 10000)
+      group += 1
+    }
+  }
+
+  let out = negative ? `负${intPart}元` : `${intPart}元`
+  if (jiao === 0 && fen === 0) return `${out}整`
+  if (jiao > 0) out += `${CN_DIGITS[jiao]}角`
+  else if (fen > 0) out += "零"
+  if (fen > 0) out += `${CN_DIGITS[fen]}分`
+  return out
+}
+
+/** 计算结果格式化：number → 定点小数；chinese → 人民币大写；非数值 → "-" */
+export function formatCalcValue(v: unknown, format: CalcFormat, scale: number): string {
+  const n = typeof v === "number" ? v : Number(v)
+  if (!Number.isFinite(n)) return "-"
+  return format === "chinese" ? numberToChinese(n) : n.toFixed(Math.max(0, Math.min(6, scale)))
+}
+
+/** 聚合求值（对 data[source] 行数组取列） */
+function evalAggregate(agg: BdCalcAggregate, data: Record<string, unknown>): number {
+  const rows = data[agg.source]
+  if (!Array.isArray(rows)) throw new Error(`数据源 ${agg.source} 不是行数组`)
+  if (agg.fn === "COUNT" && !agg.field.trim()) return rows.length
+  const nums = rows
+    .map((r) => Number((r as Record<string, unknown>)?.[agg.field]))
+    .filter((x) => Number.isFinite(x))
+  switch (agg.fn) {
+    case "COUNT":
+      return nums.length
+    case "SUM":
+      return nums.reduce((s, x) => s + x, 0)
+    case "AVG":
+      return nums.length === 0 ? 0 : nums.reduce((s, x) => s + x, 0) / nums.length
+    case "MAX":
+      return nums.length === 0 ? 0 : Math.max(...nums)
+    case "MIN":
+      return nums.length === 0 ? 0 : Math.min(...nums)
+  }
+}
+
+/** §12 契约函数名（Aviator 注册小写）→ 前端 formula-eval 白名单大写 */
+const CALC_FN_ALIASES = /\b(round|abs|sum|avg|max|min|if|and|or|not|len|concat)\s*\(/gi
+
+/**
+ * 计算配置演示求值（预览/mock 用；真实由后端出数据时求值）：
+ * aggregates → computed（computed 可引聚合名）；失败该变量置 "-" 不阻断。
+ * 返回「变量名 → 格式化后值」。
+ */
+export function evalCalcDemo(calc: BdCalc | undefined | null, data: Record<string, unknown>): Record<string, string> {
+  if (!calc) return {}
+  const out: Record<string, string> = {}
+  /** 原始数值上下文（computed 引用聚合原值而非格式化文本） */
+  const rawCtx: Record<string, unknown> = { ...data }
+  for (const agg of calc.aggregates) {
+    if (!agg.name.trim()) continue
+    try {
+      const v = evalAggregate(agg, data)
+      rawCtx[agg.name] = v
+      out[agg.name] = formatCalcValue(v, agg.format, agg.scale)
+    } catch {
+      out[agg.name] = "-"
+    }
+  }
+  for (const c of calc.computed) {
+    if (!c.name.trim()) continue
+    try {
+      let expr = c.expr.trim()
+      let chineseWrap = false
+      const m = /^numberToChinese\s*\((.*)\)\s*$/s.exec(expr)
+      if (m) {
+        chineseWrap = true
+        expr = m[1]
+      }
+      const v = evaluate(expr.replace(CALC_FN_ALIASES, (s) => s.toUpperCase()), rawCtx)
+      rawCtx[c.name] = v
+      out[c.name] = chineseWrap ? numberToChinese(Number(v)) : formatCalcValue(v, c.format, c.scale)
+    } catch {
+      out[c.name] = "-"
+    }
+  }
+  return out
+}
+
+const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+/** 公式里放行的 §12 小写函数名（后端 Aviator 注册；前端 validate 用 extraFns 放行） */
+const CALC_EXTRA_FNS = ["round", "abs", "sum", "avg", "max", "min", "numberToChinese"] as const
+
+/**
+ * 计算配置校验（§12：发布/下一步拦截）。
+ * 检查：字段名空/非法/与表单-系统字段重名/内部重名；聚合未选子表；计算公式空/语法错误。
+ */
+export function calcIssues(calc: BdCalc | undefined | null, fields: Record<string, string>): string[] {
+  if (!calc) return []
+  const issues: string[] = []
+  const seen = new Set<string>()
+  const checkName = (name: string, where: string) => {
+    const n = name.trim()
+    if (!n) {
+      issues.push(`${where}未填写字段名`)
+      return
+    }
+    if (!NAME_RE.test(n)) {
+      issues.push(`${where}字段名「${n}」非法（字母/下划线开头，仅限字母数字下划线）`)
+      return
+    }
+    if (n in fields || (SYS_KEYS_V2 as readonly string[]).includes(n)) {
+      issues.push(`字段名「${n}」与表单/系统字段重名，请更换`)
+    }
+    if (seen.has(n)) issues.push(`字段名「${n}」在计算配置内重复`)
+    seen.add(n)
+  }
+  calc.aggregates.forEach((a, i) => {
+    const where = `第 ${i + 1} 个聚合字段`
+    checkName(a.name, where)
+    if (!a.source.trim()) issues.push(`${where}${a.name.trim() ? `「${a.name.trim()}」` : ""}未选择数据源（子表）`)
+    if (a.fn !== "COUNT" && !a.field.trim()) issues.push(`${where}${a.name.trim() ? `「${a.name.trim()}」` : ""}未填写聚合字段（列）`)
+  })
+  calc.computed.forEach((c, i) => {
+    const where = `第 ${i + 1} 个计算字段`
+    checkName(c.name, where)
+    if (!c.expr.trim()) {
+      issues.push(`${where}${c.name.trim() ? `「${c.name.trim()}」` : ""}计算公式为空`)
+    } else {
+      const r = validateFormula(c.expr.replace(CALC_FN_ALIASES, (s) => s.toUpperCase()), [...CALC_EXTRA_FNS])
+      if (!r.ok) issues.push(`计算字段「${c.name.trim() || i + 1}」公式语法错误：${r.error ?? "无法解析"}`)
+    }
+  })
+  return issues
 }
 
 export { getByPath }

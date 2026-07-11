@@ -1,11 +1,12 @@
 /**
- * 纸面文档流画布（§9.2 中栏）：块 hover 出工具条（拖拽排序/复制/删除）、点击选中、
- * 双击标题/文本/标签行内编辑；palette 拖入按文档流插入（蓝色指示线落点）；
+ * 纸面文档流画布（§9.2 中栏）：块 hover 出工具条（拖拽排序/上移下移/复制/删除）、点击选中、
+ * 双击标题/文本/标签行内编辑；**单元格就地编辑**（infoTable/labelField/docInfo 值区点击 →
+ * 内联输入 + 「插入变量」浮层，第五张截图交互）；palette 拖入按文档流插入（蓝色指示线落点）；
  * 行容器分栏为嵌套放置区（row 不允许再嵌 row）。渲染体复用 V2BlockBody（同源红线）。
  */
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react"
 import { ChevronDown, ChevronUp, Copy, GripVertical, Trash2, X } from "lucide-react"
-import { PageBandRow, V2BlockBody } from "@/components/bizdoc/paper-renderer"
+import { PageBandRow, V2BlockBody, type CellEditApi, type CellRef } from "@/components/bizdoc/paper-renderer"
 import type { BdRenderCtx } from "@/components/bizdoc/model"
 import {
   BD_FONT_STACKS,
@@ -24,6 +25,8 @@ import {
   type BdTemplateV2,
 } from "@/components/bizdoc/model-v2"
 import { BLOCK_META, DND_MOVE, DND_NEW } from "./meta"
+import { CellTokenEditor } from "./cell-editor"
+import type { VarGroup } from "./token-vars"
 
 interface DropAt {
   parent: string | null
@@ -41,15 +44,48 @@ export interface CanvasProps {
   onBlocks: (blocks: BdBlock[]) => void
   /** 页面级补丁（页眉/页脚删除等） */
   onPatchPage: (p: Partial<BdPageV2>) => void
+  /** 「插入变量」浮层分组（与 field-picker 同源，含显示属性变体/计算变量） */
+  varGroups: VarGroup[]
 }
 
 const sameAt = (a: DropAt | null, b: DropAt) => a != null && a.parent === b.parent && a.col === b.col && a.index === b.index
 
-export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks, onPatchPage }: CanvasProps) {
+export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks, onPatchPage, varGroups }: CanvasProps) {
   const size = pageSizeMm(tpl.page)
   const [mt, mr, mb, ml] = tpl.page.margin
   const [indicator, setIndicator] = useState<DropAt | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
+  /** 就地编辑中的单元格 */
+  const [editingCell, setEditingCell] = useState<{ ref: CellRef; value: string } | null>(null)
+
+  /* -------- 单元格值就地提交 -------- */
+  const patchCellValue = (ref: CellRef, v: string) => {
+    const next = JSON.parse(JSON.stringify(tpl.blocks)) as BdBlock[]
+    const hit = findBlock(next, ref.blockId)
+    if (!hit) return
+    const b = hit.block
+    if (ref.kind === "infoTable" && b.type === "infoTable" && b.cells[ref.index]) b.cells[ref.index].value = v
+    else if (ref.kind === "labelField" && b.type === "labelField") b.value = v
+    else if (ref.kind === "docInfo" && b.type === "docInfo" && b.items[ref.index]) b.items[ref.index].value = v
+    else return
+    onBlocks(next)
+  }
+
+  const cellEdit: CellEditApi = {
+    active: editingCell?.ref ?? null,
+    onOpen: (ref, value) => setEditingCell({ ref, value }),
+    renderEditor: (ref) => (
+      <CellTokenEditor
+        initial={editingCell?.value ?? ""}
+        groups={varGroups}
+        onCommit={(v) => {
+          if (editingCell && v !== editingCell.value) patchCellValue(ref, v)
+          setEditingCell(null)
+        }}
+        onCancel={() => setEditingCell(null)}
+      />
+    ),
+  }
 
   // 删除选中块/页眉/页脚：Delete 键
   useEffect(() => {
@@ -254,6 +290,7 @@ export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks, onPat
             block={block}
             ctx={ctx}
             mode="design"
+            cellEdit={cellEdit}
             renderColumn={(col, ci) => <BlockList blocks={col} parent={block.id} col={ci} nested />}
           />
         )}
