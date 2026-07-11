@@ -13,14 +13,34 @@ import { Button } from "@/components/ui/button"
 import type { WfFormData } from "@/types/workflow"
 import type { AiFormCard } from "../types"
 
+/**
+ * schema 归一(防白屏根因):后端 Part 化后 schema 可能是 widgets 数组 / {widgets:[...]} 对象 /
+ * JSON 字符串——统一收敛为数组;非法形状回 [](走 CODE 分支的"发起页填写"提示,不崩)。
+ */
+function normalizeSchema(raw: unknown): AiFormCard["schema"] {
+  let v = raw
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v)
+    } catch {
+      return []
+    }
+  }
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    v = (v as { widgets?: unknown }).widgets
+  }
+  return Array.isArray(v) ? (v as AiFormCard["schema"]) : []
+}
+
 export function FormCard({ card }: { card: AiFormCard }) {
   const navigate = useNavigate()
   const [submitting, setSubmitting] = useState(false)
   const [instId, setInstId] = useState<number | null>(null)
   const [submitted, setSubmitted] = useState(false)
+  const schema = normalizeSchema(card.schema)
 
   // B：CODE 表单（无 schema，跳发起页）
-  if (!card.schema || card.schema.length === 0) {
+  if (!schema || schema.length === 0) {
     return (
       <div className="flex w-full min-w-0 items-center gap-3 rounded-xl border bg-card p-3 shadow-sm">
         <FileText className="size-4.5 shrink-0 text-primary" />
@@ -88,7 +108,7 @@ export function FormCard({ card }: { card: AiFormCard }) {
         </div>
       ) : (
         <div className="ai-form px-3.5 py-3">
-          <FormRenderer widgets={card.schema} submitLabel="提交并发起" submitting={submitting} onSubmit={handleSubmit} />
+          <FormRenderer widgets={schema} submitLabel="提交并发起" submitting={submitting} onSubmit={handleSubmit} />
         </div>
       )}
     </div>

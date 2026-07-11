@@ -12,8 +12,30 @@ import { sanitizeHtml } from "@/lib/sanitize"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { mdToHtml } from "./markdown"
+import { Component, type ErrorInfo, type ReactNode } from "react"
 import { CardRouter } from "./cards/card-router"
 import { PartRouter } from "./cards/part-router"
+
+/** 卡片级错误边界:单卡渲染崩溃降级为提示块,不炸消息流(一劳永逸防白屏第 3 层) */
+class CardBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("[ai-chat] card render failed", error, info.componentStack)
+  }
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className="rounded-lg border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-600">
+          此卡片渲染出错，已隔离（其余内容不受影响）
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 import { LinkCard } from "./cards/simple-cards"
 import { MAX_ATTACHMENTS, checkAttachmentFile, formatBytes, needsVisionWarning } from "./attachments"
 import type { AiMessagePart } from "./protocol"
@@ -92,7 +114,18 @@ function MessageRow({ message }: { message: AiMessage }) {
       </div>
       <div className="flex min-w-0 max-w-[85%] flex-1 flex-col gap-2">
         {message.content && <AssistantMarkdown content={message.content} />}
-        {parts ? parts.map((p) => <PartRouter key={p.partId} part={p} />) : message.cards?.map((c, i) => <CardRouter key={i} card={c} />)}
+        {/* 卡片级错误边界(防白屏规约):单张卡渲染崩溃 → 降级小块,绝不炸消息流/面板 */}
+        {parts
+          ? parts.map((p) => (
+              <CardBoundary key={p.partId}>
+                <PartRouter part={p} />
+              </CardBoundary>
+            ))
+          : message.cards?.map((c, i) => (
+              <CardBoundary key={i}>
+                <CardRouter card={c} />
+              </CardBoundary>
+            ))}
         {message.createdAt && (
           <time className="px-1 text-[11px] text-muted-foreground">{formatTime(message.createdAt)}</time>
         )}

@@ -11,7 +11,7 @@ import { api, ApiError, NetworkError } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
 import type { AiAttachment, AiCard, AiChatResponse, AiConfirmResponse, AiMessage, AiModelChoice, AiModelOption, AiModelProfile, AiSession } from "./types"
 import { formatBytes } from "./attachments"
-import { cardsToParts, friendlyAiError, legacyModelsToChoices, ulid, type AiMessagePart, type AiSseEvent } from "./protocol"
+import { cardsToParts, friendlyAiError, legacyModelsToChoices, ulid, type AiMessagePart, type AiReportResult, type AiSseEvent } from "./protocol"
 import { SseUnavailableError, streamChatMessage } from "./sse-client"
 
 export interface AiResult<T> {
@@ -138,6 +138,9 @@ function mockReply(text: string, session: MockSession, opts?: ChatOpts): AiMessa
         { title: "采购申请 · 金额 ¥42,000", node: "总经理审批", arrivedAt: "昨天", link: "/workflow/tasks" },
       ],
       moreLink: "/workflow/tasks",
+      // 批C：数据集分页演示（卡内翻页）
+      datasetId: "ds_todo",
+      page: { current: 1, size: 3, total: 8 },
     })
     session.lastTopic = null
   } else if (has("统计", "报表", "图表", "审批量")) {
@@ -145,12 +148,14 @@ function mockReply(text: string, session: MockSession, opts?: ChatOpts): AiMessa
     cards.push({
       type: "chart",
       chartType: "bar",
-      title: "本月审批量 · 按流程",
+      title: "本月审批量 · 按流程（点击柱条可下钻）",
       categories: ["请假", "报销", "采购", "用章", "出差"],
       series: [
         { name: "已通过", data: [42, 31, 12, 20, 9] },
         { name: "进行中", data: [8, 12, 6, 3, 4] },
       ],
+      // 批C 下钻：点类目 → report_execute → 追加 list 卡
+      drill: { reportCode: "monthly_approval_by_process", paramName: "processName" },
     })
     session.lastTopic = "stats"
   } else if (session.lastTopic === "stats" && has("部门", "再按", "换个维度")) {
@@ -158,7 +163,8 @@ function mockReply(text: string, session: MockSession, opts?: ChatOpts): AiMessa
     cards.push({
       type: "chart",
       chartType: "pie",
-      title: "本月审批量 · 按部门",
+      title: "本月审批量 · 按部门（点击扇区可下钻）",
+      drill: { reportCode: "monthly_approval_by_dept", paramName: "deptName" },
       series: [
         { name: "研发中心", data: [58], percent: 39.2 },
         { name: "市场部", data: [34], percent: 23.0 },
@@ -267,7 +273,9 @@ function mockReply(text: string, session: MockSession, opts?: ChatOpts): AiMessa
       "6. 「带我去审批中心」— 导航卡\n" +
       "7. 点回形针附图片/文本文件 — 多模态演示（非视觉档案附图会提示切换 VISION）\n" +
       "8. 「帮我做个统计计划」 — 计划卡逐步打勾（Plan-then-Execute）\n" +
-      "9. 「查全公司的报销数据」 — 权限解释卡（缺失权限码/持有角色/申请引导）"
+      "9. 「查全公司的报销数据」 — 权限解释卡（缺失权限码/持有角色/申请引导）\n" +
+      "10. 图表卡点击柱条/扇区 — 下钻出该维度明细 list 卡；待办列表卡内翻页（数据集）\n" +
+      "11. 「怎么请假」 — 引用溯源（正文角标 + 底部引用行可跳）"
   }
 
   return { role: "ASSISTANT", content, cards: cards.length ? cards : undefined, createdAt: now() }
@@ -355,16 +363,26 @@ export function confirmAction(actionId: string): Promise<AiResult<AiConfirmRespo
   )
 }
 
+/** 列表响应归一(防白屏规约):数组原样;分页对象取 .list;其它 → []。V2 批A把消息接口分页化,曾致历史会话 .map 崩整面板 */
+function normalizeList<T>(raw: unknown): T[] {
+  if (Array.isArray(raw)) return raw as T[]
+  if (raw && typeof raw === "object") {
+    const list = (raw as { list?: unknown }).list
+    if (Array.isArray(list)) return list as T[]
+  }
+  return []
+}
+
 export function fetchSessions(): Promise<AiResult<AiSession[]>> {
   return withMock(
-    () => api<AiSession[]>("/api/ai/sessions"),
+    () => api<unknown>("/api/ai/sessions").then(normalizeList<AiSession>),
     () => MOCK_SESSIONS.map(({ messages: _m, lastTopic: _t, ...rest }) => rest),
   )
 }
 
 export function fetchSessionMessages(id: string): Promise<AiResult<AiMessage[]>> {
   return withMock(
-    () => api<AiMessage[]>(`/api/ai/sessions/${encodeURIComponent(id)}/messages`),
+    () => api<unknown>(`/api/ai/sessions/${encodeURIComponent(id)}/messages`).then(normalizeList<AiMessage>),
     () => MOCK_SESSIONS.find((s) => s.id === id)?.messages ?? [],
   )
 }
@@ -412,6 +430,8 @@ export interface ChatSendRequest {
   credentialId?: number
   model?: string
   attachments?: AiAttachment[]
+  /** V2 批C：当前页面上下文（路由反查 Registry；拿不到发 null） */
+  pageContext?: { featureCode: string | null; entityType: string | null; entityId: string | null } | null
 }
 
 export interface ChatStreamOutcome {
@@ -553,6 +573,37 @@ async function runPermissionDemo(h: ChatStreamHandlers, session: MockSession, us
   return { sessionId: session.id, demo: true, mode: "mock" }
 }
 
+/** 批C亮点④ 引用溯源演示：text part 带 citations[]（正文尾部角标 + 底部引用行可跳） */
+async function runCitationDemo(h: ChatStreamHandlers, session: MockSession, userMsg: AiMessage): Promise<ChatStreamOutcome> {
+  await delay(250)
+  h.onStarted?.()
+  const toolId = `tc_${ulid()}`
+  h.onToolStatus?.({ id: toolId, displayName: "正在检索功能知识库", state: "running" })
+  await delay(380)
+  h.onToolStatus?.({ id: toolId, displayName: "正在检索功能知识库", state: "done" })
+  const textPart: AiMessagePart = {
+    partId: `pt_${ulid()}`,
+    partType: "text",
+    schemaVersion: 1,
+    sequenceNo: 1,
+    payload: {
+      text:
+        "请假走**发起申请**：选「请假申请」流程，填请假类型/起止日期/事由后提交，" +
+        "由部门主管审批（超 3 天加签 HR）。年假余额可在个人中心查看。",
+      citations: [
+        { sourceType: "FEATURE", sourceId: "WORKFLOW_START", title: "发起申请", version: "v3" },
+        { sourceType: "RAG_DOC", sourceId: "doc_leave_guide", title: "《考勤与请假制度指引》", version: "v2" },
+      ],
+    },
+  }
+  await delay(180)
+  h.onPart?.(textPart)
+  const finalMsg: AiMessage = { role: "ASSISTANT", content: "", parts: [textPart], createdAt: now() }
+  session.messages.push(userMsg, finalMsg)
+  session.updatedAt = now()
+  return { sessionId: session.id, demo: true, mode: "mock" }
+}
+
 /** SSE mock：把关键词应答脑的产物按可控事件序列回放（parts 形状 + 工具状态演示） */
 async function runMockStream(req: ChatSendRequest, h: ChatStreamHandlers): Promise<ChatStreamOutcome> {
   const session = mockSession(req.sessionId)
@@ -564,10 +615,11 @@ async function runMockStream(req: ChatSendRequest, h: ChatStreamHandlers): Promi
     clientMessageId: req.clientMessageId,
     createdAt: now(),
   }
-  // 批B演示分支：计划卡 / 权限解释
+  // 批B/C演示分支：计划卡 / 权限解释 / 引用溯源
   if (!req.attachments?.length) {
     if (/计划|分步|一步步|先.*再/.test(req.message)) return runPlanDemo(h, session, userMsg)
     if (/全公司.*报销|权限演示|无权/.test(req.message)) return runPermissionDemo(h, session, userMsg)
+    if (/怎么请假|如何请假|引用溯源/.test(req.message)) return runCitationDemo(h, session, userMsg)
   }
   const reply = mockReply(req.message, session, {
     modelProfileId: req.modelProfileId,
@@ -638,6 +690,7 @@ export async function sendChatStream(req: ChatSendRequest, h: ChatStreamHandlers
         credentialId: req.credentialId,
         model: req.model,
         attachments: req.attachments?.map((a) => ({ kind: a.kind, name: a.name, dataUrl: a.dataUrl, fileId: a.fileId })),
+        pageContext: req.pageContext ?? null,
       },
       (evt) => dispatchEvent(evt, h, acc),
     )
@@ -663,6 +716,7 @@ export async function sendChatStream(req: ChatSendRequest, h: ChatStreamHandlers
         credentialId: req.credentialId,
         model: req.model,
         attachments: req.attachments?.map((a) => ({ kind: a.kind, name: a.name, dataUrl: a.dataUrl, fileId: a.fileId })),
+        pageContext: req.pageContext ?? null,
       }),
     })
     h.onStarted?.()
@@ -727,4 +781,69 @@ export async function cancelActionV2(actionId: string): Promise<void> {
     if (err instanceof NetworkError || (err instanceof ApiError && err.code === 404)) return
     throw err
   }
+}
+
+/* ============================ V2 批C：报表下钻 / 数据集分页 ============================ */
+
+/** 下钻明细 mock：按维度值合成 3 行演示数据 */
+function mockDrillResult(params: Record<string, unknown>): AiReportResult {
+  const dim = String(Object.values(params)[0] ?? "全部")
+  return {
+    title: `「${dim}」审批明细`,
+    columns: [
+      { key: "title", label: "标题" },
+      { key: "initiator", label: "发起人" },
+      { key: "status", label: "状态" },
+    ],
+    rows: [
+      { title: `${dim} · 张三的申请`, initiator: "张三", status: "已通过", link: "/workflow/tasks" },
+      { title: `${dim} · 李四的申请`, initiator: "李四", status: "进行中", link: "/workflow/tasks" },
+      { title: `${dim} · 王五的申请`, initiator: "王五", status: "已通过", link: "/workflow/tasks" },
+    ],
+    moreFeatureCode: "WORKFLOW_MONITOR",
+  }
+}
+
+/** 报表执行（下钻）：POST /api/ai/reports/{code}/execute；参数为白名单维度（§11.1） */
+export function executeReport(reportCode: string, params: Record<string, unknown>): Promise<AiResult<AiReportResult>> {
+  return withMock(
+    () => api<AiReportResult>(`/api/ai/reports/${encodeURIComponent(reportCode)}/execute`, { method: "POST", body: JSON.stringify({ params }) }),
+    async () => {
+      await new Promise((r) => setTimeout(r, 450))
+      return mockDrillResult(params)
+    },
+  )
+}
+
+export interface AiDatasetPage {
+  columns?: { key: string; label: string }[]
+  rows: Record<string, unknown>[]
+  page: { current: number; size: number; total: number }
+}
+
+/** mock 数据集（ds_todo 8 行 → 3 页） */
+const MOCK_DATASET_ROWS: Record<string, Record<string, unknown>[]> = {
+  ds_todo: [
+    { title: "〔特急〕关于开展信息安全专项检查的通知 · 签发", node: "签发", arrivedAt: "2 天前", link: "/workflow/tasks" },
+    { title: "张三的请假申请（3 天）", node: "部门主管审批", arrivedAt: "5 小时前", link: "/workflow/tasks" },
+    { title: "采购申请 · 金额 ¥42,000", node: "总经理审批", arrivedAt: "昨天", link: "/workflow/tasks" },
+    { title: "月度报销汇总（财务部）", node: "复核", arrivedAt: "昨天", link: "/workflow/tasks" },
+    { title: "出差申请 · 深圳 3 天", node: "部门主管审批", arrivedAt: "2 天前", link: "/workflow/tasks" },
+    { title: "用章申请 · 合同专用章", node: "行政审批", arrivedAt: "2 天前", link: "/workflow/tasks" },
+    { title: "会议室变更 · 周例会", node: "确认", arrivedAt: "3 天前", link: "/workflow/tasks" },
+    { title: "王五的加班调休申请", node: "部门主管审批", arrivedAt: "3 天前", link: "/workflow/tasks" },
+  ],
+}
+
+/** 数据集分页（§10.4 卡内翻页）：GET /api/ai/datasets/{id}?pageNum=&pageSize= */
+export function fetchDataset(datasetId: string, pageNum: number, pageSize = 3): Promise<AiResult<AiDatasetPage>> {
+  return withMock(
+    () => api<AiDatasetPage>(`/api/ai/datasets/${encodeURIComponent(datasetId)}?pageNum=${pageNum}&pageSize=${pageSize}`),
+    async () => {
+      await new Promise((r) => setTimeout(r, 350))
+      const all = MOCK_DATASET_ROWS[datasetId] ?? []
+      const start = (pageNum - 1) * pageSize
+      return { rows: all.slice(start, start + pageSize), page: { current: pageNum, size: pageSize, total: all.length } }
+    },
+  )
 }

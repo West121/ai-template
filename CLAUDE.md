@@ -79,3 +79,10 @@ Maven modules, dependency direction strictly `oa-boot → oa-module-* → oa-com
 **Migrations**: `server/oa-boot/src/main/resources/db/migration`, `V{n}__{desc}.sql`, covering only `sys_*`/`oa_*`/`wf_*` (Flowable self-manages `act_*`; `ddl-auto=validate`). Add new schema as the next `V{n}`.
 
 **API conventions** (full detail in `docs/api-contract.md`): envelope `{code, message, data}` with 0 = success; pagination via `pageNum`/`pageSize` returning `{list, total, pageNum, pageSize}`; 401 = unauthenticated, 403 = missing permission, 400 = validation/business error, 409 = business conflict (`BusinessException(code, msg)`).
+
+## Anti-white-screen rules (structural, learned from production bugs)
+
+1. **Route-level ErrorBoundary is global** (`app-layout.tsx` wraps `<Outlet/>`, key=pathname). Never remove it. Heavy embedded islands (designers, chat panel, card lists) must additionally wrap their own boundary so a bad payload degrades locally.
+2. **Normalize every list-shaped API response at the fetch layer**: accept `T[]` or `{list: T[]}` and collapse to an array; garbage → `[]`. Never call `.map`/`for...of` on a raw response.
+3. **Normalize polymorphic payloads before render** (e.g. form `schema`: array | `{widgets}` | JSON string). Renderer entry points (`form-runtime`, `paper-renderer`, card routers) must tolerate non-array input by rendering a fallback, not throwing.
+4. **Every new routed page gets a jsdom mount smoke test** ("renders without throwing", see `tpls-page.render.test.tsx` pattern) before it ships.

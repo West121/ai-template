@@ -1,5 +1,6 @@
 import { useEffect } from "react"
 import { Outlet, useLocation, useNavigate } from "react-router-dom"
+import { ErrorBoundary } from "@/components/error-boundary"
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react"
 import { findMenuByPath, findRootMenu, menuTree, type MenuItem } from "@/config/menu"
 import { api } from "@/lib/api"
@@ -118,7 +119,11 @@ export function AppLayout() {
               <Breadcrumbs />
             </div>
           )}
-          <Outlet />
+          {/* 全局路由级错误边界(一劳永逸防白屏):任何页面渲染崩溃 → 隔离卡+重试,
+              key=pathname 保证切换路由自动重置边界 */}
+          <ErrorBoundary key={pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </div>
       </main>
       {showFooter && <Footer />}

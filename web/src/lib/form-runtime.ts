@@ -78,6 +78,8 @@ export function normalizeOptions(
 export function collectDataWidgets(widgets: FormWidget[]): FormWidget[] {
   const out: FormWidget[] = []
   const walk = (list: FormWidget[]) => {
+    // 防御:调用方可能传入非数组(如后端 schema 形状漂移)——静默跳过,绝不让渲染整页崩
+    if (!Array.isArray(list)) return
     for (const w of list) {
       if (isContainer(w.type)) {
         if (Array.isArray(w.children)) walk(w.children)
