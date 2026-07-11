@@ -32,6 +32,12 @@ public class OrchRunContext {
     /** end 节点写入的流水结果。 */
     public volatile Object result;
 
+    /** wait 节点标记：本段执行完时非空 → exec 挂起（WAITING），恢复后执行该节点的后继段。 */
+    public volatile String waitNodeId;
+
+    /** webhook 同步响应（§9.4）：respond 节点 complete；非 webhook 触发为 null。 */
+    public volatile java.util.concurrent.CompletableFuture<Map<String, Object>> respondFuture;
+
     private final Map<String, JsonNode> nodeById = new HashMap<>();
     private final Map<String, List<JsonNode>> edgesBySource;
 
@@ -53,6 +59,20 @@ public class OrchRunContext {
 
     public List<JsonNode> outgoing(String nodeId) {
         return edgesBySource.getOrDefault(nodeId, List.of());
+    }
+
+    /** 恢复执行：从快照回填 vars/outputs/failedNodes（payload 由构造器传入）。 */
+    public void preload(Map<String, Object> savedVars, Map<String, Object> savedOutputs,
+                        java.util.Collection<String> savedFailed) {
+        if (savedVars != null) {
+            vars.putAll(savedVars);
+        }
+        if (savedOutputs != null) {
+            outputs.putAll(savedOutputs);
+        }
+        if (savedFailed != null) {
+            failedNodes.addAll(savedFailed);
+        }
     }
 
     /** Aviator 求值上下文：payload / vars / outputs 三棵树（引用共享，写 vars 即生效）。 */

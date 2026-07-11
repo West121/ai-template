@@ -406,4 +406,15 @@ NotifyItem = {id,type,title,content,procInstId,readFlag,createdAt}
   - WEBHOOK：POST `/api/orch/hooks/{token}`（免登录 permitAll；token 匹配 enabled+已发布+triggerType=WEBHOOK 的流，否则 404；限流 60 次/token/分钟 → 429；body=payload）→ {execId}。
 - **节点（第二批补齐）**：parallel（OPEN N 条出边=并行分支 → 编译 WHEN，全部分支须汇聚同一 JOIN(mode=JOIN)，JOIN 单出边续接）；loop（编译 ITERATOR，config {collection 表达式, itemVar 默认 item, maxIterations≤1000}，两条出边：`loopBody:true`=循环体入口（体内自然终止不回连）+ 一条循环后续接；每次迭代写 vars[itemVar]/vars[itemVar+"Index"]）。
 - **onError=BRANCH 契约**：动作节点恰两条出边——`errorBranch:true`=失败支、另一条=成功支；节点失败不中断，vars.__lastError 带错误信息，orchErrorRouter 路由失败支（编译 THEN(动作, SWITCH(errorRouter))）。
+- **批3（§9）**：
+  - `agent` 节点：OpenAI function-calling 循环（config 见 §9.1：credentialId/tools 内嵌 HTTP|SCRIPT 实现/maxSteps≤15/timeoutMs/outputMode）；HTTP 工具模板可用 `{{args.xxx}}`；节点输出 `{result, steps[{step,tool,args,result}], warning?}`。
+  - `wait` 节点 + 挂起：分段链（主段 EL 到 wait 为止；恢复段现场编译）；exec 状态 **WAITING** + `resumeToken`/`currentSegment` 列；POST `/api/orch/resume/{token}`（免登录 permitAll+限流，body 存 wait.saveAs）恢复；超时（timeoutMs 默认 24h，内存定时器+启动恢复扫描）→ FAILED(error=wait timeout) 或节点 onError=CONTINUE 续跑；校验 wait 不得在 parallel/loop 体内（发布 400）。
+  - 失败续跑：POST `/api/orch/execs/{id}/resume-from-failure`【run】→ 新 exec（`parentExecId` 血缘），复用父 `context_snapshot`（**完整上下文 JSON 列**：{payload,vars,outputs,failedNodes[,waitNodeId,waitDeadline]}，节点留痕 8KB 截断仅展示用），从失败节点(含)段起跑；失败点在 parallel/loop 体内 400。
+  - `respond` 节点 + webhook 同步响应：hooks 端点在流含 respond 时同步等待其执行（trigger config.syncTimeoutMs 默认 10s，超时/未达 respond 回退 **202+execId**），返回 respond 的 status/contentType/body（**非 R 信封**）；respond 后续节点继续异步；非 webhook 触发时 respond 等价 dataMap。
+  - ExecResponse 增 `resumeToken/currentSegment/parentExecId`。
+- **批4（§9.5）**：
+  - `dingtalkBot` 节点：{url, secret?(HmacSHA256 加签→URL 追加 timestamp/sign), msgType text|markdown, title?, content 模板, atMobiles?, atAll?}；errcode!=0 视为失败。
+  - `feishuBot` 节点：{url, secret?(HmacSHA256 签名随 body timestamp/sign), msgType text|markdown(→post 富文本单段), title?, content 模板}；code!=0 视为失败。
+  - `dbQuery` 节点（裁定：**本应用库只读 + select-only 硬校验**）：{sql(静态不插值), params?:[Aviator 表达式→? 按序绑定], maxRows≤1000, timeoutMs≤30s, saveAs} → {rows, count}；单语句/SELECT|WITH 开头/DML·DDL 黑名单硬拒；外部 JDBC（credentialId type=JDBC）为扩展点本期不实现（配置即报错）。
+  - 版本历史（orch_flow_version，publish 即快照）：GET `/flows/{id}/versions`【read】（version/name/triggerType/createdBy/createdAt）、GET `/flows/{id}/versions/{version}`【read】（含 designerJson/elExpr）、POST `/flows/{id}/versions/{version}/rollback`【write】（以历史版本覆盖当前并重新发布 → 产生新版本，历史不改写）。
 - **列表 keyword（第二批顺手）**：GET `/api/wf/tasks/todo`、`/api/wf/instances/my`、`/api/wf/instances/done-by-me`、`/api/wf/instances/cc`、`/api/wf/instances/drafts` 均支持 `keyword`（标题/流程名（待办/已办另含节点名）模糊；todo/done-by-me/cc 为组装后过滤）。

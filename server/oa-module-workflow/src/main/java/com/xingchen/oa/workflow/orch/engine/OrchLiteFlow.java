@@ -1,17 +1,23 @@
 package com.xingchen.oa.workflow.orch.engine;
 
+import com.xingchen.oa.workflow.orch.engine.nodes.OrchAgentNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchConditionNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchDataMapNode;
+import com.xingchen.oa.workflow.orch.engine.nodes.OrchDbQueryNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchDelayNode;
+import com.xingchen.oa.workflow.orch.engine.nodes.OrchDingtalkBotNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchEndNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchErrorRouterNode;
+import com.xingchen.oa.workflow.orch.engine.nodes.OrchFeishuBotNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchHttpNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchLlmNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchLoopNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchNotifyNode;
+import com.xingchen.oa.workflow.orch.engine.nodes.OrchRespondNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchScriptNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchStartApprovalNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchSubFlowNode;
+import com.xingchen.oa.workflow.orch.engine.nodes.OrchWaitNode;
 import com.yomahub.liteflow.builder.LiteFlowNodeBuilder;
 import com.yomahub.liteflow.builder.el.LiteFlowChainELBuilder;
 import com.yomahub.liteflow.core.FlowExecutor;
@@ -67,6 +73,12 @@ public class OrchLiteFlow {
         common("orchStartApproval", "发起审批", OrchStartApprovalNode.class);
         common("orchSubFlow", "子编排", OrchSubFlowNode.class);
         common("orchEnd", "结束", OrchEndNode.class);
+        common("orchAgent", "AI Agent", OrchAgentNode.class);
+        common("orchRespond", "响应", OrchRespondNode.class);
+        common("orchWait", "等待回调", OrchWaitNode.class);
+        common("orchDingtalkBot", "钉钉机器人", OrchDingtalkBotNode.class);
+        common("orchFeishuBot", "飞书机器人", OrchFeishuBotNode.class);
+        common("orchDbQuery", "数据查询", OrchDbQueryNode.class);
         LiteFlowNodeBuilder.createSwitchNode()
                 .setId("orchCondition").setName("条件").setClazz(OrchConditionNode.class).build();
         LiteFlowNodeBuilder.createSwitchNode()
@@ -81,7 +93,11 @@ public class OrchLiteFlow {
 
     /** 注册/更新链（EL 未变则跳过），返回 chainId。 */
     public String ensureChain(long flowId, int version, String el) {
-        String chainId = "orch_" + flowId + "_v" + version;
+        return ensureChainKeyed("orch_" + flowId + "_v" + version, el);
+    }
+
+    /** 分段链（§9.2 wait 后继段 / §9.3 失败续跑段）：按任意 key 注册。 */
+    public String ensureChainKeyed(String chainId, String el) {
         String prev = registered.get(chainId);
         if (!el.equals(prev)) {
             executor(); // 确保组件已注册

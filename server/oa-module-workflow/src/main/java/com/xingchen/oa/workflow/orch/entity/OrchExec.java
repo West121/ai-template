@@ -20,6 +20,7 @@ import java.time.OffsetDateTime;
 public class OrchExec {
 
     public static final String STATUS_RUNNING = "RUNNING";
+    public static final String STATUS_WAITING = "WAITING";  // wait 节点挂起，等 resume/超时
     public static final String STATUS_SUCCESS = "SUCCESS";
     public static final String STATUS_FAILED = "FAILED";
     public static final String STATUS_CANCELED = "CANCELED";
@@ -31,6 +32,7 @@ public class OrchExec {
     public static final String KIND_RERUN = "RERUN";
     public static final String KIND_ERROR_FLOW = "ERROR_FLOW";
     public static final String KIND_SUB_FLOW = "SUB_FLOW";
+    public static final String KIND_RESUME_FAIL = "RESUME_FAIL";  // 失败节点续跑（新 exec，parent_exec_id 指向失败父）
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -56,6 +58,22 @@ public class OrchExec {
 
     @Column(columnDefinition = "text")
     private String error;
+
+    /** wait 挂起恢复令牌（免登录 resume 鉴权）。 */
+    @Column(name = "resume_token", length = 64)
+    private String resumeToken;
+
+    /** 分段链当前段（0=主段；每次挂起恢复 +1）。 */
+    @Column(name = "current_segment", nullable = false)
+    private Integer currentSegment = 0;
+
+    /** 失败续跑血缘：指向失败的父 exec。 */
+    @Column(name = "parent_exec_id")
+    private Long parentExecId;
+
+    /** 完整上下文快照 JSON（不截断；节点留痕 8KB 截断仅用于展示）。 */
+    @Column(name = "context_snapshot", columnDefinition = "text")
+    private String contextSnapshot;
 
     @CreationTimestamp
     @Column(name = "started_at", updatable = false)

@@ -28,7 +28,8 @@ public final class OrchDtos {
     public record ExecResponse(
             Long id, Long flowId, String flowCode, String triggerKind, String status,
             String payload, String result, String error,
-            OffsetDateTime startedAt, OffsetDateTime endedAt) {
+            OffsetDateTime startedAt, OffsetDateTime endedAt,
+            String resumeToken, Integer currentSegment, Long parentExecId) {
     }
 
     public record ExecNodeResponse(

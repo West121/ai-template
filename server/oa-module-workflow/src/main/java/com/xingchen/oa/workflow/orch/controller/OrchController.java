@@ -93,6 +93,27 @@ public class OrchController {
         return R.ok(flowService.enable(id, enabled));
     }
 
+    /** §9.5 版本历史：列表（无 designerJson）。 */
+    @GetMapping("/flows/{id}/versions")
+    @PreAuthorize("hasAuthority('orch:flow:read')")
+    public R<List<Map<String, Object>>> versions(@PathVariable Long id) {
+        return R.ok(flowService.versions(id));
+    }
+
+    /** §9.5 版本详情（含 designerJson）。 */
+    @GetMapping("/flows/{id}/versions/{version}")
+    @PreAuthorize("hasAuthority('orch:flow:read')")
+    public R<Map<String, Object>> versionDetail(@PathVariable Long id, @PathVariable Integer version) {
+        return R.ok(flowService.versionDetail(id, version));
+    }
+
+    /** §9.5 回滚：以历史版本覆盖当前并重新发布（产生新版本）。 */
+    @PostMapping("/flows/{id}/versions/{version}/rollback")
+    @PreAuthorize("hasAuthority('orch:flow:write')")
+    public R<FlowResponse> rollback(@PathVariable Long id, @PathVariable Integer version) {
+        return R.ok(flowService.rollback(id, version));
+    }
+
     @PostMapping("/flows/{id}/hook-token/reset")
     @PreAuthorize("hasAuthority('orch:flow:write')")
     public R<FlowResponse> resetHookToken(@PathVariable Long id) {
@@ -130,6 +151,13 @@ public class OrchController {
     @PreAuthorize("hasAuthority('orch:flow:run')")
     public R<Map<String, Object>> rerun(@PathVariable Long id) {
         return R.ok(Map.of("execId", execService.rerun(id)));
+    }
+
+    /** §9.3 失败续跑：新 exec（parent_exec_id 血缘），复用父快照上下文，从失败节点(含)起跑。 */
+    @PostMapping("/execs/{id}/resume-from-failure")
+    @PreAuthorize("hasAuthority('orch:flow:run')")
+    public R<Map<String, Object>> resumeFromFailure(@PathVariable Long id) {
+        return R.ok(Map.of("execId", execService.resumeFromFailure(id)));
     }
 
     // ---------- 凭据 ----------

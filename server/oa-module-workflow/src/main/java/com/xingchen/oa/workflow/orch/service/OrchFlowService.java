@@ -10,8 +10,10 @@ import com.xingchen.oa.workflow.orch.engine.OrchCronScheduler;
 import com.xingchen.oa.workflow.orch.engine.OrchToElCompiler;
 import com.xingchen.oa.workflow.orch.entity.OrchExec;
 import com.xingchen.oa.workflow.orch.entity.OrchFlow;
+import com.xingchen.oa.workflow.orch.entity.OrchFlowVersion;
 import com.xingchen.oa.workflow.orch.repository.OrchExecRepository;
 import com.xingchen.oa.workflow.orch.repository.OrchFlowRepository;
+import com.xingchen.oa.workflow.orch.repository.OrchFlowVersionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -23,6 +25,10 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -37,6 +43,7 @@ public class OrchFlowService {
 
     private final OrchFlowRepository flowRepository;
     private final OrchExecRepository execRepository;
+    private final OrchFlowVersionRepository versionRepository;
     private final OrchToElCompiler compiler;
     private final ObjectMapper objectMapper;
     /** 懒注入避免 FlowService ↔ CronScheduler(→ExecService) 装配环。 */
@@ -118,8 +125,71 @@ public class OrchFlowService {
         extractTrigger(flow);
         validateTriggerConfig(flow);
         OrchFlow saved = flowRepository.save(flow);
+        snapshotVersion(saved);
         cronScheduler.getObject().refresh(saved);
         return toResponse(saved, true, false);
+    }
+
+    /** §9.5 发布版本快照。 */
+    private void snapshotVersion(OrchFlow flow) {
+        OrchFlowVersion v = new OrchFlowVersion();
+        v.setFlowId(flow.getId());
+        v.setVersion(flow.getVersion());
+        v.setName(flow.getName());
+        v.setDesignerJson(flow.getDesignerJson());
+        v.setElExpr(flow.getElExpr());
+        v.setTriggerType(flow.getTriggerType());
+        v.setTriggerConfig(flow.getTriggerConfig());
+        v.setRemark(flow.getRemark());
+        UserContext u = CurrentUserHolder.get();
+        v.setCreatedBy(u != null ? u.getUserId() : null);
+        versionRepository.save(v);
+    }
+
+    /** §9.5 版本列表（不含 designerJson 减载）。 */
+    public List<Map<String, Object>> versions(Long flowId) {
+        find(flowId);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (OrchFlowVersion v : versionRepository.findByFlowIdOrderByVersionDesc(flowId)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("version", v.getVersion());
+            m.put("name", v.getName());
+            m.put("triggerType", v.getTriggerType());
+            m.put("createdBy", v.getCreatedBy());
+            m.put("createdAt", v.getCreatedAt());
+            out.add(m);
+        }
+        return out;
+    }
+
+    /** §9.5 版本详情（含 designerJson，只读查看）。 */
+    public Map<String, Object> versionDetail(Long flowId, Integer version) {
+        OrchFlowVersion v = versionRepository.findByFlowIdAndVersion(flowId, version)
+                .orElseThrow(() -> new BusinessException(404, "版本不存在: v" + version));
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("version", v.getVersion());
+        m.put("name", v.getName());
+        m.put("designerJson", v.getDesignerJson());
+        m.put("elExpr", v.getElExpr());
+        m.put("triggerType", v.getTriggerType());
+        m.put("triggerConfig", v.getTriggerConfig());
+        m.put("createdBy", v.getCreatedBy());
+        m.put("createdAt", v.getCreatedAt());
+        return m;
+    }
+
+    /** §9.5 回滚：以历史版本 designerJson 覆盖当前草图并重新发布（产生新版本快照，历史不改写）。 */
+    @Transactional
+    public FlowResponse rollback(Long flowId, Integer version) {
+        OrchFlow flow = find(flowId);
+        OrchFlowVersion v = versionRepository.findByFlowIdAndVersion(flowId, version)
+                .orElseThrow(() -> new BusinessException(404, "版本不存在: v" + version));
+        flow.setDesignerJson(v.getDesignerJson());
+        if (StringUtils.hasText(v.getName())) {
+            flow.setName(v.getName());
+        }
+        flowRepository.save(flow);
+        return publish(flowId);
     }
 
     /** 触发器配置校验（发布时）：CRON 须带合法 Spring 6 段表达式；EVENT 须带 source+type。 */

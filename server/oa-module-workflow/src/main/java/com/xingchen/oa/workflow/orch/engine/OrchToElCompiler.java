@@ -38,13 +38,18 @@ public class OrchToElCompiler {
             Map.entry("delay", "orchDelay"),
             Map.entry("startApproval", "orchStartApproval"),
             Map.entry("subFlow", "orchSubFlow"),
+            Map.entry("agent", "orchAgent"),
+            Map.entry("respond", "orchRespond"),
+            Map.entry("dingtalkBot", "orchDingtalkBot"),
+            Map.entry("feishuBot", "orchFeishuBot"),
+            Map.entry("dbQuery", "orchDbQuery"),
             Map.entry("end", "orchEnd"));
 
     /** 编译（含全量校验）。@return LiteFlow EL 表达式 */
     public String compile(JsonNode model) {
         Graph g = parse(model);
         String startId = singleTarget(g, g.triggerId, "trigger");
-        String el = compilePath(g, startId, new LinkedHashSet<>(), Set.of());
+        String el = compilePath(g, startId, new LinkedHashSet<>(), Set.of(), false);
         if (el == null) {
             throw new BusinessException(400, "编排为空：trigger 后无任何节点");
         }
@@ -59,9 +64,10 @@ public class OrchToElCompiler {
     }
 
     /**
-     * 编译一段路径。stopAt=遇到即停（parallel 分支到 JOIN 为止，JOIN 本身不产 EL）。
+     * 编译一段路径。stopAt=遇到即停（parallel 分支到 JOIN 为止，JOIN 本身不产 EL）；
+     * inSub=处于 parallel 分支/loop 体内（wait 禁入，§9.2 本期限制）。
      */
-    private String compilePath(Graph g, String nodeId, Set<String> onPath, Set<String> stopAt) {
+    private String compilePath(Graph g, String nodeId, Set<String> onPath, Set<String> stopAt, boolean inSub) {
         List<String> items = new ArrayList<>();
         String cur = nodeId;
         while (cur != null && !stopAt.contains(cur)) {
@@ -72,7 +78,7 @@ public class OrchToElCompiler {
             String type = node.path("type").asString("");
             switch (type) {
                 case "condition" -> {
-                    items.add(compileCondition(g, cur, onPath, stopAt));
+                    items.add(compileCondition(g, cur, onPath, stopAt, inSub));
                     onPath.remove(cur);
                     cur = null; // 分支各自携带下游，主线到此为止
                 }
@@ -81,19 +87,33 @@ public class OrchToElCompiler {
                     onPath.remove(cur);
                     cur = null;
                 }
+                case "wait" -> {
+                    // §9.2 分段链：wait = 段终结标记（orchWait 置 ctx.waitNodeId → exec 挂起）；
+                    // 后继段恢复时经 compileAfterWait(waitNodeId) 单独编译。
+                    if (inSub) {
+                        throw new BusinessException(400, "wait 节点不得在 parallel 分支/loop 体内（本期限制）: " + cur);
+                    }
+                    List<JsonNode> waitOuts = g.edges.getOrDefault(cur, List.of());
+                    if (waitOuts.size() != 1) {
+                        throw new BusinessException(400, "wait 节点须恰有一条出边（恢复后续段入口）: " + cur);
+                    }
+                    items.add("node(\"orchWait\").tag(\"" + cur + "\")");
+                    onPath.remove(cur);
+                    cur = null; // 段到此为止
+                }
                 case "parallel" -> {
                     String mode = node.path("config").path("mode").asString("OPEN").toUpperCase();
                     if (!"OPEN".equals(mode)) {
                         throw new BusinessException(400, "parallel JOIN 节点不可被直接进入（须由 OPEN 分支汇聚到达）: " + cur);
                     }
-                    ParallelBlock block = compileParallel(g, cur, onPath, stopAt);
+                    ParallelBlock block = compileParallel(g, cur, onPath, stopAt, inSub);
                     items.add(block.el);
                     String prev = cur;
                     cur = block.continueAt;
                     onPath.remove(prev);
                 }
                 case "loop" -> {
-                    LoopBlock block = compileLoop(g, cur, onPath, stopAt);
+                    LoopBlock block = compileLoop(g, cur, onPath, stopAt, inSub);
                     items.add(block.el);
                     String prev = cur;
                     cur = block.continueAt;
@@ -109,7 +129,7 @@ public class OrchToElCompiler {
                     JsonNode errorEdge = outs.stream()
                             .filter(e -> e.path("errorBranch").asBoolean(false)).findFirst().orElse(null);
                     if (errorEdge != null) {
-                        items.add(compileErrorBranch(g, cur, type, outs, errorEdge, onPath, stopAt));
+                        items.add(compileErrorBranch(g, cur, type, outs, errorEdge, onPath, stopAt, inSub));
                         onPath.remove(cur);
                         cur = null; // 成功/失败支各自携带下游
                     } else {
@@ -134,7 +154,7 @@ public class OrchToElCompiler {
         return items.size() == 1 ? items.get(0) : "THEN(" + String.join(", ", items) + ")";
     }
 
-    private String compileCondition(Graph g, String condId, Set<String> onPath, Set<String> stopAt) {
+    private String compileCondition(Graph g, String condId, Set<String> onPath, Set<String> stopAt, boolean inSub) {
         List<JsonNode> outs = g.edges.getOrDefault(condId, List.of());
         if (outs.size() < 2) {
             throw new BusinessException(400, "condition 节点至少两条出边: " + condId);
@@ -147,7 +167,7 @@ public class OrchToElCompiler {
         for (JsonNode edge : outs) {
             String target = edge.path("target").asString("");
             // 每条分支独立路径栈（汇合节点允许在不同分支重复出现）；.id() 供 SWITCH 按目标节点 id 路由
-            String sub = compilePath(g, target, new LinkedHashSet<>(onPath), stopAt);
+            String sub = compilePath(g, target, new LinkedHashSet<>(onPath), stopAt, inSub);
             branches.add("THEN(" + sub + ").id(\"" + target + "\")");
         }
         return "SWITCH(node(\"orchCondition\").tag(\"" + condId + "\")).TO(" + String.join(", ", branches) + ")";
@@ -159,7 +179,7 @@ public class OrchToElCompiler {
      * 且不中断，errorRouter 据此路由。节点 onError 需为 BRANCH（校验）。
      */
     private String compileErrorBranch(Graph g, String nodeId, String type, List<JsonNode> outs,
-                                      JsonNode errorEdge, Set<String> onPath, Set<String> stopAt) {
+                                      JsonNode errorEdge, Set<String> onPath, Set<String> stopAt, boolean inSub) {
         JsonNode node = g.nodes.get(nodeId);
         String onError = node.path("config").path("onError").asString("ABORT").toUpperCase();
         if (!"BRANCH".equals(onError)) {
@@ -171,8 +191,8 @@ public class OrchToElCompiler {
         }
         String okTarget = normal.get(0).path("target").asString("");
         String errTarget = errorEdge.path("target").asString("");
-        String okSub = compilePath(g, okTarget, new LinkedHashSet<>(onPath), stopAt);
-        String errSub = compilePath(g, errTarget, new LinkedHashSet<>(onPath), stopAt);
+        String okSub = compilePath(g, okTarget, new LinkedHashSet<>(onPath), stopAt, inSub);
+        String errSub = compilePath(g, errTarget, new LinkedHashSet<>(onPath), stopAt, inSub);
         return "THEN(" + nodeEl(type, nodeId) + ", SWITCH(node(\"orchErrorRouter\").tag(\"" + nodeId + "\")).TO("
                 + "THEN(" + okSub + ").id(\"" + okTarget + "\"), "
                 + "THEN(" + errSub + ").id(\"" + errTarget + "\")))";
@@ -182,7 +202,7 @@ public class OrchToElCompiler {
      * parallel（契约 §2）：OPEN 节点 N(≥2) 条出边为并行分支（编译 WHEN，全到齐汇合），
      * 每条分支须汇聚到<b>同一个</b> JOIN 节点（type=parallel, config.mode=JOIN）；JOIN 单出边续接主线。
      */
-    private ParallelBlock compileParallel(Graph g, String openId, Set<String> onPath, Set<String> stopAt) {
+    private ParallelBlock compileParallel(Graph g, String openId, Set<String> onPath, Set<String> stopAt, boolean inSub) {
         List<JsonNode> outs = g.edges.getOrDefault(openId, List.of());
         if (outs.size() < 2) {
             throw new BusinessException(400, "parallel OPEN 至少两条出边: " + openId);
@@ -204,7 +224,7 @@ public class OrchToElCompiler {
         branchStop.add(joinId);
         List<String> branches = new ArrayList<>();
         for (JsonNode edge : outs) {
-            String sub = compilePath(g, edge.path("target").asString(""), new LinkedHashSet<>(onPath), branchStop);
+            String sub = compilePath(g, edge.path("target").asString(""), new LinkedHashSet<>(onPath), branchStop, true);
             if (sub == null) {
                 throw new BusinessException(400, "parallel 空分支: " + openId);
             }
@@ -243,14 +263,14 @@ public class OrchToElCompiler {
      * {@code loopBody:true}=循环体入口（体内路径自然终止，不回连），另一条=循环后续接。
      * 编译 ITERATOR(loop 节点).DO(体)；运行时 loop 组件按 collection 表达式出迭代器并逐项写 vars[itemVar]。
      */
-    private LoopBlock compileLoop(Graph g, String loopId, Set<String> onPath, Set<String> stopAt) {
+    private LoopBlock compileLoop(Graph g, String loopId, Set<String> onPath, Set<String> stopAt, boolean inSub) {
         List<JsonNode> outs = g.edges.getOrDefault(loopId, List.of());
         JsonNode bodyEdge = outs.stream().filter(e -> e.path("loopBody").asBoolean(false)).findFirst().orElse(null);
         List<JsonNode> normal = outs.stream().filter(e -> !e.path("loopBody").asBoolean(false)).toList();
         if (bodyEdge == null || normal.size() != 1 || outs.size() != 2) {
             throw new BusinessException(400, "loop 节点须恰有一条循环体入口(loopBody:true) + 一条后续出边: " + loopId);
         }
-        String bodySub = compilePath(g, bodyEdge.path("target").asString(""), new LinkedHashSet<>(onPath), stopAt);
+        String bodySub = compilePath(g, bodyEdge.path("target").asString(""), new LinkedHashSet<>(onPath), stopAt, true);
         if (bodySub == null) {
             throw new BusinessException(400, "loop 循环体为空: " + loopId);
         }
@@ -309,6 +329,86 @@ public class OrchToElCompiler {
             g.edges.computeIfAbsent(src, k -> new ArrayList<>()).add(e);
         }
         return g;
+    }
+
+    /**
+     * §9.2 恢复段：wait 节点单条出边的后继整段（含条件/再次 wait 等），顶层保证条件表达式。
+     */
+    public String compileAfterWait(JsonNode model, String waitNodeId) {
+        Graph g = parse(model);
+        List<JsonNode> outs = g.edges.getOrDefault(waitNodeId, List.of());
+        if (outs.size() != 1) {
+            throw new BusinessException(400, "wait 节点须恰有一条出边: " + waitNodeId);
+        }
+        String el = compilePath(g, outs.get(0).path("target").asString(""), new LinkedHashSet<>(), Set.of(), false);
+        if (el == null) {
+            throw new BusinessException(400, "wait 后继为空: " + waitNodeId);
+        }
+        return wrapTop(el);
+    }
+
+    /**
+     * §9.3 失败续跑：从指定节点（含）起编译后续段。失败点在 parallel 分支/loop 体内不可续跑（400）。
+     */
+    public String compileFromNode(JsonNode model, String nodeId) {
+        Graph g = parse(model);
+        if (!g.nodes.containsKey(nodeId)) {
+            throw new BusinessException(400, "续跑起点节点不存在: " + nodeId);
+        }
+        if (containedInSub(g).contains(nodeId)) {
+            throw new BusinessException(400, "失败点在 parallel 分支/loop 体内，不支持从失败节点续跑（请整流重跑）: " + nodeId);
+        }
+        String el = compilePath(g, nodeId, new LinkedHashSet<>(), Set.of(), false);
+        if (el == null) {
+            throw new BusinessException(400, "续跑段为空: " + nodeId);
+        }
+        return wrapTop(el);
+    }
+
+    /** parallel 分支 / loop 体内的全部节点 id（含嵌套下游到 JOIN/终止）。 */
+    private Set<String> containedInSub(Graph g) {
+        Set<String> contained = new LinkedHashSet<>();
+        for (Map.Entry<String, JsonNode> e : g.nodes.entrySet()) {
+            JsonNode n = e.getValue();
+            String type = n.path("type").asString("");
+            if ("parallel".equals(type) && "OPEN".equalsIgnoreCase(n.path("config").path("mode").asString("OPEN"))) {
+                String join = null;
+                for (JsonNode edge : g.edges.getOrDefault(e.getKey(), List.of())) {
+                    String f = findJoin(g, edge.path("target").asString(""));
+                    if (join == null) {
+                        join = f;
+                    }
+                    collectUntil(g, edge.path("target").asString(""), f, contained);
+                }
+            } else if ("loop".equals(type)) {
+                for (JsonNode edge : g.edges.getOrDefault(e.getKey(), List.of())) {
+                    if (edge.path("loopBody").asBoolean(false)) {
+                        collectUntil(g, edge.path("target").asString(""), null, contained);
+                    }
+                }
+            }
+        }
+        return contained;
+    }
+
+    private void collectUntil(Graph g, String from, String stop, Set<String> out) {
+        List<String> queue = new ArrayList<>(List.of(from));
+        Set<String> seen = new LinkedHashSet<>();
+        while (!queue.isEmpty()) {
+            String id = queue.remove(0);
+            if (id.equals(stop) || !seen.add(id)) {
+                continue;
+            }
+            out.add(id);
+            for (JsonNode e : g.edges.getOrDefault(id, List.of())) {
+                queue.add(e.path("target").asString(""));
+            }
+        }
+    }
+
+    private String wrapTop(String el) {
+        return el.startsWith("THEN(") || el.startsWith("WHEN(") || el.startsWith("SWITCH(") || el.startsWith("ITERATOR(")
+                ? el : "THEN(" + el + ")";
     }
 
     /** 供执行侧复用的图结构（edgesBySource）。 */
