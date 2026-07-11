@@ -6,6 +6,7 @@ import com.xingchen.oa.common.security.CurrentUserHolder;
 import com.xingchen.oa.common.security.UserContext;
 import com.xingchen.oa.workflow.orch.dto.OrchDtos.FlowRequest;
 import com.xingchen.oa.workflow.orch.dto.OrchDtos.FlowResponse;
+import com.xingchen.oa.workflow.orch.engine.OrchCronScheduler;
 import com.xingchen.oa.workflow.orch.engine.OrchToElCompiler;
 import com.xingchen.oa.workflow.orch.entity.OrchExec;
 import com.xingchen.oa.workflow.orch.entity.OrchFlow;
@@ -38,6 +39,8 @@ public class OrchFlowService {
     private final OrchExecRepository execRepository;
     private final OrchToElCompiler compiler;
     private final ObjectMapper objectMapper;
+    /** 懒注入避免 FlowService ↔ CronScheduler(→ExecService) 装配环。 */
+    private final org.springframework.beans.factory.ObjectProvider<OrchCronScheduler> cronScheduler;
 
     public PageResult<FlowResponse> page(String keyword, int pageNum, int pageSize) {
         String kw = keyword == null ? "" : keyword;
@@ -89,12 +92,15 @@ public class OrchFlowService {
         flow.setErrorFlowId(req.errorFlowId());
         flow.setUpdatedAt(OffsetDateTime.now());
         extractTrigger(flow);
-        return toResponse(flowRepository.save(flow), true, false);
+        OrchFlow saved = flowRepository.save(flow);
+        cronScheduler.getObject().refresh(saved);
+        return toResponse(saved, true, false);
     }
 
     @Transactional
     public void delete(Long id) {
         flowRepository.delete(find(id));
+        cronScheduler.getObject().remove(id);
     }
 
     /** 发布：编译校验 → el_expr 缓存 + version+1 + trigger 提取。 */
@@ -110,7 +116,43 @@ public class OrchFlowService {
         flow.setVersion((flow.getVersion() == null ? 0 : flow.getVersion()) + 1);
         flow.setUpdatedAt(OffsetDateTime.now());
         extractTrigger(flow);
-        return toResponse(flowRepository.save(flow), true, false);
+        validateTriggerConfig(flow);
+        OrchFlow saved = flowRepository.save(flow);
+        cronScheduler.getObject().refresh(saved);
+        return toResponse(saved, true, false);
+    }
+
+    /** 触发器配置校验（发布时）：CRON 须带合法 Spring 6 段表达式；EVENT 须带 source+type。 */
+    private void validateTriggerConfig(OrchFlow flow) {
+        if (OrchFlow.TRIGGER_CRON.equals(flow.getTriggerType())) {
+            String cron = null;
+            try {
+                cron = StringUtils.hasText(flow.getTriggerConfig())
+                        ? objectMapper.readTree(flow.getTriggerConfig()).path("cron").asString(null) : null;
+            } catch (Exception ignored) {
+                // 落到空校验
+            }
+            if (!StringUtils.hasText(cron)) {
+                throw new BusinessException(400, "CRON 触发器缺少 cron 表达式");
+            }
+            if (!org.springframework.scheduling.support.CronExpression.isValidExpression(cron)) {
+                throw new BusinessException(400, "cron 表达式非法（Spring 6 段，如 0 0 8 * * *）: " + cron);
+            }
+        }
+        if (OrchFlow.TRIGGER_EVENT.equals(flow.getTriggerType())) {
+            try {
+                JsonNode ev = StringUtils.hasText(flow.getTriggerConfig())
+                        ? objectMapper.readTree(flow.getTriggerConfig()) : null;
+                if (ev == null || !StringUtils.hasText(ev.path("source").asString(null))
+                        || !StringUtils.hasText(ev.path("type").asString(null))) {
+                    throw new BusinessException(400, "EVENT 触发器须配置 event {source, type[, defCode]}");
+                }
+            } catch (BusinessException be) {
+                throw be;
+            } catch (Exception e) {
+                throw new BusinessException(400, "EVENT 触发器配置解析失败");
+            }
+        }
     }
 
     @Transactional
@@ -121,7 +163,9 @@ public class OrchFlowService {
         }
         flow.setEnabled(enabled);
         flow.setUpdatedAt(OffsetDateTime.now());
-        return toResponse(flowRepository.save(flow), false, false);
+        OrchFlow saved = flowRepository.save(flow);
+        cronScheduler.getObject().refresh(saved);
+        return toResponse(saved, false, false);
     }
 
     @Transactional

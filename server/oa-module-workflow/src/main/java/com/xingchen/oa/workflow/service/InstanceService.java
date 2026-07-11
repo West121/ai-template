@@ -207,9 +207,10 @@ public class InstanceService {
 
     /* ---------------- 列表 ---------------- */
 
-    public PageResult<InstanceListItem> my(int pageNum, int pageSize) {
+    public PageResult<InstanceListItem> my(String keyword, int pageNum, int pageSize) {
         Long uid = WfSupport.currentUser().getUserId();
-        Page<WfInstanceExt> page = instanceRepository.findByInitiatorId(uid,
+        String kw = StringUtils.hasText(keyword) ? keyword.trim() : null;
+        Page<WfInstanceExt> page = instanceRepository.searchByInitiator(uid, kw,
                 PageRequest.of(Math.max(pageNum - 1, 0), pageSize, Sort.by(Sort.Direction.DESC, "id")));
         return new PageResult<>(page.getContent().stream().map(InstanceListItem::of).toList(),
                 page.getTotalElements(), pageNum, pageSize);
@@ -222,13 +223,15 @@ public class InstanceService {
      * action/comment 从 wf_operation 按任务批量回填（公文经 office 办理无审计行 → null）；
      * viewPath 按流程定义 form_view_path 模板解析（如公文 /document/send/{docId}）。
      */
-    public PageResult<DoneByMeItem> doneByMe(int pageNum, int pageSize) {
+    public PageResult<DoneByMeItem> doneByMe(String keyword, int pageNum, int pageSize) {
         String uid = String.valueOf(WfSupport.currentUser().getUserId());
+        boolean hasKw = StringUtils.hasText(keyword);
         long total = historyService.createHistoricTaskInstanceQuery().taskAssignee(uid).finished().count();
+        // keyword 模式：标题/流程名组装后才可比，取前 500 条内存过滤再分页
         List<HistoricTaskInstance> tasks = historyService.createHistoricTaskInstanceQuery()
                 .taskAssignee(uid).finished()
                 .orderByHistoricTaskInstanceEndTime().desc()
-                .listPage(Math.max(pageNum - 1, 0) * pageSize, pageSize);
+                .listPage(hasKw ? 0 : Math.max(pageNum - 1, 0) * pageSize, hasKw ? 500 : pageSize);
 
         // 一页一查：任务操作记录（action/comment，取每任务最新一条）
         Map<String, WfOperation> opByTask = new LinkedHashMap<>();
@@ -282,6 +285,16 @@ public class InstanceService {
                     op != null ? op.getAction() : null, op != null ? op.getComment() : null,
                     bizStatus, doneAt, viewPath);
         }).toList();
+        if (hasKw) {
+            String kw = keyword.trim();
+            List<DoneByMeItem> filtered = list.stream()
+                    .filter(d -> containsKw(d.instanceTitle(), kw) || containsKw(d.defName(), kw)
+                            || containsKw(d.nodeName(), kw))
+                    .toList();
+            int from = Math.min(Math.max(pageNum - 1, 0) * pageSize, filtered.size());
+            int to = Math.min(from + pageSize, filtered.size());
+            return new PageResult<>(filtered.subList(from, to), filtered.size(), pageNum, pageSize);
+        }
         return new PageResult<>(list, total, pageNum, pageSize);
     }
 
@@ -726,10 +739,11 @@ public class InstanceService {
         return buildDetail(inst);
     }
 
-    public PageResult<InstanceListItem> drafts(int pageNum, int pageSize) {
+    public PageResult<InstanceListItem> drafts(String keyword, int pageNum, int pageSize) {
         Long uid = WfSupport.currentUser().getUserId();
-        Page<WfInstanceExt> page = instanceRepository.findByInitiatorIdAndBizStatus(uid,
-                WfInstanceExt.STATUS_DRAFT,
+        String kw = StringUtils.hasText(keyword) ? keyword.trim() : null;
+        Page<WfInstanceExt> page = instanceRepository.searchByInitiatorAndStatus(uid,
+                WfInstanceExt.STATUS_DRAFT, kw,
                 PageRequest.of(Math.max(pageNum - 1, 0), pageSize, Sort.by(Sort.Direction.DESC, "id")));
         return new PageResult<>(page.getContent().stream().map(InstanceListItem::of).toList(),
                 page.getTotalElements(), pageNum, pageSize);
@@ -1045,11 +1059,14 @@ public class InstanceService {
 
     /* ---------------- 抄送 ---------------- */
 
-    public PageResult<CcItem> cc(int pageNum, int pageSize) {
+    public PageResult<CcItem> cc(String keyword, int pageNum, int pageSize) {
         Long uid = WfSupport.currentUser().getUserId();
-        Page<WfCc> page = ccRepository.findByUserId(uid,
-                PageRequest.of(Math.max(pageNum - 1, 0), pageSize, Sort.by(Sort.Direction.DESC, "id")));
-        List<CcItem> list = page.getContent().stream().map(cc -> {
+        boolean hasKw = StringUtils.hasText(keyword);
+        // keyword 模式：标题/流程名在 wf_instance_ext（组装后才知道），取前 500 条内存过滤再分页
+        Page<WfCc> page = ccRepository.findByUserId(uid, hasKw
+                ? PageRequest.of(0, 500, Sort.by(Sort.Direction.DESC, "id"))
+                : PageRequest.of(Math.max(pageNum - 1, 0), pageSize, Sort.by(Sort.Direction.DESC, "id")));
+        List<CcItem> assembled = page.getContent().stream().map(cc -> {
             WfInstanceExt inst = instanceRepository.findByProcInstId(cc.getProcInstId()).orElse(null);
             return new CcItem(cc.getId(), cc.getProcInstId(),
                     inst != null ? inst.getTitle() : null,
@@ -1058,7 +1075,20 @@ public class InstanceService {
                     inst != null ? inst.getBizStatus() : null,
                     cc.getReadFlag(), cc.getCreatedAt());
         }).toList();
-        return new PageResult<>(list, page.getTotalElements(), pageNum, pageSize);
+        if (!hasKw) {
+            return new PageResult<>(assembled, page.getTotalElements(), pageNum, pageSize);
+        }
+        String kw = keyword.trim();
+        List<CcItem> filtered = assembled.stream()
+                .filter(c -> containsKw(c.title(), kw) || containsKw(c.defName(), kw))
+                .toList();
+        int from = Math.min(Math.max(pageNum - 1, 0) * pageSize, filtered.size());
+        int to = Math.min(from + pageSize, filtered.size());
+        return new PageResult<>(filtered.subList(from, to), filtered.size(), pageNum, pageSize);
+    }
+
+    private boolean containsKw(String s, String kw) {
+        return s != null && s.contains(kw);
     }
 
     private void markCcRead(String procInstId, Long userId) {

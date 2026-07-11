@@ -19,9 +19,10 @@ import java.util.List;
 public class FlowableEngineConfig implements ProcessEngineConfigurationConfigurer {
 
     private final WfEngineEventListener wfEngineEventListener;
+    private final com.xingchen.oa.workflow.orch.engine.OrchEventBridge orchEventBridge;
 
     @Override
     public void configure(SpringProcessEngineConfiguration engineConfiguration) {
-        engineConfiguration.setEventListeners(List.of(wfEngineEventListener));
+        engineConfiguration.setEventListeners(List.of(wfEngineEventListener, orchEventBridge));
     }
 }

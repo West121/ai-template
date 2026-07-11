@@ -61,7 +61,7 @@ RECEIVE status: TO_SIGN(待签收)/PROCESSING(办理中)/FINISHED(已办结)；S
 - POST `/{id}/urge` 催办：对当前承办环节承办人发催办提醒（best-effort 写 wf_notify + 留痕 urge 意见）
 - GET `/list?direction=&status=&docType=&secret=&urgency=&keyword=&from=&to=&pageNum=&pageSize=`【DS】 发文/收文台账列表（多筛）
 - GET `/ledger?year=&keyword=&status=&pageNum=` 文号台账（连续，按 id 升序；作废=VOID 不回收号）
-- GET `/archive?direction=&year=&keyword=&pageNum=`【DS】 归档卷宗检索（year=年度，direction=类别）
+- GET `/archive?direction=&year=&keyword=&pageNum=`【DS】 归档卷宗检索（year=按 archived_at 归档年度过滤（卷宗号前缀兜底），direction=类别）
 - GET `/number/rules` 【P:office:doc:number】文号规则列表（含 nextPreview）
 - POST `/number/preview` {ruleId?,docType?} → {number}（不占号）
 - GET `/templates`、GET `/templates/{id}` 红头/正文套版模板
@@ -400,4 +400,10 @@ NotifyItem = {id,type,title,content,procInstId,readFlag,createdAt}
 - POST `/execs/{id}/rerun`【run】同 payload 新流水 → {execId}
 - 凭据【write】：GET/POST `/credentials`、PUT/DELETE `/credentials/{id}`；type=LLM|HTTP_BEARER|HTTP_BASIC|HTTP_HEADER，{name,type,baseUrl?,apiKey?(只写不回显),model?,headerName?,enabled}→ 响应含 hasKey
 - 权限码：orch:flow:read / orch:flow:write（受信，同 wf:script:write 级）/ orch:flow:run（V25 授 ADMIN）
-- 下一批：CRON 调度（OrchCronScheduler）/ EVENT 事件桥 / Webhook 入站 POST `/api/orch/hooks/{token}` / parallel/loop 节点
+- **触发器（第二批已全量落地）**：
+  - CRON：`OrchCronScheduler`（Spring TaskScheduler 动态注册；enabled+已发布+triggerType=CRON 才调度；发布/启停/更新/删除即刷新；表达式=Spring 6 段，发布时校验。**集群扩展点**：单实例内存调度，多实例需换 xxl-job/ShedLock，替换 schedule() 即可）。
+  - EVENT：`OrchEventBridge`（桥接共享 Flowable 引擎事件）。订阅形状 trigger 节点 config.event=`{source, type, defCode?}`。事件目录：source=WF → INSTANCE_COMPLETED / TASK_COMPLETED；source=GONGWEN → ISSUED/SEALED/PUBLISHED/FINISHED（gw_send/gw_recv 锁定节点映射）。**payload 形状**：`{source, type, defCode, procInstId, title?, initiatorId?, initiatorName?, nodeId?, nodeName?, businessKey?, documentId?}`。防自触发死循环：编排 startApproval 起的实例带 __orchDepth，≥2 不再触发。
+  - WEBHOOK：POST `/api/orch/hooks/{token}`（免登录 permitAll；token 匹配 enabled+已发布+triggerType=WEBHOOK 的流，否则 404；限流 60 次/token/分钟 → 429；body=payload）→ {execId}。
+- **节点（第二批补齐）**：parallel（OPEN N 条出边=并行分支 → 编译 WHEN，全部分支须汇聚同一 JOIN(mode=JOIN)，JOIN 单出边续接）；loop（编译 ITERATOR，config {collection 表达式, itemVar 默认 item, maxIterations≤1000}，两条出边：`loopBody:true`=循环体入口（体内自然终止不回连）+ 一条循环后续接；每次迭代写 vars[itemVar]/vars[itemVar+"Index"]）。
+- **onError=BRANCH 契约**：动作节点恰两条出边——`errorBranch:true`=失败支、另一条=成功支；节点失败不中断，vars.__lastError 带错误信息，orchErrorRouter 路由失败支（编译 THEN(动作, SWITCH(errorRouter))）。
+- **列表 keyword（第二批顺手）**：GET `/api/wf/tasks/todo`、`/api/wf/instances/my`、`/api/wf/instances/done-by-me`、`/api/wf/instances/cc`、`/api/wf/instances/drafts` 均支持 `keyword`（标题/流程名（待办/已办另含节点名）模糊；todo/done-by-me/cc 为组装后过滤）。

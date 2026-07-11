@@ -2597,6 +2597,176 @@ async function hlCompleted(token, iid) {
   const execPage = await call(admin.token, "GET", `/api/orch/execs?flowId=${flowId}&pageNum=1&pageSize=10`)
   check("orch exec 分页(标准 PageResult)", execPage.body?.code === 0 && (execPage.body?.data?.total ?? 0) >= 3 && Array.isArray(execPage.body?.data?.list))
 
+  /* ---- 第二批：parallel / loop / onError=BRANCH / webhook / cron / event / keyword ---- */
+
+  // parallel(WHEN)：OPEN 两支 dataMap → JOIN → end(vars.a + vars.b)
+  const parModel = {
+    schemaVersion: 1, key: `smoke_orch_par_${TS}`, name: "冒烟编排并行",
+    nodes: [
+      { id: "t1", type: "trigger", name: "触发", config: { triggerType: "MANUAL" } },
+      { id: "p1", type: "parallel", name: "开叉", config: { mode: "OPEN" } },
+      { id: "da", type: "dataMap", name: "支A", config: { assignments: [{ target: "a", expr: "1" }] } },
+      { id: "db", type: "dataMap", name: "支B", config: { assignments: [{ target: "b", expr: "2" }] } },
+      { id: "p2", type: "parallel", name: "汇合", config: { mode: "JOIN" } },
+      { id: "e1", type: "end", name: "结束", config: { output: "vars.a + vars.b" } },
+    ],
+    edges: [
+      { id: "pe1", source: "t1", target: "p1" },
+      { id: "pe2", source: "p1", target: "da" },
+      { id: "pe3", source: "p1", target: "db" },
+      { id: "pe4", source: "da", target: "p2" },
+      { id: "pe5", source: "db", target: "p2" },
+      { id: "pe6", source: "p2", target: "e1" },
+    ],
+  }
+  const pf = await call(admin.token, "POST", "/api/orch/flows", { code: `smoke_orch_par_${TS}`, name: "冒烟编排并行", designerJson: JSON.stringify(parModel) })
+  const pfPub = await call(admin.token, "POST", `/api/orch/flows/${pf.body?.data?.id}/publish`)
+  check("orch parallel 发布(WHEN 编译)", pfPub.body?.code === 0, JSON.stringify(pfPub.body?.message))
+  await call(admin.token, "POST", `/api/orch/flows/${pf.body?.data?.id}/enable`, {})
+  const runP = await call(admin.token, "POST", `/api/orch/flows/${pf.body?.data?.id}/run`, {})
+  const execP = await waitExec(runP.body?.data?.execId)
+  const pNodes = (execP?.nodes ?? []).map((n) => n.nodeId)
+  check("orch parallel 两支都执行(result=3)", execP?.exec?.status === "SUCCESS" && String(execP?.exec?.result) === "3" && pNodes.includes("da") && pNodes.includes("db"), JSON.stringify({ r: execP?.exec?.result, n: pNodes, e: execP?.exec?.error }))
+
+  // loop(ITERATOR)：遍历 payload.items=[1,2,3] 求和
+  const loopModel = {
+    schemaVersion: 1, key: `smoke_orch_loop_${TS}`, name: "冒烟编排循环",
+    nodes: [
+      { id: "t1", type: "trigger", name: "触发", config: { triggerType: "MANUAL" } },
+      { id: "d0", type: "dataMap", name: "初始化", config: { assignments: [{ target: "sum", expr: "0" }] } },
+      { id: "lp", type: "loop", name: "循环", config: { collection: "payload.items", itemVar: "it", maxIterations: 100 } },
+      { id: "db", type: "dataMap", name: "累加", config: { assignments: [{ target: "sum", expr: "vars.sum + vars.it" }] } },
+      { id: "e1", type: "end", name: "结束", config: { output: "vars.sum" } },
+    ],
+    edges: [
+      { id: "le1", source: "t1", target: "d0" },
+      { id: "le2", source: "d0", target: "lp" },
+      { id: "le3", source: "lp", target: "db", loopBody: true },
+      { id: "le4", source: "lp", target: "e1" },
+    ],
+  }
+  const lf = await call(admin.token, "POST", "/api/orch/flows", { code: `smoke_orch_loop_${TS}`, name: "冒烟编排循环", designerJson: JSON.stringify(loopModel) })
+  await call(admin.token, "POST", `/api/orch/flows/${lf.body?.data?.id}/publish`)
+  await call(admin.token, "POST", `/api/orch/flows/${lf.body?.data?.id}/enable`, {})
+  const runL = await call(admin.token, "POST", `/api/orch/flows/${lf.body?.data?.id}/run`, { items: [1, 2, 3] })
+  const execL = await waitExec(runL.body?.data?.execId)
+  const bodyRuns = (execL?.nodes ?? []).filter((n) => n.nodeId === "db").length
+  check("orch loop 遍历3项(sum=6, 体节点3次留痕)", execL?.exec?.status === "SUCCESS" && String(execL?.exec?.result) === "6" && bodyRuns === 3, JSON.stringify({ r: execL?.exec?.result, runs: bodyRuns, e: execL?.exec?.error }))
+
+  // onError=BRANCH：http /fail 失败走失败支
+  const brModel = {
+    schemaVersion: 1, key: `smoke_orch_branch_${TS}`, name: "冒烟编排失败支",
+    nodes: [
+      { id: "t1", type: "trigger", name: "触发", config: { triggerType: "MANUAL" } },
+      { id: "h1", type: "http", name: "必败", config: { method: "GET", url: `${SINK}/fail`, onError: "BRANCH" } },
+      { id: "e1", type: "end", name: "成功支", config: { output: "'ok'" } },
+      { id: "eb", type: "dataMap", name: "失败处理", config: { assignments: [{ target: "handled", expr: "vars.__lastError" }] } },
+      { id: "e2", type: "end", name: "失败支", config: { output: "'error-branch'" } },
+    ],
+    edges: [
+      { id: "be1", source: "t1", target: "h1" },
+      { id: "be2", source: "h1", target: "e1" },
+      { id: "be3", source: "h1", target: "eb", errorBranch: true },
+      { id: "be4", source: "eb", target: "e2" },
+    ],
+  }
+  const brf = await call(admin.token, "POST", "/api/orch/flows", { code: `smoke_orch_branch_${TS}`, name: "冒烟编排失败支", designerJson: JSON.stringify(brModel) })
+  const brPub = await call(admin.token, "POST", `/api/orch/flows/${brf.body?.data?.id}/publish`)
+  check("orch BRANCH 发布(errorRouter 编译)", brPub.body?.code === 0, JSON.stringify(brPub.body?.message))
+  await call(admin.token, "POST", `/api/orch/flows/${brf.body?.data?.id}/enable`, {})
+  const runB = await call(admin.token, "POST", `/api/orch/flows/${brf.body?.data?.id}/run`, {})
+  const execB = await waitExec(runB.body?.data?.execId)
+  const bNodes = (execB?.nodes ?? []).map((n) => n.nodeId)
+  check("orch onError=BRANCH 失败走失败支(result=error-branch)", execB?.exec?.status === "SUCCESS" && execB?.exec?.result === "error-branch" && bNodes.includes("eb") && !bNodes.includes("e1"), JSON.stringify({ r: execB?.exec?.result, n: bNodes, e: execB?.exec?.error }))
+
+  // webhook 入站：免登录 token 触发
+  const whModel = {
+    schemaVersion: 1, key: `smoke_orch_wh_${TS}`, name: "冒烟编排Webhook",
+    nodes: [
+      { id: "t1", type: "trigger", name: "触发", config: { triggerType: "WEBHOOK" } },
+      { id: "d1", type: "dataMap", name: "取值", config: { assignments: [{ target: "who", expr: "payload.who" }] } },
+      { id: "e1", type: "end", name: "结束", config: { output: "vars.who" } },
+    ],
+    edges: [
+      { id: "we1", source: "t1", target: "d1" },
+      { id: "we2", source: "d1", target: "e1" },
+    ],
+  }
+  const whf = await call(admin.token, "POST", "/api/orch/flows", { code: `smoke_orch_wh_${TS}`, name: "冒烟编排Webhook", designerJson: JSON.stringify(whModel) })
+  await call(admin.token, "POST", `/api/orch/flows/${whf.body?.data?.id}/publish`)
+  await call(admin.token, "POST", `/api/orch/flows/${whf.body?.data?.id}/enable`, {})
+  const whToken = (await call(admin.token, "GET", `/api/orch/flows/smoke_orch_wh_${TS}`)).body?.data?.webhookToken
+  const hook = await call(null, "POST", `/api/orch/hooks/${whToken}`, { who: "外部系统" })
+  check("orch webhook 免登录触发返回 execId", hook.status === 200 && hook.body?.code === 0 && !!hook.body?.data?.execId, JSON.stringify({ s: hook.status, b: hook.body }))
+  const execW = await waitExec(hook.body?.data?.execId)
+  check("orch webhook 触发真实执行(result=外部系统,kind=WEBHOOK)", execW?.exec?.status === "SUCCESS" && execW?.exec?.result === "外部系统" && execW?.exec?.triggerKind === "WEBHOOK", JSON.stringify({ r: execW?.exec?.result, k: execW?.exec?.triggerKind }))
+  const hookBad = await call(null, "POST", "/api/orch/hooks/no-such-token", {})
+  check("orch webhook 无效 token → 404", hookBad.body?.code === 404, JSON.stringify(hookBad.body?.code))
+
+  // cron：短周期(每2秒)注册 → 等一跳产生 CRON 流水；坏表达式发布 400
+  const cronModel = {
+    schemaVersion: 1, key: `smoke_orch_cron_${TS}`, name: "冒烟编排定时",
+    nodes: [
+      { id: "t1", type: "trigger", name: "触发", config: { triggerType: "CRON", cron: "*/2 * * * * *" } },
+      { id: "e1", type: "end", name: "结束", config: { output: "'tick'" } },
+    ],
+    edges: [{ id: "ce1", source: "t1", target: "e1" }],
+  }
+  const cf = await call(admin.token, "POST", "/api/orch/flows", { code: `smoke_orch_cron_${TS}`, name: "冒烟编排定时", designerJson: JSON.stringify(cronModel) })
+  await call(admin.token, "POST", `/api/orch/flows/${cf.body?.data?.id}/publish`)
+  await call(admin.token, "POST", `/api/orch/flows/${cf.body?.data?.id}/enable`, {})
+  let cronExec = null
+  for (let i = 0; i < 20 && !cronExec; i++) {
+    await new Promise((r) => setTimeout(r, 500))
+    const page = await call(admin.token, "GET", `/api/orch/execs?flowId=${cf.body?.data?.id}&pageNum=1&pageSize=5`)
+    cronExec = (page.body?.data?.list ?? []).find((e) => e.triggerKind === "CRON")
+  }
+  await call(admin.token, "POST", `/api/orch/flows/${cf.body?.data?.id}/enable`, { enabled: false }) // 立即停表
+  check("orch CRON 注册并触发(2s 周期一跳,kind=CRON)", !!cronExec, JSON.stringify(cronExec?.triggerKind))
+  const badCron = { ...cronModel, key: `smoke_orch_cronbad_${TS}`, nodes: cronModel.nodes.map((n) => (n.id === "t1" ? { ...n, config: { triggerType: "CRON", cron: "not-a-cron" } } : n)) }
+  const bcf = await call(admin.token, "POST", "/api/orch/flows", { code: `smoke_orch_cronbad_${TS}`, name: "坏cron", designerJson: JSON.stringify(badCron) })
+  const bcPub = await call(admin.token, "POST", `/api/orch/flows/${bcf.body?.data?.id}/publish`)
+  check("orch 坏 cron 表达式发布 400", bcPub.body?.code === 400 && (bcPub.body?.message ?? "").includes("cron"), JSON.stringify(bcPub.body?.message))
+
+  // 事件桥：订阅 WF/INSTANCE_COMPLETED(leave_approval) → 起审批办完 → 编排被触发
+  const evModel = {
+    schemaVersion: 1, key: `smoke_orch_event_${TS}`, name: "冒烟编排事件",
+    nodes: [
+      { id: "t1", type: "trigger", name: "触发", config: { triggerType: "EVENT", event: { source: "WF", type: "INSTANCE_COMPLETED", defCode: "leave_approval" } } },
+      { id: "e1", type: "end", name: "结束", config: { output: "payload.title" } },
+    ],
+    edges: [{ id: "ee1", source: "t1", target: "e1" }],
+  }
+  const ef = await call(admin.token, "POST", "/api/orch/flows", { code: `smoke_orch_event_${TS}`, name: "冒烟编排事件", designerJson: JSON.stringify(evModel) })
+  await call(admin.token, "POST", `/api/orch/flows/${ef.body?.data?.id}/publish`)
+  await call(admin.token, "POST", `/api/orch/flows/${ef.body?.data?.id}/enable`, {})
+  const evInst = await startInst("leave_approval", `事件桥请假-${TS}`, { leaveType: "ANNUAL", days: 2, reason: "事件桥测试" })
+  const evTask = await findTodo(manager.token, `事件桥请假-${TS}`)
+  if (evTask) await call(manager.token, "POST", `/api/wf/tasks/${evTask.taskId}/approve`, { comment: "过" })
+  let evExec = null
+  for (let i = 0; i < 20 && !evExec; i++) {
+    await new Promise((r) => setTimeout(r, 500))
+    const page = await call(admin.token, "GET", `/api/orch/execs?flowId=${ef.body?.data?.id}&pageNum=1&pageSize=5`)
+    evExec = (page.body?.data?.list ?? []).find((e) => e.triggerKind === "EVENT" && e.status !== "RUNNING")
+  }
+  check("orch 事件桥:审批办完触发编排(payload 含 procInstId,result=标题)", !!evExec && evExec.status === "SUCCESS" && (evExec.payload ?? "").includes("procInstId") && evExec.result === `事件桥请假-${TS}`, JSON.stringify({ s: evExec?.status, r: evExec?.result }))
+  await call(admin.token, "POST", `/api/orch/flows/${ef.body?.data?.id}/enable`, { enabled: false })
+
+  // keyword：我发起/已办/待办 模糊过滤
+  const kwMy = await call(zhangsan.token, "GET", encodeURI(`/api/wf/instances/my?keyword=事件桥请假&pageNum=1&pageSize=20`))
+  check("keyword 我发起过滤(全部命中)", kwMy.body?.code === 0 && (kwMy.body?.data?.list ?? []).length >= 1 && (kwMy.body?.data?.list ?? []).every((r) => (r.title ?? "").includes("事件桥请假")), JSON.stringify(kwMy.body?.data?.total))
+  const kwMyMiss = await call(zhangsan.token, "GET", "/api/wf/instances/my?keyword=zzz_no_such_kw&pageNum=1&pageSize=20")
+  check("keyword 我发起无命中 total=0", kwMyMiss.body?.code === 0 && kwMyMiss.body?.data?.total === 0)
+  const kwDone = await call(admin.token, "GET", encodeURI(`/api/wf/instances/done-by-me?keyword=情况通报&pageNum=1&pageSize=20`))
+  check("keyword 已办过滤(标题命中)", kwDone.body?.code === 0 && (kwDone.body?.data?.list ?? []).every((t) => `${t.instanceTitle}${t.defName}${t.nodeName}`.includes("情况通报")), JSON.stringify(kwDone.body?.data?.total))
+  const kwTodo = await call(manager.token, "GET", "/api/wf/tasks/todo?keyword=zzz_no_such_kw&pageNum=1&pageSize=20")
+  check("keyword 待办无命中 total=0(接口不报错)", kwTodo.body?.code === 0 && kwTodo.body?.data?.total === 0)
+  // 公文归档卷宗年度筛(archived_at)
+  const kwArch = await call(admin.token, "GET", `/api/office/doc/archive?year=${new Date().getFullYear()}&pageNum=1&pageSize=10`)
+  check("公文归档 year 参数(按 archived_at 年度)生效", kwArch.body?.code === 0 && (kwArch.body?.data?.total ?? 0) >= 1, JSON.stringify(kwArch.body?.data?.total))
+  const kwArchMiss = await call(admin.token, "GET", "/api/office/doc/archive?year=1999&pageNum=1&pageSize=10")
+  check("公文归档 year=1999 无命中", kwArchMiss.body?.code === 0 && kwArchMiss.body?.data?.total === 0, JSON.stringify(kwArchMiss.body?.data?.total))
+
   sink.close()
 }
 

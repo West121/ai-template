@@ -478,12 +478,13 @@ public class GongwenService {
                 ps.add(cb.equal(root.get("direction"), direction));
             }
             if (StringUtils.hasText(year)) {
-                // 年度：卷宗号前缀 {year}- 或成文日期年份
+                // 年度：按归档时间 archived_at 年度过滤（前端归档卷宗年度筛）；卷宗号前缀 {year}- 兜底
+                int y = Integer.parseInt(year.trim());
                 ps.add(cb.or(
-                        cb.like(root.get("archiveNo"), year + "-%"),
-                        cb.between(root.get("docDate"),
-                                LocalDate.of(Integer.parseInt(year), 1, 1),
-                                LocalDate.of(Integer.parseInt(year), 12, 31))));
+                        cb.between(root.get("archivedAt"),
+                                LocalDate.of(y, 1, 1).atStartOfDay(),
+                                LocalDate.of(y + 1, 1, 1).atStartOfDay()),
+                        cb.like(root.get("archiveNo"), year.trim() + "-%")));
             }
             if (StringUtils.hasText(keyword)) {
                 String like = "%" + keyword.trim() + "%";

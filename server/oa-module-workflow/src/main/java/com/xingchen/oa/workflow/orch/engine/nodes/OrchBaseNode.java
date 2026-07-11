@@ -64,8 +64,11 @@ public abstract class OrchBaseNode extends NodeComponent {
         }
         String error = last != null ? String.valueOf(last.getMessage()) : "未知错误";
         logger.finish(row, false, null, error, retryTimes + 1, System.currentTimeMillis() - start);
-        if ("CONTINUE".equals(onError)) {
-            ctx.outputs.put(nodeId, null); // 失败继续：输出置空，下游可判 null
+        ctx.failedNodes.add(nodeId);
+        if ("CONTINUE".equals(onError) || "BRANCH".equals(onError)) {
+            // CONTINUE：失败继续输出置空；BRANCH：不中断，由 orchErrorRouter 按 failedNodes 路由失败支
+            ctx.outputs.put(nodeId, null);
+            ctx.vars.put("__lastError", error);
             return;
         }
         throw new IllegalStateException("节点[" + nodeId + "]执行失败: " + error, last);

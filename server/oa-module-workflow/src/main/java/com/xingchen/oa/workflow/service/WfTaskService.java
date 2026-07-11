@@ -69,7 +69,7 @@ public class WfTaskService {
 
     /* ---------------- 待办 ---------------- */
 
-    public PageResult<TaskItem> todo(int pageNum, int pageSize) {
+    public PageResult<TaskItem> todo(String keyword, int pageNum, int pageSize) {
         String uid = String.valueOf(WfSupport.currentUser().getUserId());
         // taskInvolvedUser 覆盖候选/代理 identityLink（assignee=委托人时受托人 candidate 也可见）；
         // 但会带出 owner=我 的转办/委派出去的任务，需过滤：仅当我是 assignee 或我不是 owner 时保留。
@@ -83,11 +83,26 @@ public class WfTaskService {
             }
         }
         List<Task> filtered = new java.util.ArrayList<>(distinct.values());
+        if (StringUtils.hasText(keyword)) {
+            // keyword：标题/流程名/节点名模糊（组装后过滤——待办是个人体量，全量组装可承受）
+            String kw = keyword.trim();
+            List<TaskItem> all = filtered.stream().map(this::toItem)
+                    .filter(t -> containsKw(t.instanceTitle(), kw) || containsKw(t.defName(), kw)
+                            || containsKw(t.nodeName(), kw))
+                    .toList();
+            int f = Math.min(Math.max(pageNum - 1, 0) * pageSize, all.size());
+            int e = Math.min(f + pageSize, all.size());
+            return new PageResult<>(all.subList(f, e), all.size(), pageNum, pageSize);
+        }
         long total = filtered.size();
         int from = Math.min(Math.max(pageNum - 1, 0) * pageSize, filtered.size());
         int to = Math.min(from + pageSize, filtered.size());
         List<TaskItem> list = filtered.subList(from, to).stream().map(this::toItem).toList();
         return new PageResult<>(list, total, pageNum, pageSize);
+    }
+
+    private boolean containsKw(String s, String kw) {
+        return s != null && s.contains(kw);
     }
 
     /* ---------------- 已办 ---------------- */

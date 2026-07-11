@@ -54,17 +54,19 @@ public class InstanceController {
 
     @GetMapping("/instances/my")
     public R<PageResult<InstanceListItem>> my(
+            @RequestParam(required = false) String keyword,
             @RequestParam(defaultValue = "1") int pageNum,
             @RequestParam(defaultValue = "10") int pageSize) {
-        return R.ok(service.my(pageNum, pageSize));
+        return R.ok(service.my(keyword, pageNum, pageSize));
     }
 
     /** 「已办」列表：我办结的历史任务（缺 wf_instance_ext 行回退 Flowable 历史，绝不 404 整个列表）。 */
     @GetMapping("/instances/done-by-me")
     public R<PageResult<DoneByMeItem>> doneByMe(
+            @RequestParam(required = false) String keyword,
             @RequestParam(defaultValue = "1") int pageNum,
             @RequestParam(defaultValue = "10") int pageSize) {
-        return R.ok(service.doneByMe(pageNum, pageSize));
+        return R.ok(service.doneByMe(keyword, pageNum, pageSize));
     }
 
     @GetMapping("/instances/admin")
@@ -79,9 +81,10 @@ public class InstanceController {
 
     @GetMapping("/instances/cc")
     public R<PageResult<CcItem>> cc(
+            @RequestParam(required = false) String keyword,
             @RequestParam(defaultValue = "1") int pageNum,
             @RequestParam(defaultValue = "10") int pageSize) {
-        return R.ok(service.cc(pageNum, pageSize));
+        return R.ok(service.cc(keyword, pageNum, pageSize));
     }
 
     @GetMapping("/instances/{id}")
@@ -175,8 +178,9 @@ public class InstanceController {
 
     @GetMapping("/instances/drafts")
     public R<PageResult<InstanceListItem>> drafts(
+            @RequestParam(required = false) String keyword,
             @RequestParam(defaultValue = "1") int pageNum,
             @RequestParam(defaultValue = "10") int pageSize) {
-        return R.ok(service.drafts(pageNum, pageSize));
+        return R.ok(service.drafts(keyword, pageNum, pageSize));
     }
 }

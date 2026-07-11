@@ -2,10 +2,13 @@ package com.xingchen.oa.workflow.orch.engine;
 
 import tools.jackson.databind.JsonNode;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 编排一次执行的 LiteFlow 上下文 bean（契约 §2 数据流）：
@@ -20,8 +23,11 @@ public class OrchRunContext {
     public final int depth;
 
     public final Map<String, Object> payload;
-    public final Map<String, Object> vars = new LinkedHashMap<>();
-    public final Map<String, Object> outputs = new LinkedHashMap<>();
+    /** 同步 Map：parallel(WHEN) 分支并发写安全。 */
+    public final Map<String, Object> vars = Collections.synchronizedMap(new LinkedHashMap<>());
+    public final Map<String, Object> outputs = Collections.synchronizedMap(new LinkedHashMap<>());
+    /** onError=BRANCH：失败节点集合（errorRouter 据此路由失败支）。 */
+    public final Set<String> failedNodes = ConcurrentHashMap.newKeySet();
 
     /** end 节点写入的流水结果。 */
     public volatile Object result;

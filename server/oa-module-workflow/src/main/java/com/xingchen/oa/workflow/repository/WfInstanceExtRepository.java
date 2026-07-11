@@ -21,6 +21,17 @@ public interface WfInstanceExtRepository extends JpaRepository<WfInstanceExt, Lo
 
     Page<WfInstanceExt> findByInitiatorIdAndBizStatus(Long initiatorId, String bizStatus, Pageable pageable);
 
+    /** 我发起 + keyword（标题/流程名模糊）。 */
+    @Query("select i from WfInstanceExt i where i.initiatorId = :uid "
+            + "and (:kw is null or i.title like %:kw% or i.defName like %:kw%)")
+    Page<WfInstanceExt> searchByInitiator(@Param("uid") Long uid, @Param("kw") String kw, Pageable pageable);
+
+    /** 我的草稿 + keyword。 */
+    @Query("select i from WfInstanceExt i where i.initiatorId = :uid and i.bizStatus = :status "
+            + "and (:kw is null or i.title like %:kw% or i.defName like %:kw%)")
+    Page<WfInstanceExt> searchByInitiatorAndStatus(@Param("uid") Long uid, @Param("status") String status,
+                                                   @Param("kw") String kw, Pageable pageable);
+
     /** 管理员实例检索：status/keyword 均可空。 */
     @Query("select i from WfInstanceExt i where (:status is null or i.bizStatus = :status) "
             + "and (:kw is null or i.title like %:kw% or i.defName like %:kw%)")

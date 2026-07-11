@@ -4,8 +4,10 @@ import com.xingchen.oa.workflow.orch.engine.nodes.OrchConditionNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchDataMapNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchDelayNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchEndNode;
+import com.xingchen.oa.workflow.orch.engine.nodes.OrchErrorRouterNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchHttpNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchLlmNode;
+import com.xingchen.oa.workflow.orch.engine.nodes.OrchLoopNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchNotifyNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchScriptNode;
 import com.xingchen.oa.workflow.orch.engine.nodes.OrchStartApprovalNode;
@@ -67,6 +69,10 @@ public class OrchLiteFlow {
         common("orchEnd", "结束", OrchEndNode.class);
         LiteFlowNodeBuilder.createSwitchNode()
                 .setId("orchCondition").setName("条件").setClazz(OrchConditionNode.class).build();
+        LiteFlowNodeBuilder.createSwitchNode()
+                .setId("orchErrorRouter").setName("失败路由").setClazz(OrchErrorRouterNode.class).build();
+        LiteFlowNodeBuilder.createIteratorNode()
+                .setId("orchLoop").setName("循环").setClazz(OrchLoopNode.class).build();
     }
 
     private void common(String id, String name, Class<?> clazz) {

@@ -43,7 +43,9 @@ public class SecurityConfig {
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",
                                 "/v3/api-docs/**",
-                                "/actuator/health"
+                                "/actuator/health",
+                                // 编排 Webhook 入站：免登录，token 鉴权 + 限流护栏在 OrchHookController
+                                "/api/orch/hooks/*"
                         ).permitAll()
                         .anyRequest().authenticated()
                 )

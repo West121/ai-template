@@ -72,13 +72,18 @@ public class OrchExecService {
         pool.shutdownNow();
     }
 
-    /** 手动/定时/事件/Webhook 触发：建流水 + 异步执行，返回 execId。 */
+    /** 手动触发：建流水 + 异步执行，返回 execId。 */
     public Long run(Long flowId, Map<String, Object> payload, String triggerKind) {
         OrchFlow flow = flowRepository.findById(flowId)
                 .orElseThrow(() -> new BusinessException(404, "编排不存在"));
+        return trigger(flow, payload, triggerKind, 0);
+    }
+
+    /** 定时/事件/Webhook 等触发器统一入口：depth=编排链深度（事件桥防死循环护栏用）。 */
+    public Long trigger(OrchFlow flow, Map<String, Object> payload, String triggerKind, int depth) {
         requireRunnable(flow);
         OrchExec exec = createExec(flow, payload, triggerKind);
-        submitAsync(exec.getId(), flow, payload, 0);
+        submitAsync(exec.getId(), flow, payload, depth);
         return exec.getId();
     }
 
@@ -191,7 +196,22 @@ public class OrchExecService {
 
     /** 同步执行一条流水（异步任务/子编排共用）。 */
     private OrchExec execute(Long execId, OrchFlow flow, Map<String, Object> payload, int depth) {
-        OrchExec exec = execRepository.findById(execId).orElseThrow();
+        // 事件桥/引擎事务内创建的流水行可能尚未提交，短暂等待可见（最多 5s）
+        OrchExec exec = null;
+        for (int i = 0; i < 50 && exec == null; i++) {
+            exec = execRepository.findById(execId).orElse(null);
+            if (exec == null) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("执行被中断");
+                }
+            }
+        }
+        if (exec == null) {
+            throw new IllegalStateException("执行流水行不可见(事务未提交或已回滚): " + execId);
+        }
         try {
             JsonNode model = objectMapper.readTree(flow.getDesignerJson());
             List<JsonNode> nodes = new ArrayList<>();

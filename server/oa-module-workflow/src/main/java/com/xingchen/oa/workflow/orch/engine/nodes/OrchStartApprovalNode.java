@@ -34,6 +34,8 @@ public class OrchStartApprovalNode extends OrchBaseNode {
         vars.put("initiatorName", "自动化编排");
         vars.put("__wfRegister", true);
         vars.put("__title", title);
+        // 事件桥防自触发死循环：编排起的实例带深度标记，事件桥读到 >=2 即不再触发编排
+        vars.put("__orchDepth", ctx.depth + 1);
         for (Map.Entry<String, JsonNode> e : config.path("formData").properties()) {
             Object v = tpl.render(e.getValue().asString(""), evalCtx);
             vars.put(e.getKey(), v);

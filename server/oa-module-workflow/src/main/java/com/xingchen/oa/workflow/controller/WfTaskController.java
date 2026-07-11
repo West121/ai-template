@@ -35,9 +35,10 @@ public class WfTaskController {
 
     @GetMapping("/todo")
     public R<PageResult<TaskItem>> todo(
+            @RequestParam(required = false) String keyword,
             @RequestParam(defaultValue = "1") int pageNum,
             @RequestParam(defaultValue = "10") int pageSize) {
-        return R.ok(service.todo(pageNum, pageSize));
+        return R.ok(service.todo(keyword, pageNum, pageSize));
     }
 
     @GetMapping("/done")
