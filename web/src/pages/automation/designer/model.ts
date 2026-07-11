@@ -30,6 +30,16 @@ export interface OrchEdge {
   expression?: string
   /** 默认分支（其他条件都不满足时走） */
   isDefault?: boolean
+  /**
+   * 循环体入口标记（loop 出边图契约，磐石裁定）：loop 恰两条出边——
+   * loopBody=true 的是循环体入口（体内自然终止、不回连），另一条是循环结束后的续接。
+   */
+  loopBody?: boolean
+  /**
+   * 失败分支标记（onError=BRANCH 图契约）：动作节点选 BRANCH 时恰两条出边——
+   * errorBranch=true 的是失败支，另一条是成功支。
+   */
+  errorBranch?: boolean
 }
 
 /* ============================ 节点 ============================ */
@@ -184,6 +194,17 @@ export type OrchNodeConfig =
 
 /* ============================ 校验 ============================ */
 
+/** 动作类节点（带 ActionCommon 重试/失败策略；BRANCH 出边契约适用） */
+export const ACTION_TYPES: ReadonlySet<OrchNodeType> = new Set<OrchNodeType>([
+  "http",
+  "script",
+  "notify",
+  "startApproval",
+  "dataMap",
+  "subFlow",
+  "llm",
+])
+
 export interface OrchIssue {
   level: "error" | "warning"
   message: string
@@ -243,13 +264,44 @@ export function validateOrchModel(model: OrchModel): OrchIssue[] {
     if (n.type === "subFlow" && !(n.config as SubFlowConfig).flowCode?.trim()) {
       issues.push({ level: "error", message: `子编排节点「${n.name}」未选择目标编排`, nodeId: n.id })
     }
-    if (n.type === "loop" && !(n.config as LoopConfig).collection?.trim()) {
-      issues.push({ level: "error", message: `循环节点「${n.name}」缺少集合表达式`, nodeId: n.id })
+    if (n.type === "loop") {
+      if (!(n.config as LoopConfig).collection?.trim()) {
+        issues.push({ level: "error", message: `循环节点「${n.name}」缺少集合表达式`, nodeId: n.id })
+      }
+      // loop 图契约：恰两条出边，恰一条 loopBody（循环体入口），另一条为循环结束续接
+      const outs = edges.filter((e) => e.source === n.id)
+      const bodyCount = outs.filter((e) => e.loopBody).length
+      if (outs.length !== 2) {
+        issues.push({ level: "error", message: `循环节点「${n.name}」须恰有 2 条出边（循环体入口 + 循环后续接），当前 ${outs.length} 条`, nodeId: n.id })
+      } else if (bodyCount !== 1) {
+        issues.push({ level: "error", message: `循环节点「${n.name}」的出边须恰有 1 条标记为「循环体」，当前 ${bodyCount} 条`, nodeId: n.id })
+      }
     }
     if (n.type === "delay") {
       const ms = (n.config as DelayConfig).ms
       if (!ms || ms <= 0) issues.push({ level: "error", message: `延时节点「${n.name}」需要正的毫秒数`, nodeId: n.id })
       else if (ms > 300_000) issues.push({ level: "error", message: `延时节点「${n.name}」超过 5 分钟上限（长等待请用审批流）`, nodeId: n.id })
+    }
+    // onError=BRANCH 图契约：动作节点恰 1 成功 + 1 失败出边；非 BRANCH 保持单出边
+    if (ACTION_TYPES.has(n.type)) {
+      const outs = edges.filter((e) => e.source === n.id)
+      const errCount = outs.filter((e) => e.errorBranch).length
+      const onError = (n.config as ActionCommon).onError
+      if (onError === "BRANCH") {
+        if (outs.length !== 2 || errCount !== 1) {
+          issues.push({
+            level: "error",
+            message: `节点「${n.name}」失败策略为 BRANCH：须恰有 2 条出边且恰 1 条标记「失败分支」（当前 ${outs.length} 条出边 / ${errCount} 条失败支）`,
+            nodeId: n.id,
+          })
+        }
+      } else {
+        if (outs.length > 1) {
+          issues.push({ level: "error", message: `节点「${n.name}」未启用 BRANCH 失败策略，只能有 1 条出边（当前 ${outs.length} 条）`, nodeId: n.id })
+        } else if (errCount > 0) {
+          issues.push({ level: "warning", message: `节点「${n.name}」出边标了「失败分支」但失败策略不是 BRANCH（标记不生效）`, nodeId: n.id })
+        }
+      }
     }
   }
 

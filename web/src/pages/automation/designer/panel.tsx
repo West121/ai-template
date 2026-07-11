@@ -383,6 +383,20 @@ export function OrchNodePanel(props: OrchNodePanelProps) {
 
 /* ---- trigger ---- */
 
+/** 事件目录（对齐后端 OrchEventBridge 订阅键） */
+const EVENT_CATALOG: Record<"WF" | "GONGWEN", { type: string; label: string }[]> = {
+  WF: [
+    { type: "INSTANCE_COMPLETED", label: "实例办结" },
+    { type: "TASK_COMPLETED", label: "任务办理完成" },
+  ],
+  GONGWEN: [
+    { type: "ISSUED", label: "公文签发" },
+    { type: "SEALED", label: "公文用印" },
+    { type: "PUBLISHED", label: "公文成文分发" },
+    { type: "FINISHED", label: "收文办结" },
+  ],
+}
+
 function TriggerFields({ config, patch }: { config: TriggerConfig; patch: (p: Partial<TriggerConfig>) => void }) {
   return (
     <div className="space-y-3">
@@ -407,7 +421,13 @@ function TriggerFields({ config, patch }: { config: TriggerConfig; patch: (p: Pa
       {config.triggerType === "EVENT" && (
         <>
           <Field label="事件来源">
-            <Select value={config.event?.source ?? "WF"} onValueChange={(v) => patch({ event: { ...(config.event ?? { type: "" }), source: v as "WF" | "GONGWEN" } })}>
+            <Select
+              value={config.event?.source ?? "WF"}
+              onValueChange={(v) =>
+                // 换来源时清空事件类型（两个目录不通用）
+                patch({ event: { source: v as "WF" | "GONGWEN", type: "" } })
+              }
+            >
               <SelectTrigger className="h-8 w-full text-xs">
                 <SelectValue />
               </SelectTrigger>
@@ -417,8 +437,22 @@ function TriggerFields({ config, patch }: { config: TriggerConfig; patch: (p: Pa
               </SelectContent>
             </Select>
           </Field>
-          <Field label="事件类型" hint="如 INSTANCE_COMPLETED / DOC_ISSUED">
-            <Input value={config.event?.type ?? ""} onChange={(e) => patch({ event: { ...(config.event ?? { source: "WF" }), type: e.target.value } })} className="h-8 font-mono text-xs" />
+          <Field label="事件类型">
+            <Select
+              value={config.event?.type || undefined}
+              onValueChange={(type) => patch({ event: { ...(config.event ?? { source: "WF" }), type } })}
+            >
+              <SelectTrigger className="h-8 w-full text-xs">
+                <SelectValue placeholder="选择事件" />
+              </SelectTrigger>
+              <SelectContent>
+                {EVENT_CATALOG[config.event?.source ?? "WF"].map((e) => (
+                  <SelectItem key={e.type} value={e.type}>
+                    {e.label}（{e.type}）
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Field>
           <Field label="限定流程编码（可选）">
             <Input value={config.event?.defCode ?? ""} onChange={(e) => patch({ event: { ...(config.event ?? { source: "WF", type: "" }), defCode: e.target.value || undefined } })} className="h-8 font-mono text-xs" placeholder="留空 = 全部" />
@@ -689,11 +723,35 @@ export interface OrchEdgePanelProps {
   condition?: BranchCondition
   expression?: string
   isDefault?: boolean
+  /** loop 出边：循环体入口标记（源节点为 loop 时展示开关） */
+  loopBody?: boolean
+  /** onError=BRANCH 出边：失败分支标记（源节点为 BRANCH 动作节点时展示开关） */
+  errorBranch?: boolean
+  /** 源节点类型（决定展示哪些边级开关） */
+  sourceType?: OrchNodeType
+  /** 源节点失败策略（BRANCH 时展示失败分支开关） */
+  sourceOnError?: ActionCommon["onError"]
   upstream: UpstreamNode[]
-  onChange: (patch: { condition?: BranchCondition; expression?: string; isDefault?: boolean }) => void
+  onChange: (patch: {
+    condition?: BranchCondition
+    expression?: string
+    isDefault?: boolean
+    loopBody?: boolean
+    errorBranch?: boolean
+  }) => void
 }
 
-export function OrchEdgePanel({ condition, expression, isDefault, upstream, onChange }: OrchEdgePanelProps) {
+export function OrchEdgePanel({
+  condition,
+  expression,
+  isDefault,
+  loopBody,
+  errorBranch,
+  sourceType,
+  sourceOnError,
+  upstream,
+  onChange,
+}: OrchEdgePanelProps) {
   const items = condition?.items ?? []
   const logic = condition?.logic ?? "AND"
   const setItems = (next: typeof items) => onChange({ condition: next.length ? { logic, items: next } : undefined })
@@ -706,6 +764,28 @@ export function OrchEdgePanel({ condition, expression, isDefault, upstream, onCh
         </span>
         <div className="text-sm font-medium">分支条件</div>
       </div>
+
+      {/* loop 出边契约：恰两条出边，一条循环体入口 + 一条循环后续接 */}
+      {sourceType === "loop" && (
+        <label className="flex items-center justify-between rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-xs">
+          <span>
+            循环体（本边为循环体入口）
+            <span className="mt-0.5 block text-[11px] text-muted-foreground">体内自然终止不回连；另一条出边为循环结束后的续接</span>
+          </span>
+          <Switch checked={!!loopBody} onCheckedChange={(v) => onChange({ loopBody: v || undefined })} />
+        </label>
+      )}
+
+      {/* onError=BRANCH 契约：恰 1 成功 + 1 失败出边 */}
+      {sourceType != null && sourceType !== "loop" && sourceOnError === "BRANCH" && (
+        <label className="flex items-center justify-between rounded-md border border-rose-500/30 bg-rose-500/5 px-2.5 py-2 text-xs">
+          <span>
+            失败分支（节点失败时走本边）
+            <span className="mt-0.5 block text-[11px] text-muted-foreground">另一条出边为成功支；源节点失败策略已设为 BRANCH</span>
+          </span>
+          <Switch checked={!!errorBranch} onCheckedChange={(v) => onChange({ errorBranch: v || undefined })} />
+        </label>
+      )}
 
       <label className="flex items-center justify-between rounded-md border px-2.5 py-2 text-xs">
         <span>默认分支（其他条件都不满足时走）</span>

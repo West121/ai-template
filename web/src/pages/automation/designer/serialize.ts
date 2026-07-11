@@ -20,6 +20,10 @@ export interface OrchEdgeData extends Record<string, unknown> {
   condition?: BranchCondition
   expression?: string
   isDefault?: boolean
+  /** loop 出边：循环体入口标记（图契约，见 model.ts OrchEdge.loopBody） */
+  loopBody?: boolean
+  /** onError=BRANCH 出边：失败分支标记 */
+  errorBranch?: boolean
 }
 
 export type OrchRfNode = Node<OrchNodeData>
@@ -50,6 +54,8 @@ export function toOrchModel(nodes: OrchRfNode[], edges: OrchRfEdge[], meta: Orch
       if (e.data?.condition) out.condition = e.data.condition
       if (e.data?.expression !== undefined) out.expression = e.data.expression
       if (e.data?.isDefault) out.isDefault = true
+      if (e.data?.loopBody) out.loopBody = true
+      if (e.data?.errorBranch) out.errorBranch = true
       return out
     }),
   }
@@ -69,6 +75,8 @@ export function fromOrchModel(model: OrchModel): { nodes: OrchRfNode[]; edges: O
       if (e.condition) data.condition = e.condition
       if (e.expression !== undefined) data.expression = e.expression
       if (e.isDefault) data.isDefault = true
+      if (e.loopBody) data.loopBody = true
+      if (e.errorBranch) data.errorBranch = true
       return { id: e.id, source: e.source, target: e.target, type: ORCH_EDGE_TYPE, data }
     }),
   }

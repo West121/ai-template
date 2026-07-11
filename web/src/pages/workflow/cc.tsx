@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import type { ColumnDef } from "@tanstack/react-table"
 import { ShieldAlert } from "lucide-react"
@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { wfFormatTime, wfInstancePath, type WfCcItem } from "@/types/workflow"
-import { useServerPage } from "@/lib/use-server-page"
+import { useDebounced, useServerPage } from "@/lib/use-server-page"
 
 /**
  * 待阅列表（我的审批「待阅」Tab 内容）。
@@ -19,8 +19,13 @@ import { useServerPage } from "@/lib/use-server-page"
  */
 export function CcList({ onRead }: { onRead?: () => void }) {
   const navigate = useNavigate()
+  const [keyword, setKeyword] = useState("")
+  const query = useDebounced(keyword.trim())
+  // 服务端分页 + 服务端搜索（keyword=标题/流程名模糊）
   const page = useServerPage<WfCcItem>(
-    (pageNum, pageSize) => `/api/wf/instances/cc?pageNum=${pageNum}&pageSize=${pageSize}`,
+    (pageNum, pageSize) =>
+      `/api/wf/instances/cc?pageNum=${pageNum}&pageSize=${pageSize}${query ? `&keyword=${encodeURIComponent(query)}` : ""}`,
+    { resetKey: query },
   )
   const { rows, loading, loadError, reload } = page
 
@@ -107,7 +112,8 @@ export function CcList({ onRead }: { onRead?: () => void }) {
           data={rows}
           loading={loading}
           searchKeys={["title", "defName", "initiatorName"]}
-          searchPlaceholder="搜索当前页标题 / 流程 / 发起人"
+          searchPlaceholder="搜索标题 / 流程"
+          serverSearch={{ keyword, onKeywordChange: setKeyword }}
           onRowClick={open}
           onRefresh={reload}
           exportFileName="抄送我的"

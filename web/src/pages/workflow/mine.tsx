@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { WF_STATUS_META, wfFormatTime, wfInstancePath, type WfMyInstance } from "@/types/workflow"
-import { useServerPage } from "@/lib/use-server-page"
+import { useDebounced, useServerPage } from "@/lib/use-server-page"
 
 /** 我发起的列表（我的审批「我发起」Tab 内容） */
 export function MineList() {
@@ -20,8 +20,13 @@ export function MineList() {
   const [canceling, setCanceling] = useState<WfMyInstance | null>(null)
   const [cancelSubmitting, setCancelSubmitting] = useState(false)
 
+  const [keyword, setKeyword] = useState("")
+  const query = useDebounced(keyword.trim())
+  // 服务端分页 + 服务端搜索（keyword=标题/流程名模糊）
   const page = useServerPage<WfMyInstance>(
-    (pageNum, pageSize) => `/api/wf/instances/my?pageNum=${pageNum}&pageSize=${pageSize}`,
+    (pageNum, pageSize) =>
+      `/api/wf/instances/my?pageNum=${pageNum}&pageSize=${pageSize}${query ? `&keyword=${encodeURIComponent(query)}` : ""}`,
+    { resetKey: query },
   )
   const { rows, loading, loadError, reload } = page
 
@@ -145,7 +150,8 @@ export function MineList() {
           data={rows}
           loading={loading}
           searchKeys={["title", "defName"]}
-          searchPlaceholder="搜索当前页标题 / 流程"
+          searchPlaceholder="搜索标题 / 流程"
+          serverSearch={{ keyword, onKeywordChange: setKeyword }}
           onRowClick={(row) => navigate(wfInstancePath(row))}
           onRefresh={reload}
           exportFileName="我发起的"

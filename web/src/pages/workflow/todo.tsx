@@ -11,17 +11,26 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { wfFormatTime, wfInstancePath, type WfTaskItem } from "@/types/workflow"
-import { useServerPage } from "@/lib/use-server-page"
+import { useDebounced, useServerPage } from "@/lib/use-server-page"
 
 /** 待办列表（我的审批「待办」Tab 内容）；onCount 上报待办总数供徽标 / 小红点 */
 export function TodoList({ onCount }: { onCount?: (n: number) => void }) {
   const navigate = useNavigate()
   const [claimingId, setClaimingId] = useState<string | null>(null)
+  const [keyword, setKeyword] = useState("")
+  const query = useDebounced(keyword.trim())
 
-  // 服务端分页：徽标用响应 total（不受当前页影响）
+  // 服务端分页 + 服务端搜索（keyword=标题/流程名模糊）。徽标用响应 total——
+  // 仅在无关键词时上报，避免搜索命中数把待办徽标改小。
   const page = useServerPage<WfTaskItem>(
-    (pageNum, pageSize) => `/api/wf/tasks/todo?pageNum=${pageNum}&pageSize=${pageSize}`,
-    { onPage: (p) => onCount?.(p.total) },
+    (pageNum, pageSize) =>
+      `/api/wf/tasks/todo?pageNum=${pageNum}&pageSize=${pageSize}${query ? `&keyword=${encodeURIComponent(query)}` : ""}`,
+    {
+      onPage: (p) => {
+        if (!query) onCount?.(p.total)
+      },
+      resetKey: query,
+    },
   )
   const { rows, loading, loadError, reload } = page
 
@@ -136,10 +145,11 @@ export function TodoList({ onCount }: { onCount?: (n: number) => void }) {
           data={rows}
           loading={loading}
           searchKeys={["instanceTitle", "defName", "initiatorName"]}
-          searchPlaceholder="搜索当前页标题 / 流程 / 发起人"
+          searchPlaceholder="搜索标题 / 流程"
           onRowClick={(row) => navigate(row.viewPath ?? wfInstancePath(row))}
           onRefresh={reload}
           exportFileName="我的待办"
+          serverSearch={{ keyword, onKeywordChange: setKeyword }}
           serverPagination={{
             pageIndex: page.pageIndex,
             pageSize: page.pageSize,

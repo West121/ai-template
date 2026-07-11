@@ -124,4 +124,74 @@ describe("OrchModel 序列化往返", () => {
     expect(badIssues.some((i) => i.level === "error" && i.message.includes("触发节点"))).toBe(true)
     expect(badIssues.some((i) => i.level === "error" && i.message.includes("5 分钟"))).toBe(true)
   })
+
+  it("loopBody / errorBranch 边标记往返不丢，合法拓扑无 error（loop 与 BRANCH 图契约）", () => {
+    const model: OrchModel = {
+      schemaVersion: 1,
+      key: "loop_branch",
+      name: "循环与失败分支",
+      nodes: [
+        { id: "t", type: "trigger", name: "手动", position: { x: 0, y: 0 }, config: { triggerType: "MANUAL" } },
+        { id: "lp", type: "loop", name: "遍历", position: { x: 0, y: 100 }, config: { collection: "{{payload.list}}", itemVar: "item", maxIterations: 100 } },
+        { id: "h", type: "http", name: "调接口", position: { x: -120, y: 200 }, config: { method: "GET", url: "https://x", onError: "BRANCH" } },
+        { id: "n", type: "notify", name: "失败告警", position: { x: -240, y: 300 }, config: { recipients: [], title: "失败", content: "{{payload}}" } },
+        { id: "d", type: "dataMap", name: "记录", position: { x: 0, y: 300 }, config: { assignments: [{ target: "ok", expr: "true" }] } },
+        { id: "e", type: "end", name: "结束", position: { x: 120, y: 400 }, config: {} },
+      ],
+      edges: [
+        { id: "e0", source: "t", target: "lp" },
+        // loop 恰两出边：循环体入口（loopBody）+ 循环后续接
+        { id: "e1", source: "lp", target: "h", loopBody: true },
+        { id: "e2", source: "lp", target: "e" },
+        // BRANCH 恰两出边：失败支（errorBranch）+ 成功支
+        { id: "e3", source: "h", target: "n", errorBranch: true },
+        { id: "e4", source: "h", target: "d" },
+      ],
+    }
+    expect(roundTrip(model)).toEqual(model)
+    expect(validateOrchModel(model).filter((i) => i.level === "error")).toEqual([])
+  })
+
+  it("validateOrchModel：loop / BRANCH 出边契约违规报 error", () => {
+    // loop 只有 1 条出边
+    const loopBad: OrchModel = {
+      schemaVersion: 1,
+      key: "bad_loop",
+      name: "坏循环",
+      nodes: [
+        { id: "t", type: "trigger", name: "手动", position: { x: 0, y: 0 }, config: { triggerType: "MANUAL" } },
+        { id: "lp", type: "loop", name: "遍历", position: { x: 0, y: 100 }, config: { collection: "{{payload.list}}", itemVar: "i" } },
+        { id: "e", type: "end", name: "结束", position: { x: 0, y: 200 }, config: {} },
+      ],
+      edges: [
+        { id: "e0", source: "t", target: "lp" },
+        { id: "e1", source: "lp", target: "e" },
+      ],
+    }
+    expect(validateOrchModel(loopBad).some((i) => i.level === "error" && i.message.includes("2 条出边"))).toBe(true)
+
+    // BRANCH 两出边但没标失败支 + 非 BRANCH 动作节点多出边
+    const branchBad: OrchModel = {
+      schemaVersion: 1,
+      key: "bad_branch",
+      name: "坏分支",
+      nodes: [
+        { id: "t", type: "trigger", name: "手动", position: { x: 0, y: 0 }, config: { triggerType: "MANUAL" } },
+        { id: "h", type: "http", name: "调接口", position: { x: 0, y: 100 }, config: { method: "GET", url: "https://x", onError: "BRANCH" } },
+        { id: "h2", type: "http", name: "普通调用", position: { x: 200, y: 100 }, config: { method: "GET", url: "https://y" } },
+        { id: "a", type: "end", name: "A", position: { x: -100, y: 200 }, config: {} },
+        { id: "b", type: "end", name: "B", position: { x: 100, y: 200 }, config: {} },
+      ],
+      edges: [
+        { id: "e0", source: "t", target: "h" },
+        { id: "e1", source: "h", target: "a" },
+        { id: "e2", source: "h", target: "b" },
+        { id: "e3", source: "h2", target: "a" },
+        { id: "e4", source: "h2", target: "b" },
+      ],
+    }
+    const issues = validateOrchModel(branchBad)
+    expect(issues.some((i) => i.level === "error" && i.message.includes("失败分支"))).toBe(true)
+    expect(issues.some((i) => i.level === "error" && i.message.includes("只能有 1 条出边"))).toBe(true)
+  })
 })

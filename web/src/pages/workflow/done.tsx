@@ -1,4 +1,4 @@
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import type { ColumnDef } from "@tanstack/react-table"
 import { ShieldAlert } from "lucide-react"
@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { wfFormatTime, wfInstancePath, type WfDoneItem } from "@/types/workflow"
-import { useServerPage } from "@/lib/use-server-page"
+import { useDebounced, useServerPage } from "@/lib/use-server-page"
 
 const ACTION_META: Record<string, { label: string; className: string }> = {
   APPROVE: { label: "同意", className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600" },
@@ -21,8 +21,13 @@ const ACTION_META: Record<string, { label: string; className: string }> = {
 /** 已办列表（我的审批「已办」Tab 内容） */
 export function DoneList() {
   const navigate = useNavigate()
+  const [keyword, setKeyword] = useState("")
+  const query = useDebounced(keyword.trim())
+  // 服务端分页 + 服务端搜索（keyword=标题/流程名模糊）
   const page = useServerPage<WfDoneItem>(
-    (pageNum, pageSize) => `/api/wf/instances/done-by-me?pageNum=${pageNum}&pageSize=${pageSize}`,
+    (pageNum, pageSize) =>
+      `/api/wf/instances/done-by-me?pageNum=${pageNum}&pageSize=${pageSize}${query ? `&keyword=${encodeURIComponent(query)}` : ""}`,
+    { resetKey: query },
   )
   const { rows, loading, loadError, reload } = page
 
@@ -108,7 +113,8 @@ export function DoneList() {
           data={rows}
           loading={loading}
           searchKeys={["instanceTitle", "defName", "nodeName"]}
-          searchPlaceholder="搜索当前页标题 / 流程"
+          searchPlaceholder="搜索标题 / 流程"
+          serverSearch={{ keyword, onKeywordChange: setKeyword }}
           onRowClick={(row) => navigate(wfInstancePath(row))}
           onRefresh={reload}
           exportFileName="我的已办"

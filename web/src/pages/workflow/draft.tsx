@@ -23,7 +23,7 @@ import {
   type WfFormData,
   type WfInstanceDetail,
 } from "@/types/workflow"
-import { useServerPage } from "@/lib/use-server-page"
+import { useDebounced, useServerPage } from "@/lib/use-server-page"
 
 /** 草稿列表（我的审批「草稿」Tab 内容） */
 export function DraftList() {
@@ -41,8 +41,13 @@ export function DraftList() {
   const [deleting, setDeleting] = useState<WfDraftItem | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
 
+  const [keyword, setKeyword] = useState("")
+  const query = useDebounced(keyword.trim())
+  // 服务端分页 + 服务端搜索（keyword=标题/流程名模糊）
   const page = useServerPage<WfDraftItem>(
-    (pageNum, pageSize) => `/api/wf/instances/drafts?pageNum=${pageNum}&pageSize=${pageSize}`,
+    (pageNum, pageSize) =>
+      `/api/wf/instances/drafts?pageNum=${pageNum}&pageSize=${pageSize}${query ? `&keyword=${encodeURIComponent(query)}` : ""}`,
+    { resetKey: query },
   )
   const { rows, loading, loadError, reload } = page
 
@@ -208,7 +213,8 @@ export function DraftList() {
           data={rows}
           loading={loading}
           searchKeys={["title", "defName"]}
-          searchPlaceholder="搜索当前页标题 / 流程"
+          searchPlaceholder="搜索标题 / 流程"
+          serverSearch={{ keyword, onKeywordChange: setKeyword }}
           onRowClick={(row) => openEdit(row)}
           onRefresh={reload}
           exportFileName="我的草稿"

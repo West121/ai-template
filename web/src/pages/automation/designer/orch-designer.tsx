@@ -109,17 +109,27 @@ function OrchEdge({ id, source, target, sourceX, sourceY, targetX, targetY, sour
     targetPosition: tp,
     borderRadius: 8,
   })
-  const d = data as { condition?: never; expression?: string; isDefault?: boolean } | undefined
-  const label = d?.isDefault
-    ? "默认"
-    : d?.expression?.trim() || summarizeCondition(d?.condition, false)
+  const d = data as
+    | { condition?: never; expression?: string; isDefault?: boolean; loopBody?: boolean; errorBranch?: boolean }
+    | undefined
+  // 标签优先级：循环体/失败分支（图契约标记）> 默认 > 条件摘要
+  const label = d?.loopBody
+    ? "循环体"
+    : d?.errorBranch
+      ? "失败"
+      : d?.isDefault
+        ? "默认"
+        : d?.expression?.trim() || summarizeCondition(d?.condition, false)
+  const labelTone = d?.errorBranch
+    ? "border-rose-500/40 text-rose-600 dark:text-rose-400"
+    : "text-amber-600 dark:text-amber-400"
   return (
     <>
       <path id={id} d={path} fill="none" markerEnd={markerEnd} className="react-flow__edge-path" style={{ stroke: selected ? "var(--primary)" : undefined, strokeWidth: selected ? 2.5 : 1.5 }} />
       {label && (
         <foreignObject x={labelX - 60} y={labelY - 10} width={120} height={20} className="pointer-events-none overflow-visible">
           <div className="flex justify-center">
-            <span className="max-w-28 truncate rounded border bg-background px-1.5 text-[10px] leading-4 text-amber-600 dark:text-amber-400">
+            <span className={cn("max-w-28 truncate rounded border bg-background px-1.5 text-[10px] leading-4", labelTone)}>
               {label}
             </span>
           </div>
@@ -454,13 +464,25 @@ function OrchDesignerInner({ initialModel, meta, credentials, flows, onDirty, re
               </>
             ) : selectedEdge ? (
               <>
-                <OrchEdgePanel
-                  condition={selectedEdge.data?.condition}
-                  expression={selectedEdge.data?.expression}
-                  isDefault={selectedEdge.data?.isDefault}
-                  upstream={upstream}
-                  onChange={(patch) => updateEdge(selectedEdge.id, patch)}
-                />
+                {(() => {
+                  // 源节点上下文：loop → 循环体开关；BRANCH 动作节点 → 失败分支开关
+                  const src = nodes.find((n) => n.id === selectedEdge.source)
+                  const srcType = src?.type as OrchNodeType | undefined
+                  const srcOnError = src ? (src.data.config as { onError?: "ABORT" | "CONTINUE" | "BRANCH" }).onError : undefined
+                  return (
+                    <OrchEdgePanel
+                      condition={selectedEdge.data?.condition}
+                      expression={selectedEdge.data?.expression}
+                      isDefault={selectedEdge.data?.isDefault}
+                      loopBody={selectedEdge.data?.loopBody}
+                      errorBranch={selectedEdge.data?.errorBranch}
+                      sourceType={srcType}
+                      sourceOnError={srcOnError}
+                      upstream={upstream}
+                      onChange={(patch) => updateEdge(selectedEdge.id, patch)}
+                    />
+                  )
+                })()}
                 <div className="border-t p-3">
                   <button type="button" onClick={removeSelected} className="text-xs text-rose-600 hover:underline">
                     删除该连线
