@@ -34,6 +34,7 @@ function cleanupTestData() {
     "DELETE FROM oa_doc_number_ledger; DELETE FROM oa_doc_number_seq;",
     // 编排（V25）冒烟数据
     "DELETE FROM orch_exec_node; DELETE FROM orch_exec; DELETE FROM orch_flow_version;",
+    "DELETE FROM ai_chat_message; DELETE FROM ai_chat_session;",
     "DELETE FROM orch_flow WHERE code LIKE 'smoke_orch%'; DELETE FROM orch_credential WHERE name LIKE '冒烟%';",
   ].join(" ")
   const pg = process.env.OA_PG_CONTAINER ?? "oa-postgres"
@@ -2456,6 +2457,30 @@ async function hlCompleted(token, iid) {
           const toolContent = (reqBody.messages ?? []).find((m) => m.role === "tool")?.content ?? ""
           res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: `用户是${JSON.parse(toolContent).name}` } }] }))
         }
+      } else if (req.url === "/ai/v1/chat/completions") {
+        // AI 助手假端点：按用户消息脚本化回复（识别关键词→调工具→final）
+        const reqBody = JSON.parse(body || "{}")
+        const msgs = reqBody.messages ?? []
+        const lastUser = [...msgs].reverse().find((m) => m.role === "user")?.content ?? ""
+        const hasTool = msgs.some((m) => m.role === "tool")
+        res.writeHead(200, { "Content-Type": "application/json" })
+        if (!hasTool) {
+          let tool = null
+          if (lastUser.includes("待办")) tool = { name: "query_todo", arguments: "{}" }
+          else if (lastUser.includes("请假") && lastUser.includes("发起")) tool = { name: "start_approval", arguments: '{"defCode":"leave_approval"}' }
+          else if (lastUser.includes("统计") || lastUser.includes("报表")) tool = { name: "stats_report", arguments: '{"module":"approval","dimension":"status"}' }
+          else if (lastUser.includes("急")) tool = { name: "query_urgent", arguments: "{}" }
+          else if (lastUser.includes("同意") && lastUser.includes("任务")) tool = { name: "approve_task", arguments: '{"taskId":"' + (lastUser.match(/任务(\S+)/)?.[1] ?? "x") + '","decision":"APPROVE"}' }
+          else if (lastUser.includes("日程")) tool = { name: "create_schedule", arguments: '{"title":"AI冒烟日程","date":"2026-08-01","type":"OTHER"}' }
+          else if (lastUser.includes("公文")) tool = { name: "query_documents", arguments: "{}" }
+          if (tool) {
+            res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: tool }] } }] }))
+            return
+          }
+          res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "你好，我是星辰 OA 智能助手，可以帮你查待办、发起审批、出报表。" } }] }))
+        } else {
+          res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "已为你处理，见下方卡片。" } }] }))
+        }
       } else if (req.url.startsWith("/dingtalk") || req.url.startsWith("/feishu")) {
         botReqs.push({ url: req.url, body: JSON.parse(body || "{}") })
         res.writeHead(200, { "Content-Type": "application/json" })
@@ -3023,6 +3048,79 @@ async function hlCompleted(token, iid) {
   check("orch 回滚 v1(重新发布产生 v3)", rollback.body?.code === 0 && rollback.body?.data?.version === 3 && (rollback.body?.data?.designerJson ?? "").includes("vars.users.count"), JSON.stringify(rollback.body?.data?.version))
   const verList2 = await call(admin.token, "GET", `/api/orch/flows/${dbf.body?.data?.id}/versions`)
   check("orch 版本列表 v1/v2/v3 齐全", [1, 2, 3].every((v) => (verList2.body?.data ?? []).some((x) => x.version === v)), JSON.stringify((verList2.body?.data ?? []).map((v) => v.version)))
+
+  /* ---- AI 智能助手（V28）：chat/工具/confirm 二段式/会话隔离/急事/报表 ---- */
+
+  // 系统默认 LLM 凭据（AiChatService.defaultCredential 取第一条 LLM 型；用 AI 假端点）
+  const aiCred = await call(admin.token, "POST", "/api/orch/credentials", {
+    name: "冒烟助手LLM", type: "LLM", baseUrl: `${SINK}/ai/v1`, apiKey: "sk-ai", model: "fake-ai",
+  })
+  check("ai 助手 LLM 凭据创建", aiCred.body?.code === 0 && !!aiCred.body?.data?.id)
+
+  // 基础问答（无工具）
+  const chat1 = await call(admin.token, "POST", "/api/ai/chat", { message: "你好" })
+  const s1 = chat1.body?.data
+  check("ai chat 基础问答(新会话+ASSISTANT 回复)", chat1.body?.code === 0 && !!s1?.sessionId && s1?.messages?.[0]?.role === "ASSISTANT" && (s1?.messages?.[0]?.content ?? "").length > 0, JSON.stringify(s1?.messages?.[0]?.content))
+  const sessionId = s1?.sessionId
+
+  // 工具调用：查待办 → list 卡
+  const chat2 = await call(admin.token, "POST", "/api/ai/chat", { sessionId, message: "帮我查下待办" })
+  const cards2 = chat2.body?.data?.messages?.[0]?.cards ?? []
+  check("ai query_todo 工具产 list 卡", cards2.some((c) => c.type === "list" && (c.title ?? "").includes("待办")), JSON.stringify(cards2.map((c) => c.type)))
+
+  // 报表：stats_report → chart 卡
+  const chat3 = await call(admin.token, "POST", "/api/ai/chat", { sessionId, message: "本月审批量统计" })
+  const chartCard = (chat3.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "chart")
+  check("ai stats_report 工具产 chart 卡(pie+series)", !!chartCard && chartCard.chartType === "pie" && Array.isArray(chartCard.series), JSON.stringify(chartCard?.chartType))
+
+  // 急事
+  const chat4 = await call(admin.token, "POST", "/api/ai/chat", { sessionId, message: "我现在有什么急事" })
+  const urgentCard = (chat4.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "list")
+  check("ai query_urgent 产急事 list 卡", !!urgentCard && (urgentCard.title ?? "").includes("急事"), JSON.stringify(urgentCard?.title))
+
+  // 发起审批 → form 卡
+  const chat5 = await call(admin.token, "POST", "/api/ai/chat", { sessionId, message: "我要发起请假申请" })
+  const formCard = (chat5.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "form")
+  check("ai start_approval 产 form 卡(defCode+formType)", !!formCard && formCard.defCode === "leave_approval" && !!formCard.formType, JSON.stringify({ d: formCard?.defCode, t: formCard?.formType }))
+
+  // confirm 二段式：建日程 → confirm 卡 → 不确认不生效 + 确认生效 + 一次性
+  const chat6 = await call(admin.token, "POST", "/api/ai/chat", { sessionId, message: "帮我建个日程" })
+  const confirmCard = (chat6.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "confirm")
+  check("ai create_schedule 产 confirm 卡(actionId+summary+danger 语义)", !!confirmCard && !!confirmCard.actionId && confirmCard.danger === false && !!confirmCard.summary, JSON.stringify({ a: !!confirmCard?.actionId }))
+  // 不存在 actionId → 410
+  const badConfirm = await call(admin.token, "POST", "/api/ai/confirm", { actionId: "nonexistent_action_id" })
+  check("ai confirm 不存在 actionId → 410", badConfirm.body?.code === 410, JSON.stringify(badConfirm.body?.code))
+  // 确认前：日程未创建
+  const schedBefore = await call(admin.token, "GET", "/api/office/schedules?month=2026-08")
+  const hadBefore = (schedBefore.body?.data ?? []).some((x) => x.title === "AI冒烟日程")
+  check("ai confirm 前变更未生效", !hadBefore)
+  // 确认执行 → 生效
+  const doConfirm = await call(admin.token, "POST", "/api/ai/confirm", { actionId: confirmCard?.actionId })
+  check("ai confirm 确认执行成功", doConfirm.body?.code === 0 && doConfirm.body?.data?.success === true, JSON.stringify(doConfirm.body?.data))
+  const schedAfter = await call(admin.token, "GET", "/api/office/schedules?month=2026-08")
+  check("ai confirm 后日程真实创建(变更生效)", (schedAfter.body?.data ?? []).some((x) => x.title === "AI冒烟日程"))
+  const reConfirm = await call(admin.token, "POST", "/api/ai/confirm", { actionId: confirmCard?.actionId })
+  check("ai confirm 二次确认 → 410(一次性消费)", reConfirm.body?.code === 410, JSON.stringify(reConfirm.body?.code))
+
+  // 会话隔离：zhangsan 读 admin 会话 → 403
+  const zsRead = await call(zhangsan.token, "GET", `/api/ai/sessions/${sessionId}/messages`)
+  check("ai 会话隔离(B 读 A 会话 → 403)", zsRead.body?.code === 403, JSON.stringify(zsRead.body?.code))
+  const zsChat = await call(zhangsan.token, "POST", "/api/ai/chat", { sessionId, message: "偷看" })
+  check("ai 会话隔离(B 在 A 会话发消息 → 403)", zsChat.body?.code === 403, JSON.stringify(zsChat.body?.code))
+
+  // 会话列表 + 消息分页 + 删除
+  const sessList = await call(admin.token, "GET", "/api/ai/sessions")
+  check("ai 会话列表含本会话", (sessList.body?.data ?? []).some((x) => x.id === sessionId))
+  const msgs = await call(admin.token, "GET", `/api/ai/sessions/${sessionId}/messages?pageNum=1&pageSize=100`)
+  check("ai 消息分页(含 USER/ASSISTANT)", msgs.body?.code === 0 && (msgs.body?.data?.list ?? []).some((m) => m.role === "USER") && (msgs.body?.data?.list ?? []).some((m) => m.role === "ASSISTANT"))
+  const delSess = await call(admin.token, "DELETE", `/api/ai/sessions/${sessionId}`)
+  check("ai 删除会话", delSess.body?.code === 0)
+  const afterDel = await call(admin.token, "GET", `/api/ai/sessions/${sessionId}/messages`)
+  check("ai 删除后会话 404", afterDel.body?.code === 404, JSON.stringify(afterDel.body?.code))
+
+  // 工具权限：zhangsan（无 office:doc:send）问发文——工具经底层权限，助手礼貌处理不 500
+  const zsChat2 = await call(zhangsan.token, "POST", "/api/ai/chat", { message: "查下公文列表" })
+  check("ai zhangsan 对话正常(工具带其数据权限,不 500)", zsChat2.body?.code === 0 && zsChat2.body?.data?.messages?.[0]?.role === "ASSISTANT", JSON.stringify(zsChat2.body?.code))
 
   sink.close()
 }

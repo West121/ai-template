@@ -418,3 +418,11 @@ NotifyItem = {id,type,title,content,procInstId,readFlag,createdAt}
   - `dbQuery` 节点（裁定：**本应用库只读 + select-only 硬校验**）：{sql(静态不插值), params?:[Aviator 表达式→? 按序绑定], maxRows≤1000, timeoutMs≤30s, saveAs} → {rows, count}；单语句/SELECT|WITH 开头/DML·DDL 黑名单硬拒；外部 JDBC（credentialId type=JDBC）为扩展点本期不实现（配置即报错）。
   - 版本历史（orch_flow_version，publish 即快照）：GET `/flows/{id}/versions`【read】（version/name/triggerType/createdBy/createdAt）、GET `/flows/{id}/versions/{version}`【read】（含 designerJson/elExpr）、POST `/flows/{id}/versions/{version}/rollback`【write】（以历史版本覆盖当前并重新发布 → 产生新版本，历史不改写）。
 - **列表 keyword（第二批顺手）**：GET `/api/wf/tasks/todo`、`/api/wf/instances/my`、`/api/wf/instances/done-by-me`、`/api/wf/instances/cc`、`/api/wf/instances/drafts` 均支持 `keyword`（标题/流程名（待办/已办另含节点名）模糊；todo/done-by-me/cc 为组装后过滤）。
+
+## AI 智能助手（oa-boot ai 域，V28，前缀 `/api/ai`）
+> 契约 `docs/design/ai-assistant-design.md`。登录即用（无新权限码）；**工具全部包装既有 Service，请求线程内同步执行 → @PreAuthorize 功能权限 + JPA 数据权限天然生效**（安全红线 §0.1）。LLM 凭据取 `orch_credential`（LLM 型）：配置 `ai-assistant.credential-id` 指定，否则取第一条启用 LLM 凭据。function-calling 循环走公共 `LlmToolLoop`（与编排 agent 节点同源）。
+- POST `/chat` {sessionId?, message} → {sessionId, messages:[{role:"ASSISTANT", content:markdown, cards?:Card[]}]}（sessionId 空=新会话）
+- POST `/confirm` {actionId} → 执行暂存的变更动作（§0.2 二段式；AiConfirmService 暂存 10min，绑定 user+session，一次性消费）；不存在/过期 410，他人动作 403
+- GET `/sessions` 近 30 天会话列表（用户隔离）；GET `/sessions/{id}/messages?pageNum=&pageSize=` 消息分页；DELETE `/sessions/{id}` 删会话（均硬校验归属，越权 403，不存在 404）
+- **Card 类型**（§3 + §10）：navigate{path,title,desc?} / list{title,columns,rows(行含 link?),moreLink?} / confirm{actionId,title,summary,params,danger} / form{defCode,defName,formType(ONLINE|CODE),schema?(在线 widgets),submitPath?(CODE)} / chart{chartType bar|line|pie,title,categories?,series[{name,data}](pie data 项带 name/value/percent)} / link{items[{title,path}]}
+- **工具目录**（§4，@AiTool）：导航 list_functions/open_function（菜单按功能权限过滤）；查询 query_todo/query_my_instances/query_documents/query_meetings/query_leave_balance/query_attendance/query_urgent（服务端打分）/stats_report（预置聚合带数据权限：approval by status|type、document by docType）；变更 start_approval(产 form 卡)/approve_task/create_schedule/create_meeting(产 confirm 卡)。删除类首批不开放。
