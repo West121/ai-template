@@ -5,6 +5,7 @@
  *      公告、日程、工作台聚合、系统管理 CRUD、功能权限 403、数据权限。
  */
 import http from "node:http"
+import fs from "node:fs"
 import { execFileSync } from "node:child_process"
 
 const BASE = process.env.OA_BASE ?? "http://localhost:8081"
@@ -2490,6 +2491,8 @@ async function hlCompleted(token, iid) {
         if (!hasTool) {
           let tool = null
           if (lastUser.includes("伪造")) tool = { name: "hack_everything", arguments: "{}" }
+          else if (lastUser.includes("打开")) tool = { name: "open_function", arguments: '{"query":"请假"}' }
+          else if (lastUser.includes("功能")) tool = { name: "list_functions", arguments: "{}" }
           else if (lastUser.includes("待办")) tool = { name: "query_todo", arguments: "{}" }
           else if (lastUser.includes("请假") && lastUser.includes("发起")) tool = { name: "start_approval", arguments: '{"defCode":"leave_approval"}' }
           else if (lastUser.includes("统计") || lastUser.includes("报表")) tool = { name: "stats_report", arguments: '{"module":"approval","dimension":"status"}' }
@@ -3416,6 +3419,100 @@ async function hlCompleted(token, iid) {
   check("aiV2B 凭据解密失败 → 503 AI_MODEL_UNAVAILABLE",
     badKeyChat.body?.code === 503 && (badKeyChat.body?.message ?? "").includes("AI_MODEL_UNAVAILABLE"),
     JSON.stringify({ c: badKeyChat.body?.code, m: badKeyChat.body?.message }))
+  psql(`UPDATE orch_credential SET enabled = false WHERE id = ${Number(badKeyCred.body?.data?.id)}`) // 防坏钥凭据抢占默认
+
+  /* ---- AI 助手 V2 批C（V35）：功能目录/受控导航/报表目录+数据集/下钻/引用溯源/pageContext ---- */
+
+  // 1) catalog 权限过滤（zhangsan 不见管理功能）+ 防漂移（routeCode ⊆ menu.ts）
+  const featAdmin = await call(admin.token, "GET", "/api/ai/features")
+  const featZs = await call(zhangsan.token, "GET", "/api/ai/features")
+  check("aiV2C catalog 权限过滤(admin 见 SYSTEM_USER/zhangsan 不见,基础功能均见)",
+    (featAdmin.body?.data ?? []).some((f) => f.featureCode === "SYSTEM_USER") &&
+      !(featZs.body?.data ?? []).some((f) => f.featureCode === "SYSTEM_USER") &&
+      (featZs.body?.data ?? []).some((f) => f.featureCode === "WORKFLOW_TASKS"),
+    JSON.stringify({ a: (featAdmin.body?.data ?? []).length, z: (featZs.body?.data ?? []).length }))
+  const menuSrc = fs.readFileSync(new URL("../web/src/config/menu.ts", import.meta.url), "utf8")
+  check("aiV2C catalog 防漂移(全部 routeCode 存在于 menu.ts,≥25 项)",
+    (featAdmin.body?.data ?? []).length >= 25 &&
+      (featAdmin.body?.data ?? []).every((f) => menuSrc.includes(`path: "${f.routeCode}"`)),
+    JSON.stringify((featAdmin.body?.data ?? []).filter((f) => !menuSrc.includes(`path: "${f.routeCode}"`)).map((f) => f.routeCode)))
+
+  // 2) 受控导航：featureCode 校验（合法/非法 400/不可见 403）+ navigate 卡 V2（featureCode+path 并存）
+  const featOk = await call(admin.token, "GET", "/api/ai/features/WORKFLOW_TASKS")
+  const featBad = await call(admin.token, "GET", "/api/ai/features/NO_SUCH_FEATURE")
+  const featDeny = await call(zhangsan.token, "GET", "/api/ai/features/SYSTEM_USER")
+  check("aiV2C featureCode 校验(合法带 route/非法 400/不可见 403)",
+    featOk.body?.code === 0 && featOk.body?.data?.routeCode === "/workflow/tasks" &&
+      featBad.body?.code === 400 && featDeny.body?.code === 403,
+    JSON.stringify({ ok: featOk.body?.data?.routeCode, bad: featBad.body?.code, deny: featDeny.body?.code }))
+  const navChat = await call(admin.token, "POST", "/api/ai/chat", { message: "帮我打开请假页面", credentialId: aiCred.body?.data?.id })
+  const navCard = (navChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "navigate")
+  check("aiV2C navigate 卡 V2(featureCode+routeParams,path 兼容并存)",
+    navCard?.featureCode === "ATTENDANCE_LEAVE" && navCard?.path === "/attendance/leave" && !!navCard?.routeParams,
+    JSON.stringify(navCard))
+
+  // 3) 报表目录：search/describe + 白名单外参数 400
+  const repList = await call(admin.token, "GET", "/api/ai/reports?keyword=审批")
+  check("aiV2C report 目录检索(含 APPROVAL_COUNT_BY_STATUS)",
+    repList.body?.code === 0 && (repList.body?.data ?? []).some((x) => x.reportCode === "APPROVAL_COUNT_BY_STATUS"),
+    JSON.stringify((repList.body?.data ?? []).map((x) => x.reportCode)))
+  const repDesc = await call(admin.token, "GET", "/api/ai/reports/APPROVAL_COUNT_BY_STATUS")
+  check("aiV2C report describe(参数白名单 schema+drillParam)",
+    repDesc.body?.data?.parameterSchema?.status && repDesc.body?.data?.drillParam === "status",
+    JSON.stringify(repDesc.body?.data))
+  const badParam = await call(admin.token, "POST", "/api/ai/reports/APPROVAL_COUNT_BY_STATUS/execute", { params: { hack: "x" } })
+  check("aiV2C report 白名单外参数 → 400", badParam.body?.code === 400 && (badParam.body?.message ?? "").includes("白名单"),
+    JSON.stringify(badParam.body?.message))
+
+  // 4) 聚合 + drill 描述符（亮点③ 前端点击类目回调 execute）
+  const agg = await call(admin.token, "POST", "/api/ai/reports/APPROVAL_COUNT_BY_STATUS/execute", { params: {} })
+  check("aiV2C 聚合结果(chartType=pie+drill 描述符)",
+    agg.body?.code === 0 && agg.body?.data?.chartType === "pie" &&
+      agg.body?.data?.drill?.reportCode === "APPROVAL_COUNT_BY_STATUS" && agg.body?.data?.drill?.paramName === "status",
+    JSON.stringify(agg.body?.data?.drill))
+
+  // 5) 下钻明细 >20 行落 dataset：先造 22 条待审批
+  for (let i = 0; i < 22; i++) {
+    await call(admin.token, "POST", "/api/office/approvals", {
+      title: `AI冒烟DS-${TS}-${i}`, type: "LEAVE", reason: "数据集冒烟", startDate: "2026-08-01", endDate: "2026-08-02",
+    })
+  }
+  const drill = await call(admin.token, "POST", "/api/ai/reports/APPROVAL_COUNT_BY_STATUS/execute", { params: { status: "待审批" } })
+  const dsId = drill.body?.data?.datasetId
+  check("aiV2C drill 返回明细(rows 截断 20+total+datasetId)",
+    drill.body?.code === 0 && drill.body?.data?.detail === true &&
+      (drill.body?.data?.rows ?? []).length === 20 && drill.body?.data?.total >= 22 && !!dsId &&
+      (drill.body?.data?.rows ?? []).some((x) => String(x.title ?? "").includes("AI冒烟DS")),
+    JSON.stringify({ n: (drill.body?.data?.rows ?? []).length, t: drill.body?.data?.total, ds: dsId }))
+  const ds2 = await call(admin.token, "GET", `/api/ai/datasets/${dsId}?pageNum=2&pageSize=20`)
+  check("aiV2C dataset 分页({rows,page,columns} 契约形状)",
+    ds2.body?.code === 0 && (ds2.body?.data?.rows ?? []).length >= 1 &&
+      ds2.body?.data?.page?.current === 2 && ds2.body?.data?.page?.total >= 22 &&
+      Array.isArray(ds2.body?.data?.columns) && ds2.body?.data?.columns.some((c) => c.key === "title"),
+    JSON.stringify({ n: (ds2.body?.data?.rows ?? []).length, p: ds2.body?.data?.page }))
+  const dsZs = await call(zhangsan.token, "GET", `/api/ai/datasets/${dsId}`)
+  check("aiV2C dataset 越权访问 → 403", dsZs.body?.code === 403, JSON.stringify(dsZs.body?.code))
+
+  // 6) 亮点④ 引用溯源：功能解释 → text part payload.citations（FEATURE 形状）
+  const featChat = await call(admin.token, "POST", "/api/ai/chat", { message: "系统有哪些功能", credentialId: aiCred.body?.data?.id })
+  const featTextPart = (featChat.body?.data?.messages?.[0]?.parts ?? []).find((p) => p.partType === "text")
+  check("aiV2C citations 形状(text part 带 FEATURE 引用)",
+    (featTextPart?.payload?.citations ?? []).length >= 1 &&
+      featTextPart.payload.citations.every((c) => c.sourceType === "FEATURE" && !!c.sourceId && !!c.title),
+    JSON.stringify((featTextPart?.payload?.citations ?? []).slice(0, 2)))
+
+  // 7) pageContext 注入：system 提示含当前页面名（服务端校验可见后注入）
+  const iCtx = aiReqs.length
+  const ctxChat = await call(admin.token, "POST", "/api/ai/chat", {
+    message: "你好", credentialId: aiCred.body?.data?.id, pageContext: { featureCode: "WORKFLOW_TASKS" },
+  })
+  check("aiV2C pageContext 注入(system 含「我的审批」页面提示)",
+    ctxChat.body?.code === 0 && String(aiReqs[iCtx]?.messages?.[0]?.content ?? "").includes("我的审批"),
+    JSON.stringify(String(aiReqs[iCtx]?.messages?.[0]?.content ?? "").slice(-120)))
+
+  // 8) 批C 自清（KEEP=1 亦执行）：数据集 + 冒烟审批单
+  psql(`DELETE FROM ai_dataset WHERE id = ${Number(dsId)}`)
+  psql(`DELETE FROM oa_approval WHERE title LIKE 'AI冒烟DS-%'`)
 
   // 7) smoke 治理：本 run 造的冒烟凭据/档案清理——KEEP=1 亦执行（KEEP 语义=保用户数据，不保测试垃圾）；
   //    FAST/STANDARD 种子若指向被清凭据则自愈回最新真实凭据

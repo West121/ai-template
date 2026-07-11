@@ -1,6 +1,5 @@
 package com.xingchen.oa.boot.ai.tool;
 
-import com.xingchen.oa.boot.ai.service.AiStatsService;
 import com.xingchen.oa.boot.ai.service.AiUrgentService;
 import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.office.dto.LeaveQuotaResponse;
@@ -38,7 +37,6 @@ public class QueryTools {
     private final LeaveService leaveService;
     private final AttendanceService attendanceService;
     private final AiUrgentService urgentService;
-    private final AiStatsService statsService;
 
     @AiToolDefinition(name = "task_query_my_tasks", aliases = {"query_todo"},
             description = "查询我的待办任务（审批/公文办理）。参数 keyword 可选（标题/流程名过滤）。",
@@ -173,37 +171,7 @@ public class QueryTools {
         return ToolResult.of(support.toJson(Map.of("count", rows.size(), "items", items)), card);
     }
 
-    // 批B：管理侧统计报表以 office:approval:approve 门控（批C 报表目录 report_catalog 细化到按 reportCode 授权）
-    @AiToolDefinition(name = "report_execute", aliases = {"stats_report"},
-            authorities = {"office:approval:approve"},
-            description = "统计报表（服务端预置聚合，带数据权限）。module=approval|document|attendance；"
-                    + "dimension 按 module：approval→status|type，document→docType。返回图表数据。",
-            paramsSchema = "{\"module\":{\"type\":\"string\",\"description\":\"approval|document|attendance\"},"
-                    + "\"dimension\":{\"type\":\"string\",\"description\":\"approval:status|type；document:docType\"}}",
-            required = {"module"})
-    public ToolResult statsReport(Map<String, Object> args) {
-        String module = str(args, "module");
-        String dimension = str(args, "dimension");
-        AiStatsService.StatResult r = statsService.report(module, dimension);
-        List<Map<String, Object>> series = List.of(Map.of("name", r.metric(), "data", r.data()));
-        Map<String, Object> card = "pie".equals(r.chartType())
-                ? support.chartCard("pie", r.title(), r.categories(), pieSeries(r))
-                : support.chartCard(r.chartType(), r.title(), r.categories(), series);
-        return ToolResult.of(support.toJson(Map.of("title", r.title(),
-                "categories", r.categories(), "data", r.data())), card);
-    }
-
-    /** pie：series 数据项带 name/value/percent（§10）。 */
-    private List<Map<String, Object>> pieSeries(AiStatsService.StatResult r) {
-        double total = r.data().stream().mapToDouble(Number::doubleValue).sum();
-        List<Map<String, Object>> data = new ArrayList<>();
-        for (int i = 0; i < r.categories().size(); i++) {
-            double v = r.data().get(i).doubleValue();
-            data.add(Map.of("name", r.categories().get(i), "value", v,
-                    "percent", total > 0 ? Math.round(v / total * 1000) / 10.0 : 0));
-        }
-        return List.of(Map.of("name", r.metric(), "data", data));
-    }
+    // 批C：统计报表迁 ReportTools（report_search/describe/execute + 报表目录 ai_report_catalog，§11）
 
     private String str(Map<String, Object> args, String key) {
         Object v = args.get(key);

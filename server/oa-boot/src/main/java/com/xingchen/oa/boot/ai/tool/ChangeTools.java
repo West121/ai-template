@@ -98,7 +98,11 @@ public class ChangeTools {
             WfFormDef form = formDefRepository.findTopByCodeOrderByVersionDesc(def.formCode()).orElse(null);
             if (form != null && StringUtils.hasText(form.getSchemaJson())) {
                 try {
-                    schema = objectMapper.readTree(form.getSchemaJson());
+                    // 批C 契约对账：form 卡 schema 固定为 widgets 数组（FormSchema 对象 → 取 widgets；
+                    // 历史顶层数组原样），不做对象包裹/JSON 字符串——api-contract 已写明
+                    var root = objectMapper.readTree(form.getSchemaJson());
+                    schema = root.isArray() ? root
+                            : (root.path("widgets").isArray() ? root.path("widgets") : null);
                 } catch (Exception ignored) {
                     // schema 解析失败 → 前端回退跳转发起页
                 }

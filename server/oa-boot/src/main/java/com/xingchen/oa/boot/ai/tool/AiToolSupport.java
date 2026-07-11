@@ -56,6 +56,15 @@ public class AiToolSupport {
         return c;
     }
 
+    /** §10.2 受控导航 V2（批C）：featureCode+routeParams 为主形状；path 兼容期并存（旧前端直接可用）。 */
+    public Map<String, Object> navigateCardV2(String featureCode, String path, String title,
+                                              String desc, Map<String, Object> routeParams) {
+        Map<String, Object> c = navigateCard(path, title, desc);
+        c.put("featureCode", featureCode);
+        c.put("routeParams", routeParams == null ? Map.of() : routeParams);
+        return c;
+    }
+
     /** §10：list 行支持 link（行级跳转 path）；columns=[{key,label}]。 */
     public Map<String, Object> listCard(String title, List<Map<String, String>> columns,
                                         List<Map<String, Object>> rows, String moreLink) {

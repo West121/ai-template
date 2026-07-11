@@ -53,16 +53,17 @@ public class AiChatController {
     /** AiAsyncConfig 虚拟线程执行器（按参数名匹配 bean aiExecutor）。 */
     private final ExecutorService aiExecutor;
 
-    /** §11：credentialId/model 覆盖默认凭据（V1 兼容并存）；批B 增 modelProfileId（§4.3）。 */
+    /** §11：credentialId/model 覆盖默认凭据（V1 兼容并存）；批B modelProfileId（§4.3）；批C pageContext。 */
     public record ChatRequest(Long sessionId, String clientMessageId, String message, Long credentialId,
-                              String modelProfileId, String model, List<AiChatService.Attachment> attachments) {
+                              String modelProfileId, String model, List<AiChatService.Attachment> attachments,
+                              AiChatService.PageContext pageContext) {
     }
 
-    /** §9.1 发送消息（SSE）：modelProfileId 批B 落真值；pageContext 批C。 */
+    /** §9.1 发送消息（SSE）：modelProfileId 批B；pageContext 批C（{featureCode,entityType,entityId} 可空）。 */
     public record ChatMessageRequest(Long sessionId, String clientMessageId, String message,
                                      Long credentialId, String model, String modelProfileId,
                                      List<AiChatService.Attachment> attachments,
-                                     Map<String, Object> pageContext) {
+                                     AiChatService.PageContext pageContext) {
     }
 
     public record ConfirmRequest(String actionId) {
@@ -79,7 +80,8 @@ public class AiChatController {
     public SseEmitter chatMessages(@RequestBody ChatMessageRequest req) {
         // prepare 在请求线程执行：校验/幂等/模型档案解析/会话锁/消息落库（失败 → JSON 信封）
         AiChatService.Prepared prep = chatService.prepareTurn(req.sessionId(), req.clientMessageId(),
-                req.message(), req.credentialId(), req.modelProfileId(), req.model(), req.attachments());
+                req.message(), req.credentialId(), req.modelProfileId(), req.model(), req.attachments(),
+                req.pageContext());
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         AiSseChannel ch = new AiSseChannel(emitter, objectMapper);
 
@@ -166,7 +168,8 @@ public class AiChatController {
     @PostMapping("/chat")
     public R<ChatResult> chat(@RequestBody ChatRequest req) {
         return R.ok(chatService.chat(req.sessionId(), req.clientMessageId(), req.message(),
-                req.credentialId(), req.modelProfileId(), req.model(), req.attachments()));
+                req.credentialId(), req.modelProfileId(), req.model(), req.attachments(),
+                req.pageContext()));
     }
 
     /** §11 模型切换：启用的 LLM 凭据列表 [{id,name,model,supportsVision}]（前端模型选择器）。 */

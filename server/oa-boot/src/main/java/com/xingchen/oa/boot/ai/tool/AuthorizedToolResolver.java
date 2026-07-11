@@ -41,6 +41,8 @@ public class AuthorizedToolResolver {
     public static final String CTX_CARDS = "ai.cards";
     /** ToolContext 键：工具留痕收集器（List&lt;Map&gt;，落 message.tool_calls）。 */
     public static final String CTX_TRACE = "ai.trace";
+    /** ToolContext 键：引用收集器（亮点④，汇入 TextPart payload.citations）。 */
+    public static final String CTX_CITATIONS = "ai.citations";
 
     private final ToolRegistry registry;
     private final AiToolGateway gateway;
@@ -147,6 +149,8 @@ public class AuthorizedToolResolver {
                     ? (List<Map<String, Object>>) c : null;
             List<Map<String, Object>> trace = ctx.get(CTX_TRACE) instanceof List<?> t
                     ? (List<Map<String, Object>>) t : null;
+            List<Map<String, Object>> citations = ctx.get(CTX_CITATIONS) instanceof List<?> ci
+                    ? (List<Map<String, Object>>) ci : null;
 
             Map<String, Object> args = parseArgs(toolInput);
             String toolCallId = "tc_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
@@ -161,6 +165,9 @@ public class AuthorizedToolResolver {
             }
             if (cards != null && result.cards() != null) {
                 cards.addAll(result.cards());
+            }
+            if (citations != null && result.citations() != null) {
+                citations.addAll(result.citations());
             }
             if (trace != null) {
                 trace.add(Map.of("step", trace.size() + 1, "tool", name, "args", args,
