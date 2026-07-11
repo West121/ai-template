@@ -54,3 +54,53 @@ export function formatBytes(n: number): string {
   if (n >= 1024) return `${Math.round(n / 1024)}KB`
   return `${n}B`
 }
+
+/* ============================ 批D：fileId 化上传态 + 发送载荷归一 ============================ */
+
+/** 输入区预览用的附件（含上传态）：uploading→上传中；done→已得 attachmentId；error→回退 dataUrl 兼容 */
+export interface PendingAttachment extends AiAttachment {
+  /** 本地唯一 id（预览列表 key / 上传结果回填定位） */
+  localId: string
+  uploadState: "uploading" | "done" | "error"
+  /** 上传进度 0..100（uploading 态展示） */
+  progress?: number
+}
+
+/** 仍有附件在上传中 → 阻止发送（避免发出未就绪 attachmentId；错误态已回退 dataUrl 可发） */
+export function hasUploadingAttachment(items: Pick<PendingAttachment, "uploadState">[]): boolean {
+  return items.some((a) => a.uploadState === "uploading")
+}
+
+/** POST /api/ai/attachments 成功响应（磐石批D 契约：{attachmentId,kind,name,url}） */
+export interface AttachmentUploadResult {
+  attachmentId: string
+  kind: "IMAGE" | "TEXT"
+  name: string
+  url?: string
+}
+
+/** 聊天消息里的附件载荷（wire）：fileId 化后仅 attachmentId+kind+name；未就绪回退 dataUrl */
+export interface AiAttachmentWire {
+  kind: "IMAGE" | "TEXT"
+  name: string
+  attachmentId?: string
+  dataUrl?: string
+  fileId?: number
+}
+
+/**
+ * 附件 → 发送载荷（§17.1）：已上传优先 attachmentId（不再塞大图 dataUrl 进消息表）；
+ * 未上传（兼容期/上传失败）回退 dataUrl；旧 fileId 一并透传。
+ */
+export function toWireAttachment(a: AiAttachment): AiAttachmentWire {
+  const w: AiAttachmentWire = { kind: a.kind, name: a.name }
+  if (a.attachmentId) w.attachmentId = a.attachmentId
+  else if (a.dataUrl) w.dataUrl = a.dataUrl
+  if (a.fileId != null) w.fileId = a.fileId
+  return w
+}
+
+/** 图片回显地址：优先服务端 url，回退本地 dataUrl（fileId 化后仍可无 dataUrl） */
+export function imageSrcOf(a: Pick<AiAttachment, "url" | "dataUrl">): string | undefined {
+  return a.url ?? a.dataUrl
+}

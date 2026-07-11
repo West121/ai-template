@@ -13,8 +13,9 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ChatView } from "./chat-view"
 import { SessionListView } from "./session-list"
+import { MemoryListView } from "./memory-list"
 import type { ToolStatusItem } from "./api"
-import type { AiAttachment, AiMessage, AiModelChoice, AiSession } from "./types"
+import type { AiAttachment, AiBriefing, AiMemory, AiMessage, AiModelChoice, AiSession } from "./types"
 import "./ai-chat.css"
 
 const WIDTH_KEY = "ai-panel-width"
@@ -33,7 +34,7 @@ function initialWidth(): number {
 }
 
 export interface AssistantPanelProps {
-  view: "chat" | "sessions"
+  view: "chat" | "sessions" | "memories"
   demo: boolean
   offline: boolean
   headerTitle: string | null
@@ -49,6 +50,14 @@ export interface AssistantPanelProps {
   models: AiModelChoice[]
   modelId: string | null
   onModelChange: (id: string | null) => void
+  /** 批D 亮点⑤ 晨报：置顶简报卡（null=不展示） */
+  briefing: AiBriefing | null
+  onDismissBriefing: () => void
+  /** 批D §13.4 长期记忆管理 */
+  memories: AiMemory[]
+  memoriesLoading: boolean
+  onOpenMemories: () => void
+  onDeleteMemory: (id: string) => void
   focusSignal: number
   onSend: (text: string, attachments: AiAttachment[]) => void
   onRetry: () => void
@@ -132,15 +141,17 @@ export default function AssistantPanel(p: AssistantPanelProps) {
       )}
 
       <header className="flex h-14 min-w-0 shrink-0 items-center gap-2 border-b px-3">
-        {p.view === "sessions" ? (
+        {p.view === "sessions" || p.view === "memories" ? (
           <>
             <Button variant="ghost" size="icon-sm" aria-label="返回对话" onClick={p.onBackToChat}>
               <ArrowLeft className="size-4" />
             </Button>
-            <p className="flex-1 text-sm font-semibold">会话历史</p>
-            <Button variant="ghost" size="icon-sm" aria-label="新会话" onClick={p.onNewSession}>
-              <SquarePen className="size-4" />
-            </Button>
+            <p className="flex-1 text-sm font-semibold">{p.view === "memories" ? "助手记忆" : "会话历史"}</p>
+            {p.view === "sessions" && (
+              <Button variant="ghost" size="icon-sm" aria-label="新会话" onClick={p.onNewSession}>
+                <SquarePen className="size-4" />
+              </Button>
+            )}
           </>
         ) : (
           <>
@@ -183,7 +194,13 @@ export default function AssistantPanel(p: AssistantPanelProps) {
             onOpen={p.onOpenSession}
             onDelete={p.onDeleteSession}
             onNew={p.onNewSession}
+            onOpenMemories={p.onOpenMemories}
           />
+          <div />
+        </>
+      ) : p.view === "memories" ? (
+        <>
+          <MemoryListView memories={p.memories} loading={p.memoriesLoading} onDelete={p.onDeleteMemory} />
           <div />
         </>
       ) : (
@@ -196,6 +213,9 @@ export default function AssistantPanel(p: AssistantPanelProps) {
           models={p.models}
           modelId={p.modelId}
           onModelChange={p.onModelChange}
+          onNewSession={p.onNewSession}
+          briefing={p.briefing}
+          onDismissBriefing={p.onDismissBriefing}
           onSend={p.onSend}
           onRetry={p.onRetry}
           focusSignal={p.focusSignal}

@@ -9,8 +9,8 @@
  */
 import { api, ApiError, NetworkError } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
-import type { AiAttachment, AiCard, AiChatResponse, AiConfirmResponse, AiMessage, AiModelChoice, AiModelOption, AiModelProfile, AiSession } from "./types"
-import { formatBytes } from "./attachments"
+import type { AiAttachment, AiBriefing, AiCard, AiChatResponse, AiConfirmResponse, AiMemory, AiMessage, AiModelChoice, AiModelOption, AiModelProfile, AiSession } from "./types"
+import { formatBytes, toWireAttachment, type AttachmentUploadResult } from "./attachments"
 import { cardsToParts, friendlyAiError, legacyModelsToChoices, ulid, type AiMessagePart, type AiReportResult, type AiSseEvent } from "./protocol"
 import { SseUnavailableError, streamChatMessage } from "./sse-client"
 
@@ -302,7 +302,7 @@ export function sendChat(sessionId: string | undefined, message: string, opts?: 
           message,
           credentialId: opts?.credentialId,
           model: opts?.model,
-          attachments: opts?.attachments?.map((a) => ({ kind: a.kind, name: a.name, dataUrl: a.dataUrl, fileId: a.fileId })),
+          attachments: opts?.attachments?.map(toWireAttachment),
         }),
       }),
     async () => {
@@ -689,7 +689,7 @@ export async function sendChatStream(req: ChatSendRequest, h: ChatStreamHandlers
         modelProfileId: req.modelProfileId,
         credentialId: req.credentialId,
         model: req.model,
-        attachments: req.attachments?.map((a) => ({ kind: a.kind, name: a.name, dataUrl: a.dataUrl, fileId: a.fileId })),
+        attachments: req.attachments?.map(toWireAttachment),
         pageContext: req.pageContext ?? null,
       },
       (evt) => dispatchEvent(evt, h, acc),
@@ -715,7 +715,7 @@ export async function sendChatStream(req: ChatSendRequest, h: ChatStreamHandlers
         modelProfileId: req.modelProfileId,
         credentialId: req.credentialId,
         model: req.model,
-        attachments: req.attachments?.map((a) => ({ kind: a.kind, name: a.name, dataUrl: a.dataUrl, fileId: a.fileId })),
+        attachments: req.attachments?.map(toWireAttachment),
         pageContext: req.pageContext ?? null,
       }),
     })
@@ -844,6 +844,129 @@ export function fetchDataset(datasetId: string, pageNum: number, pageSize = 3): 
       const all = MOCK_DATASET_ROWS[datasetId] ?? []
       const start = (pageNum - 1) * pageSize
       return { rows: all.slice(start, start + pageSize), page: { current: pageNum, size: pageSize, total: all.length } }
+    },
+  )
+}
+
+/* ============================ V2 批D：附件 fileId 化上传（§17.1） ============================ */
+
+/** 通道不可用（端点未实现 404 / 网络不可达）→ 走 mock 演示 fileId 化；区别于真实业务错误 */
+class AttachmentChannelDown extends Error {}
+
+let attachSeq = 0
+function mockUpload(file: File, kind: "IMAGE" | "TEXT"): AttachmentUploadResult {
+  // 演示：给出 mock attachmentId（客户端保留本地 dataUrl 预览），走通 fileId 化主路径
+  return { attachmentId: `att_mock_${++attachSeq}`, kind, name: file.name }
+}
+
+/** XHR 上传（fetch 拿不到进度）：POST /api/ai/attachments（multipart）→ envelope；404/网络 → AttachmentChannelDown */
+function xhrUploadAttachment(file: File, onProgress?: (percent: number) => void): Promise<AttachmentUploadResult> {
+  return new Promise<AttachmentUploadResult>((resolve, reject) => {
+    const { token, offline } = useAuthStore.getState()
+    const form = new FormData()
+    form.append("file", file)
+    const xhr = new XMLHttpRequest()
+    xhr.open("POST", "/api/ai/attachments")
+    if (token && !offline) xhr.setRequestHeader("Authorization", `Bearer ${token}`)
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(Math.round((e.loaded / e.total) * 100))
+    }
+    xhr.onload = () => {
+      if (xhr.status === 404) return reject(new AttachmentChannelDown("附件端点未实现"))
+      try {
+        const body = JSON.parse(xhr.responseText) as { code: number; message?: string; data: AttachmentUploadResult }
+        if (body.code === 404) return reject(new AttachmentChannelDown("附件端点未实现"))
+        if (body.code !== 0) return reject(new ApiError(body.code, body.message ?? "附件上传失败"))
+        resolve(body.data)
+      } catch {
+        reject(new ApiError(xhr.status, `附件上传失败（HTTP ${xhr.status}）`))
+      }
+    }
+    xhr.onerror = () => reject(new AttachmentChannelDown("无法连接后端服务"))
+    xhr.send(form)
+  })
+}
+
+/**
+ * 附件上传（批D）：选文件后先上传得 attachmentId（fileId 化）→ 聊天仅传 {attachmentId,kind,name}。
+ * offline / 端点 404 / 网络不可达 → mock 演示 attachmentId（demo=true，客户端仍用本地 dataUrl 预览）；
+ * 真实业务错误（413/415/400…）抛出，由调用方回退 dataUrl（兼容期）并 toast。
+ */
+export async function uploadAttachment(
+  file: File,
+  kind: "IMAGE" | "TEXT",
+  onProgress?: (percent: number) => void,
+): Promise<AiResult<AttachmentUploadResult>> {
+  if (useAuthStore.getState().offline) {
+    await new Promise((r) => setTimeout(r, 300))
+    onProgress?.(100)
+    return { data: mockUpload(file, kind), demo: true }
+  }
+  try {
+    const data = await xhrUploadAttachment(file, onProgress)
+    return { data: { attachmentId: data.attachmentId, kind: data.kind ?? kind, name: data.name ?? file.name, url: data.url }, demo: false }
+  } catch (err) {
+    if (err instanceof AttachmentChannelDown) {
+      await new Promise((r) => setTimeout(r, 200))
+      onProgress?.(100)
+      return { data: mockUpload(file, kind), demo: true }
+    }
+    throw err
+  }
+}
+
+/* ============================ V2 批D：长期记忆（§13.4，可查可删） ============================ */
+
+const MOCK_MEMORIES: AiMemory[] = [
+  { id: "mem_1", memoryType: "EXPLICIT", memoryKey: "常用部门", memoryValue: "研发中心（统计默认按此部门）", updatedAt: now() },
+  { id: "mem_2", memoryType: "INFERRED", memoryKey: "汇报偏好", memoryValue: "习惯先看图表再看明细", updatedAt: now() },
+  { id: "mem_3", memoryType: "SYSTEM_PREF", memoryKey: "默认模型档案", memoryValue: "STANDARD", updatedAt: now() },
+]
+
+/** GET /api/ai/memories：长期记忆列表（列表响应归一，防白屏规约） */
+export function fetchMemories(): Promise<AiResult<AiMemory[]>> {
+  return withMock(
+    () => api<unknown>("/api/ai/memories").then(normalizeList<AiMemory>),
+    () => MOCK_MEMORIES.map((m) => ({ ...m })),
+  )
+}
+
+/** DELETE /api/ai/memories/{id}：删除一条记忆 */
+export function deleteMemory(id: string): Promise<AiResult<void>> {
+  return withMock(
+    () => api<void>(`/api/ai/memories/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    () => {
+      const i = MOCK_MEMORIES.findIndex((m) => m.id === id)
+      if (i >= 0) MOCK_MEMORIES.splice(i, 1)
+    },
+  )
+}
+
+/* ============================ V2 批D：主动晨报（亮点⑤） ============================ */
+
+function mockBriefing(): AiBriefing {
+  return {
+    date: new Date().toISOString().slice(0, 10),
+    greeting: "这是你今天的待办速览",
+    urgentCount: 2,
+    meetingCount: 1,
+    unreadCount: 3,
+    items: [
+      { title: "〔特急〕信息安全专项检查通知 · 待签发", kind: "URGENT", featureCode: "WORKFLOW_TASKS", meta: "签发 · 已逾期" },
+      { title: "采购申请 ¥42,000 · 待你审批", kind: "URGENT", featureCode: "WORKFLOW_TASKS", meta: "总经理审批" },
+      { title: "10:00 产品周会（3 号会议室）", kind: "MEETING", featureCode: "MEETING_MY", meta: "1 小时后" },
+      { title: "关于调整考勤制度的通知等 3 条待阅", kind: "UNREAD", featureCode: "DOCUMENT_RECEIVE", meta: "待阅" },
+    ],
+  }
+}
+
+/** GET /api/ai/briefing：每日首次打开面板的置顶简报（急事/会议/待阅） */
+export function fetchBriefing(): Promise<AiResult<AiBriefing>> {
+  return withMock(
+    () => api<AiBriefing>("/api/ai/briefing"),
+    async () => {
+      await new Promise((r) => setTimeout(r, 300))
+      return mockBriefing()
     },
   )
 }

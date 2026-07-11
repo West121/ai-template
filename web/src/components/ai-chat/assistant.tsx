@@ -14,7 +14,7 @@ import { useAuthStore } from "@/stores/auth-store"
 import type { ToolStatusItem } from "./api"
 import type { AiMessagePart } from "./protocol"
 import { AiChatActionsContext, type AiChatActions } from "./chat-actions"
-import type { AiAttachment, AiMessage, AiModelChoice, AiSession } from "./types"
+import type { AiAttachment, AiBriefing, AiMemory, AiMessage, AiModelChoice, AiSession } from "./types"
 
 const AssistantPanel = lazy(() => import("./assistant-panel"))
 /** API/协议层（SSE 客户端/解析器/mock）随首次使用懒加载——主包只留 FAB 与会话壳（分片纪律） */
@@ -24,7 +24,7 @@ const loadProtocol = () => import("./protocol")
 export function AiAssistant() {
   const offline = useAuthStore((s) => s.offline)
   const [open, setOpen] = useState(false)
-  const [view, setView] = useState<"chat" | "sessions">("chat")
+  const [view, setView] = useState<"chat" | "sessions" | "memories">("chat")
 
   const [sessionId, setSessionId] = useState<string | undefined>(undefined)
   const [sessionTitle, setSessionTitle] = useState<string | null>(null)
@@ -63,6 +63,62 @@ export function AiAssistant() {
     },
     [sessionId],
   )
+
+  /* ---- 批D 亮点⑤ 主动晨报：每日首次打开面板拉取，置顶简报卡（当日关闭次日恢复） ---- */
+  const [briefing, setBriefing] = useState<AiBriefing | null>(null)
+  const briefingLoadedRef = useRef(false)
+  useEffect(() => {
+    if (!open || offline || briefingLoadedRef.current) return
+    briefingLoadedRef.current = true
+    void import("./panel-logic").then(({ shouldShowBriefing, todayStr, BRIEFING_DISMISS_KEY }) => {
+      let dismissed: string | null = null
+      try {
+        dismissed = localStorage.getItem(BRIEFING_DISMISS_KEY)
+      } catch {
+        /* 隐私模式忽略 */
+      }
+      if (!shouldShowBriefing(dismissed, todayStr())) return
+      void loadApi()
+        .then((m) => m.fetchBriefing())
+        .then((res) => setBriefing(res.data))
+        .catch(() => setBriefing(null))
+    })
+  }, [open, offline])
+  const dismissBriefing = useCallback(() => {
+    setBriefing(null)
+    void import("./panel-logic").then(({ todayStr, BRIEFING_DISMISS_KEY }) => {
+      try {
+        localStorage.setItem(BRIEFING_DISMISS_KEY, todayStr())
+      } catch {
+        /* 忽略 */
+      }
+    })
+  }, [])
+
+  /* ---- 批D §13.4 长期记忆管理 ---- */
+  const [memories, setMemories] = useState<AiMemory[]>([])
+  const [memoriesLoading, setMemoriesLoading] = useState(false)
+  const openMemories = useCallback(async () => {
+    setView("memories")
+    setMemoriesLoading(true)
+    try {
+      const res = await loadApi().then((m) => m.fetchMemories())
+      setMemories(res.data)
+    } catch {
+      setMemories([])
+    } finally {
+      setMemoriesLoading(false)
+    }
+  }, [])
+  const removeMemory = useCallback(async (id: string) => {
+    try {
+      await loadApi().then((m) => m.deleteMemory(id))
+      setMemories((prev) => prev.filter((x) => x.id !== id))
+      toast.success("已删除该记忆")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "删除失败")
+    }
+  }, [])
 
   /* ---- 发送（V2 流式：SSE 事件驱动 UI；重试复用同一 clientMessageId，不新增用户气泡） ---- */
   const doSend = useCallback(
@@ -292,6 +348,12 @@ export function AiAssistant() {
             models={models}
             modelId={modelId}
             onModelChange={changeModel}
+            briefing={briefing}
+            onDismissBriefing={dismissBriefing}
+            memories={memories}
+            memoriesLoading={memoriesLoading}
+            onOpenMemories={() => void openMemories()}
+            onDeleteMemory={(id) => void removeMemory(id)}
             focusSignal={focusSignal}
             onSend={handleSend}
             onRetry={handleRetry}

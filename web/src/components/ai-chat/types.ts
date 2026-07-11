@@ -98,14 +98,57 @@ export interface AiCitation {
 
 /* ============================ 附件 / 模型（§11 增强批） ============================ */
 
-/** 多模态附件：小图/文本直接 dataURL（或走 /api/infra/files 得 fileId，磐石定） */
+/**
+ * 多模态附件（§17）。批D fileId 化：选文件先 POST /api/ai/attachments 得 attachmentId + url，
+ * 聊天仅传 {attachmentId,kind,name}（禁止大图 dataUrl 入消息表，§17.1）；上传失败/兼容期回退 dataUrl。
+ */
 export interface AiAttachment {
   kind: "IMAGE" | "TEXT"
   name: string
+  /** 上传成功后的服务端附件 id（fileId 化主路径） */
+  attachmentId?: string
+  /** 服务端回显地址（图片 src 优先用它，缺省回退 dataUrl） */
+  url?: string
+  /** 兼容期/上传失败回退：本地 dataURL（预览 + 旧协议发送） */
   dataUrl?: string
   fileId?: number
   /** 字节数（chip 展示） */
   size?: number
+}
+
+/** ai_user_memory 长期记忆（§13.4：用户可查看、可删除） */
+export interface AiMemory {
+  id: string
+  /** EXPLICIT 显式记住 / INFERRED 推断 / SYSTEM_PREF 系统偏好 */
+  memoryType: "EXPLICIT" | "INFERRED" | "SYSTEM_PREF" | (string & {})
+  memoryKey: string
+  memoryValue: string
+  updatedAt?: string
+}
+
+/** 晨报单行（亮点⑤）：可点跳转（featureCode 走 route-registry；过渡期 path 直通） */
+export interface AiBriefingItem {
+  title: string
+  /** 分类：急事 / 会议 / 待阅 */
+  kind?: "URGENT" | "MEETING" | "UNREAD" | (string & {})
+  /** 受控导航（后端 ai_feature_catalog 同约定编码） */
+  featureCode?: string
+  routeParams?: Record<string, unknown>
+  /** 过渡期直接站内 path（后端已校验在可见菜单内） */
+  path?: string
+  /** 附带时间/节点等副标题 */
+  meta?: string
+}
+
+/** 主动晨报（亮点⑤）：每日首次打开面板置顶简报卡（急事/会议/待阅，可关） */
+export interface AiBriefing {
+  /** 自然日 YYYY-MM-DD（当日关闭判定） */
+  date: string
+  greeting?: string
+  urgentCount: number
+  meetingCount: number
+  unreadCount: number
+  items: AiBriefingItem[]
 }
 
 /** GET /api/ai/models 可选凭据（启用的 LLM 型；V2 由 model-profiles 替代，保留兼容回退） */

@@ -2,7 +2,16 @@
  * §11 多模态附件校验纯函数用例（类型/大小准入 + 视觉能力检测）。
  */
 import { describe, expect, it } from "vitest"
-import { checkAttachmentFile, extOf, formatBytes, needsVisionWarning } from "./attachments"
+import {
+  checkAttachmentFile,
+  extOf,
+  formatBytes,
+  hasUploadingAttachment,
+  imageSrcOf,
+  needsVisionWarning,
+  toWireAttachment,
+  type PendingAttachment,
+} from "./attachments"
 import type { AiModelOption } from "./types"
 
 const MB = 1024 * 1024
@@ -69,5 +78,56 @@ describe("辅助函数", () => {
     expect(formatBytes(512)).toBe("512B")
     expect(formatBytes(2048)).toBe("2KB")
     expect(formatBytes(3.5 * MB)).toBe("3.5MB")
+  })
+})
+
+/* ============================ 批D：fileId 化上传态 + 发送载荷归一 ============================ */
+
+const att = (over: Partial<PendingAttachment>): PendingAttachment => ({
+  localId: "l1",
+  kind: "IMAGE",
+  name: "x.png",
+  uploadState: "done",
+  ...over,
+})
+
+describe("hasUploadingAttachment（上传中阻止发送）", () => {
+  it("有 uploading → true；全 done/error → false", () => {
+    expect(hasUploadingAttachment([att({ uploadState: "done" }), att({ uploadState: "uploading" })])).toBe(true)
+    expect(hasUploadingAttachment([att({ uploadState: "done" }), att({ uploadState: "error" })])).toBe(false)
+    expect(hasUploadingAttachment([])).toBe(false)
+  })
+})
+
+describe("toWireAttachment（发送载荷归一，§17.1）", () => {
+  it("已上传 → 只带 attachmentId（不塞大图 dataUrl 进消息表）", () => {
+    expect(
+      toWireAttachment({ kind: "IMAGE", name: "发票.png", attachmentId: "att_9", url: "/api/ai/attachments/att_9", dataUrl: "data:...big..." }),
+    ).toEqual({ kind: "IMAGE", name: "发票.png", attachmentId: "att_9" })
+  })
+
+  it("未上传（上传失败/兼容期） → 回退 dataUrl", () => {
+    expect(toWireAttachment({ kind: "TEXT", name: "n.md", dataUrl: "data:txt" })).toEqual({
+      kind: "TEXT",
+      name: "n.md",
+      dataUrl: "data:txt",
+    })
+  })
+
+  it("旧 fileId 一并透传", () => {
+    expect(toWireAttachment({ kind: "IMAGE", name: "a.png", fileId: 12, attachmentId: "att_1" })).toEqual({
+      kind: "IMAGE",
+      name: "a.png",
+      attachmentId: "att_1",
+      fileId: 12,
+    })
+  })
+})
+
+describe("imageSrcOf（回显地址：服务端 url 优先）", () => {
+  it("优先 url，回退 dataUrl", () => {
+    expect(imageSrcOf({ url: "/api/ai/attachments/1", dataUrl: "data:x" })).toBe("/api/ai/attachments/1")
+    expect(imageSrcOf({ dataUrl: "data:x" })).toBe("data:x")
+    expect(imageSrcOf({})).toBeUndefined()
   })
 })

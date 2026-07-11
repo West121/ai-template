@@ -3,7 +3,7 @@
  * 项 = 图标 + 标题(首问摘要) + 相对时间；当前会话高亮；删除走 AlertDialog 二次确认。
  */
 import { useState } from "react"
-import { MessageSquare, MessagesSquare, Trash2 } from "lucide-react"
+import { BrainCircuit, ChevronRight, MessageSquare, MessagesSquare, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
@@ -39,17 +39,21 @@ export function SessionListView({
   onOpen,
   onDelete,
   onNew,
+  onOpenMemories,
 }: {
   sessions: AiSession[]
   activeId?: string
   onOpen: (id: string) => void
   onDelete: (id: string) => void
   onNew: () => void
+  /** 批D：进入长期记忆管理（§13.4） */
+  onOpenMemories?: () => void
 }) {
   const [deleting, setDeleting] = useState<AiSession | null>(null)
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-2">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto p-2">
       {sessions.length === 0 ? (
         <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
           <MessagesSquare className="size-8 text-muted-foreground/40" />
@@ -85,6 +89,22 @@ export function SessionListView({
             </li>
           ))}
         </ul>
+      )}
+      </div>
+
+      {/* 底部入口：长期记忆管理（§13.4） */}
+      {onOpenMemories && (
+        <div className="shrink-0 border-t p-2">
+          <button
+            type="button"
+            onClick={onOpenMemories}
+            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            <BrainCircuit className="size-4 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 text-sm font-medium">助手记忆</span>
+            <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+          </button>
+        </div>
       )}
 
       <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>
