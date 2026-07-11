@@ -278,7 +278,8 @@ public class BizDocDefService {
         try {
             if ("CODE".equalsIgnoreCase(formType) && row[2] != null) {
                 for (JsonNode f : objectMapper.readTree(String.valueOf(row[2]))) {
-                    out.add(Map.of("key", f.path("key").asString(""), "label", f.path("label").asString("")));
+                    out.add(fieldEntry(f.path("key").asString(""), f.path("label").asString(""),
+                            f.path("type").asString(null)));
                 }
             } else if (row[1] != null) {
                 collectFields(objectMapper.readTree(String.valueOf(row[1])), out, new LinkedHashSet<>());
@@ -289,7 +290,11 @@ public class BizDocDefService {
         return out;
     }
 
-    /** 递归收 ONLINE schema 里的 {key,label|title}（容器透明，best-effort）。 */
+    /**
+     * 递归收 ONLINE schema 里的 {key,label|title[,type]}（容器透明，best-effort）。
+     * type 有值时带上——前端计算配置（§12）按 {@code type=subform} 列候选子表（聚合数据源下拉）；
+     * subform 本身入清单，其列仍展开为子项（现状保留）。
+     */
     private void collectFields(JsonNode node, List<Map<String, String>> out, Set<String> seen) {
         if (node == null) {
             return;
@@ -298,12 +303,23 @@ public class BizDocDefService {
             String key = node.path("key").asString(null);
             if (StringUtils.hasText(key) && seen.add(key)) {
                 String label = node.path("label").asString(node.path("title").asString(key));
-                out.add(Map.of("key", key, "label", label));
+                out.add(fieldEntry(key, label, node.path("type").asString(null)));
             }
             node.properties().forEach(e -> collectFields(e.getValue(), out, seen));
         } else if (node.isArray()) {
             node.forEach(n -> collectFields(n, out, seen));
         }
+    }
+
+    /** 字段清单条目 {key,label[,type]}（type 空则不加键，兼容既有消费方）。 */
+    private static Map<String, String> fieldEntry(String key, String label, String type) {
+        Map<String, String> f = new LinkedHashMap<>();
+        f.put("key", key);
+        f.put("label", label);
+        if (StringUtils.hasText(type)) {
+            f.put("type", type);
+        }
+        return f;
     }
 
     private void validateBindings(BizDocDef def) {

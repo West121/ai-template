@@ -3418,6 +3418,10 @@ async function hlCompleted(token, iid) {
     formSchema: { widgets: [
       { key: "amount", label: "金额", type: "number" },
       { key: "discount_rate", label: "折扣率", type: "number" },
+      { key: "items", label: "费用明细", type: "subform", children: [
+        { key: "item_name", label: "事项", type: "input" },
+        { key: "item_amount", label: "金额", type: "number" },
+      ] },
     ] },
     listConfig: { columns: [{ field: "amount", label: "金额" }] },
   })
@@ -3427,9 +3431,9 @@ async function hlCompleted(token, iid) {
       schemaVersion: 2, paper: "A4", elements: [],
       calc: {
         aggregates: [
-          { name: "total_amount", label: "合计金额", source: "items", field: "amount", fn: "SUM", format: "number", scale: 2 },
-          { name: "total_cn", label: "合计大写", source: "items", field: "amount", fn: "SUM", format: "chinese" },
-          { name: "row_count", label: "明细行数", source: "items", field: "amount", fn: "COUNT", format: "number", scale: 0 },
+          { name: "total_amount", label: "合计金额", source: "items", field: "item_amount", fn: "SUM", format: "number", scale: 2 },
+          { name: "total_cn", label: "合计大写", source: "items", field: "item_amount", fn: "SUM", format: "chinese" },
+          { name: "row_count", label: "明细行数", source: "items", field: "item_amount", fn: "COUNT", format: "number", scale: 0 },
         ],
         computed: [
           { name: "final_amount", label: "折后金额", expr: "round(total_amount * (1 - discount_rate), 2)", format: "number", scale: 2 },
@@ -3439,9 +3443,18 @@ async function hlCompleted(token, iid) {
       },
     },
   })
+  // 收官缺口：字段派生带 subform（前端计算配置「数据源」下拉靠它列候选子表）
+  const calcTplFields = await call(admin.token, "GET", `/api/bizdoc/tpls/${calcTpl.body?.data?.id}/fields`)
+  check("bizdoc §12 tpls/{id}/fields 子表字段带 type=subform",
+    (calcTplFields.body?.data?.fields ?? []).some((f) => f.key === "items" && f.type === "subform"),
+    JSON.stringify((calcTplFields.body?.data?.fields ?? []).map((f) => `${f.key}:${f.type ?? ""}`)))
+  const calcManifest = await call(admin.token, "GET", `/api/wf/forms/bizdoc:smoke_bd_calc_${TS}/fields`)
+  check("bizdoc §12 bizdoc:{code} manifest 子表字段带 type=subform",
+    (calcManifest.body?.data?.fields ?? []).some((f) => f.key === "items" && f.type === "subform"),
+    JSON.stringify((calcManifest.body?.data?.fields ?? []).map((f) => `${f.key}:${f.type}`)))
   const calcDoc = await call(admin.token, "POST", "/api/bizdoc/docs", {
     defCode: `smoke_bd_calc_${TS}`,
-    formData: { amount: 1, discount_rate: 0.1, items: [{ amount: 1200 }, { amount: 34.52 }] },
+    formData: { amount: 1, discount_rate: 0.1, items: [{ item_amount: 1200 }, { item_amount: 34.52 }] },
   })
   await call(admin.token, "POST", `/api/bizdoc/docs/${calcDoc.body?.data?.id}/submit`)
   const calcPrint = await call(admin.token, "GET", `/api/bizdoc/docs/${calcDoc.body?.data?.id}/print?tplId=${calcTpl.body?.data?.id}`)
