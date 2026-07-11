@@ -26,8 +26,10 @@ public class BizDocDef {
     public static final String STATUS_PUBLISHED = "PUBLISHED";
     public static final String STATUS_DISABLED = "DISABLED";
 
-    public static final String FORM_ONLINE = "ONLINE";
+    /** §10：INLINE=单据私有内置表单设计（默认/主路径）/ CODE=高级绑手写表单；存量 ONLINE 兼容读（外部表单引用）。 */
+    public static final String FORM_INLINE = "INLINE";
     public static final String FORM_CODE = "CODE";
+    public static final String FORM_ONLINE = "ONLINE";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -46,10 +48,14 @@ public class BizDocDef {
     private String icon;
 
     @Column(name = "form_type", nullable = false, length = 16)
-    private String formType = FORM_ONLINE;
+    private String formType = FORM_INLINE;
 
     @Column(name = "form_code", length = 64)
     private String formCode;
+
+    /** §10：单据私有表单 schema（{widgets:[...]} 与在线表单同构；INLINE 主路径，不进 wf_form_def）。 */
+    @Column(name = "form_schema", columnDefinition = "text")
+    private String formSchema;
 
     /** CODE 表单运行时「新建」跳转路径（同公文 form_submit_path 口径，疾风批A契约）。 */
     @Column(name = "submit_path", length = 255)

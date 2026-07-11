@@ -3248,6 +3248,43 @@ async function hlCompleted(token, iid) {
   // 6. 数据权限：zhangsan(SELF) 看不到 admin 的单据
   const zsLedger = await call(zhangsan.token, "GET", `/api/bizdoc/docs?defCode=smoke_bd_plain_${TS}`)
   check("bizdoc 数据权限(zhangsan 看不到 admin 单据)", zsLedger.body?.code === 0 && zsLedger.body?.data?.total === 0, JSON.stringify(zsLedger.body?.data?.total))
+
+  // 7. §10 范式修正二：INLINE 单据自带表单设计
+  const inlineDef = await call(admin.token, "POST", "/api/bizdoc/defs", {
+    code: `smoke_bd_inline_${TS}`, name: "冒烟内置表单单", formType: "INLINE",
+    formSchema: { widgets: [
+      { key: "amount", label: "金额", type: "number", required: true },
+      { key: "memo", label: "备注", type: "textarea" },
+    ] },
+    listConfig: { columns: [{ field: "amount", label: "金额" }] },
+  })
+  check("bizdoc INLINE 定义创建(回传 formSchema)", inlineDef.body?.code === 0 && (inlineDef.body?.data?.formSchema?.widgets ?? []).length === 2, JSON.stringify(inlineDef.body?.data?.formType))
+  const inlinePub = await call(admin.token, "POST", `/api/bizdoc/defs/${inlineDef.body?.data?.id}/publish`)
+  check("bizdoc INLINE 发布(私有 schema 校验通过)", inlinePub.body?.code === 0, JSON.stringify(inlinePub.body?.message))
+  const inlineDoc = await call(admin.token, "POST", "/api/bizdoc/docs", {
+    defCode: `smoke_bd_inline_${TS}`, formData: { amount: 5, memo: "内置表单" },
+  })
+  const inlineSub = await call(admin.token, "POST", `/api/bizdoc/docs/${inlineDoc.body?.data?.id}/submit`)
+  check("bizdoc INLINE 单据提交生效", inlineSub.body?.data?.status === "EFFECTIVE", JSON.stringify(inlineSub.body?.data?.status))
+  // bizdoc:{code} 统一字段清单（流程设计器条件/取人识别单据字段）
+  const bdManifest = await call(admin.token, "GET", `/api/wf/forms/bizdoc:smoke_bd_inline_${TS}/fields`)
+  check("bizdoc:{code} manifest 返回字段(formType=BIZDOC,含 amount)",
+    bdManifest.body?.code === 0 && bdManifest.body?.data?.formType === "BIZDOC" &&
+      (bdManifest.body?.data?.fields ?? []).some((f) => f.key === "amount"),
+    JSON.stringify({ t: bdManifest.body?.data?.formType, keys: (bdManifest.body?.data?.fields ?? []).map((f) => f.key) }))
+  // INLINE 无 schema 发布 400；字段 key 重复发布 400
+  const inlineBad = await call(admin.token, "POST", "/api/bizdoc/defs", { code: `smoke_bd_noschema_${TS}`, name: "无schema", formType: "INLINE" })
+  const inlineBadPub = await call(admin.token, "POST", `/api/bizdoc/defs/${inlineBad.body?.data?.id}/publish`)
+  check("bizdoc INLINE 无 schema 发布 400", inlineBadPub.body?.code === 400 && (inlineBadPub.body?.message ?? "").includes("form_schema"), JSON.stringify(inlineBadPub.body?.message))
+  const inlineDup = await call(admin.token, "POST", "/api/bizdoc/defs", {
+    code: `smoke_bd_dup_${TS}`, name: "重复key", formType: "INLINE",
+    formSchema: { widgets: [{ key: "a", label: "A", type: "input" }, { key: "a", label: "A2", type: "input" }] },
+  })
+  const inlineDupPub = await call(admin.token, "POST", `/api/bizdoc/defs/${inlineDup.body?.data?.id}/publish`)
+  check("bizdoc INLINE 字段 key 重复发布 400", inlineDupPub.body?.code === 400 && (inlineDupPub.body?.message ?? "").includes("重复"), JSON.stringify(inlineDupPub.body?.message))
+  // 存量 CODE 定义不回归：CODE 定义可发布（gw_send 为已登记 CODE 表单）
+  const codePub = await call(admin.token, "POST", `/api/bizdoc/defs/${codeDef.body?.data?.id}/publish`)
+  check("bizdoc CODE 定义发布不回归", codePub.body?.code === 0, JSON.stringify(codePub.body?.message))
 }
 
 /* ---------- 汇总 ---------- */

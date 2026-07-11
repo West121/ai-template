@@ -15,14 +15,14 @@ public final class BizDocDtos {
     /** 定义（submitPath=CODE 表单运行时发起路径，疾风批A契约）。 */
     public record DefResponse(
             Long id, String code, String name, String category, String icon,
-            String formType, String formCode, String submitPath,
+            String formType, String formCode, String submitPath, JsonNode formSchema,
             Long numberRuleId, String wfDefCode, JsonNode listConfig,
             Long defaultPrintTplId, String status, String remark,
             OffsetDateTime createdAt, OffsetDateTime updatedAt) {
     }
 
     public record DefRequest(String code, String name, String category, String icon,
-                             String formType, String formCode, String submitPath,
+                             String formType, String formCode, String submitPath, JsonNode formSchema,
                              Long numberRuleId, String wfDefCode, JsonNode listConfig, String remark) {
     }
 

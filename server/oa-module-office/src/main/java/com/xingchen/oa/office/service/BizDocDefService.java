@@ -188,9 +188,60 @@ public class BizDocDefService {
 
     // ==================== 校验 / 字段清单（原生查 wf 表，office 不依赖 workflow 模块） ====================
 
-    /** 表单字段清单 [{key,label}]：CODE 取 field_manifest；ONLINE 从 schema_json 递归收 {key,label}。 */
+    /** §10 INLINE 发布校验：form_schema 非空、含至少一个字段、字段 key 全局唯一。 */
+    private void validateInlineSchema(BizDocDef def) {
+        if (!StringUtils.hasText(def.getFormSchema())) {
+            throw new BusinessException(400, "发布失败：INLINE 单据须先完成字段设计（form_schema 为空）");
+        }
+        List<String> keys = new ArrayList<>();
+        try {
+            collectKeys(objectMapper.readTree(def.getFormSchema()), keys);
+        } catch (Exception e) {
+            throw new BusinessException(400, "发布失败：form_schema JSON 非法");
+        }
+        if (keys.isEmpty()) {
+            throw new BusinessException(400, "发布失败：form_schema 未包含任何字段");
+        }
+        Set<String> seen = new LinkedHashSet<>();
+        for (String k : keys) {
+            if (!seen.add(k)) {
+                throw new BusinessException(400, "发布失败：字段 key 重复: " + k);
+            }
+        }
+    }
+
+    /** 收集 schema 内全部字段 key（不去重，供唯一性校验）。 */
+    private void collectKeys(tools.jackson.databind.JsonNode node, List<String> out) {
+        if (node == null) {
+            return;
+        }
+        if (node.isObject()) {
+            String key = node.path("key").asString(null);
+            if (StringUtils.hasText(key)) {
+                out.add(key);
+            }
+            node.properties().forEach(e -> collectKeys(e.getValue(), out));
+        } else if (node.isArray()) {
+            node.forEach(n -> collectKeys(n, out));
+        }
+    }
+
+    /**
+     * 表单字段清单 [{key,label}]：INLINE 从单据私有 form_schema 派生（§10 主路径）；
+     * CODE 取 wf_form_def.field_manifest；存量 ONLINE 兼容读外部 wf 表单 schema。
+     */
     public List<Map<String, String>> formFields(BizDocDef def) {
         List<Map<String, String>> out = new ArrayList<>();
+        if (BizDocDef.FORM_INLINE.equals(def.getFormType())) {
+            try {
+                if (StringUtils.hasText(def.getFormSchema())) {
+                    collectFields(objectMapper.readTree(def.getFormSchema()), out, new LinkedHashSet<>());
+                }
+            } catch (Exception ignored) {
+                // schema 非法按空
+            }
+            return out;
+        }
         if (!StringUtils.hasText(def.getFormCode())) {
             return out;
         }
@@ -236,14 +287,18 @@ public class BizDocDefService {
     }
 
     private void validateBindings(BizDocDef def) {
-        if (!StringUtils.hasText(def.getFormCode())) {
-            throw new BusinessException(400, "发布失败：未绑定表单");
-        }
-        Number formCount = (Number) entityManager.createNativeQuery(
-                        "SELECT count(*) FROM wf_form_def WHERE code = :code")
-                .setParameter("code", def.getFormCode()).getSingleResult();
-        if (formCount.longValue() == 0) {
-            throw new BusinessException(400, "发布失败：表单不存在: " + def.getFormCode());
+        if (BizDocDef.FORM_INLINE.equals(def.getFormType())) {
+            validateInlineSchema(def); // §10：INLINE 校验私有 schema 非空 + 字段 key 唯一
+        } else {
+            if (!StringUtils.hasText(def.getFormCode())) {
+                throw new BusinessException(400, "发布失败：未绑定表单");
+            }
+            Number formCount = (Number) entityManager.createNativeQuery(
+                            "SELECT count(*) FROM wf_form_def WHERE code = :code")
+                    .setParameter("code", def.getFormCode()).getSingleResult();
+            if (formCount.longValue() == 0) {
+                throw new BusinessException(400, "发布失败：表单不存在: " + def.getFormCode());
+            }
         }
         if (def.getNumberRuleId() != null && numberRuleRepository.findById(def.getNumberRuleId()).isEmpty()) {
             throw new BusinessException(400, "发布失败：编号规则不存在: " + def.getNumberRuleId());
@@ -307,6 +362,9 @@ public class BizDocDefService {
         }
         def.setFormCode(req.formCode());
         def.setSubmitPath(req.submitPath());
+        if (req.formSchema() != null && !req.formSchema().isNull()) {
+            def.setFormSchema(req.formSchema().toString());
+        }
         def.setNumberRuleId(req.numberRuleId());
         def.setWfDefCode(req.wfDefCode());
         if (req.listConfig() != null && !req.listConfig().isNull()) {
@@ -332,7 +390,7 @@ public class BizDocDefService {
 
     public DefResponse toResponse(BizDocDef d) {
         return new DefResponse(d.getId(), d.getCode(), d.getName(), d.getCategory(), d.getIcon(),
-                d.getFormType(), d.getFormCode(), d.getSubmitPath(),
+                d.getFormType(), d.getFormCode(), d.getSubmitPath(), parse(d.getFormSchema()),
                 d.getNumberRuleId(), d.getWfDefCode(), parse(d.getListConfig()),
                 d.getDefaultPrintTplId(), d.getStatus(), d.getRemark(), d.getCreatedAt(), d.getUpdatedAt());
     }
