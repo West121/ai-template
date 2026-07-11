@@ -16,6 +16,7 @@ import { DataTableColumnHeader } from "@/components/data-table/data-table-column
 import { useAuthStore, useHasPerm } from "@/stores/auth-store"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -246,6 +247,7 @@ function CredentialsDialog({ open, onClose }: { open: boolean; onClose: () => vo
         type: (editing.type ?? "LLM") as CredentialType,
         baseUrl: editing.baseUrl?.trim() || undefined,
         model: editing.model?.trim() || undefined,
+        supportsVision: (editing.type ?? "LLM") === "LLM" ? !!editing.supportsVision : undefined,
         apiKey: editing.apiKey?.trim() || undefined,
       })
       toast.success("凭据已保存")
@@ -275,6 +277,11 @@ function CredentialsDialog({ open, onClose }: { open: boolean; onClose: () => vo
                 <div className="flex items-center gap-2 text-sm font-medium">
                   {c.name}
                   <Badge variant="outline" className="text-[10px] text-muted-foreground">{CRED_TYPE_LABEL[c.type]}</Badge>
+                  {c.type === "LLM" && c.supportsVision && (
+                    <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-[10px] text-emerald-600">
+                      👁 视觉
+                    </Badge>
+                  )}
                 </div>
                 <div className="truncate font-mono text-xs text-muted-foreground">
                   {c.baseUrl ?? "—"}
@@ -338,10 +345,16 @@ function CredentialsDialog({ open, onClose }: { open: boolean; onClose: () => vo
                 <Input value={editing.baseUrl ?? ""} onChange={(e) => setEditing({ ...editing, baseUrl: e.target.value })} className="h-8 font-mono text-xs" placeholder="https://api.deepseek.com/v1" />
               </div>
               {editing.type === "LLM" && (
-                <div className="space-y-1.5">
-                  <Label className="text-xs">默认模型</Label>
-                  <Input value={editing.model ?? ""} onChange={(e) => setEditing({ ...editing, model: e.target.value })} className="h-8 font-mono text-xs" placeholder="deepseek-chat" />
-                </div>
+                <>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">默认模型</Label>
+                    <Input value={editing.model ?? ""} onChange={(e) => setEditing({ ...editing, model: e.target.value })} className="h-8 font-mono text-xs" placeholder="deepseek-chat" />
+                  </div>
+                  <label className="flex cursor-pointer items-center gap-2 text-xs">
+                    <Checkbox checked={!!editing.supportsVision} onCheckedChange={(v) => setEditing({ ...editing, supportsVision: v === true })} />
+                    支持视觉（图片理解）—— AI 助手附图按此判定，模型选择器带 👁 徽标
+                  </label>
+                </>
               )}
               <div className="space-y-1.5">
                 <Label className="text-xs">密钥（只写不回显）</Label>

@@ -108,6 +108,8 @@ const EXPENSE_SCHEMA: FormWidget[] = [
   { id: "f2", type: "number", label: "报销金额（元）", key: "amount", required: true, width: "half" },
   { id: "f3", type: "date", label: "发生日期", key: "expenseDate", required: true, width: "half" },
   { id: "f4", type: "input", label: "费用归属项目", key: "project", width: "half" },
+  // user 关联字段：打印数据里值为 {id,name,username} 对象（显示属性 {{handler.name}} 演示）
+  { id: "f6", type: "user", label: "经办人", key: "handler", width: "half" },
   { id: "f5", type: "textarea", label: "费用说明", key: "memo", required: true, width: "full" },
 ]
 
@@ -119,7 +121,7 @@ const VEHICLE_SCHEMA: FormWidget[] = [
   { id: "v5", type: "textarea", label: "事由", key: "reason", width: "full" },
 ]
 
-/** 演示打印模板 v2（§9 文档流：标题/单据信息/智能表格/标签字段/明细/审批区/分栏签章+二维码） */
+/** 演示打印模板 v2（§9 文档流：页眉页脚/标题/单据信息/智能表格/标签字段/明细/审批区/分栏签章+二维码） */
 const EXPENSE_TPL_V2: BdTemplateV2 = {
   schemaVersion: 2,
   page: {
@@ -127,7 +129,9 @@ const EXPENSE_TPL_V2: BdTemplateV2 = {
     landscape: false,
     margin: [18, 18, 18, 18],
     fontFamily: "宋体",
-    pageNumber: { show: true, position: "footer", align: "center", format: "第 {page} 页 / 共 {total} 页", fontSize: 9 },
+    pageNumber: { show: true, position: "footer", align: "center", format: "第 {page} 页 / 共 {total} 页", fontSize: 9, color: "#9ca3af" },
+    header: { text: "星辰科技 · 财务单据", align: "left", fontSize: 8.5 },
+    footer: { text: "编号 {{docNo}}", align: "right", fontSize: 8.5 },
   },
   blocks: [
     { id: "b1", type: "title", text: "费用报销单", style: { fontSize: 18, bold: true, align: "center" } },
@@ -151,6 +155,7 @@ const EXPENSE_TPL_V2: BdTemplateV2 = {
         { label: "报销金额（元）", value: "{{amount}}" },
         { label: "发生日期", value: "{{expenseDate}}" },
         { label: "费用归属项目", value: "{{project}}" },
+        { label: "经办人", value: "{{handler.name}}（{{handler.username}}）" },
       ],
       style: { fontSize: 10.5, labelWidth: 30 },
     },
@@ -320,6 +325,7 @@ const DOCS: BizDoc[] = [
     id: 91, defId: 1, defCode: "expense", docNo: "BX〔2026〕0012", title: "费用报销单-王经理",
     formData: {
       expenseType: "差旅费", amount: 2380.5, expenseDate: "2026-07-05", project: "华东巡检", memo: "7月华东区客户巡检差旅：高铁往返+住宿 2 晚。",
+      handler: { id: 5, name: "李文", username: "liwen" },
       items: [
         { name: "高铁票（沪杭往返）", amount: 620.5, remark: "二等座" },
         { name: "酒店住宿 2 晚", amount: 1560, remark: "含早" },

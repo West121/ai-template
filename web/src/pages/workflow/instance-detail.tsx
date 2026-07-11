@@ -31,6 +31,7 @@ import { Modal } from "@/components/modal"
 import { Drawer } from "@/components/drawer"
 import { RichTextViewer } from "@/components/rich-text"
 import { WfOpBar } from "@/components/wf-op-dialogs"
+import { InstancePrintButton } from "@/pages/bizdoc/instance-print"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -413,6 +414,8 @@ export default function WorkflowInstanceDetailPage() {
               </Badge>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
+              {/* §11 单据模板打印入口（有匹配已发布模板才显示） */}
+              <InstancePrintButton instanceId={detail.id} defCode={detail.defCode} />
               <WfP3Bar detail={detail} schema={formSchema} data={formData} onReload={() => void load()} />
               {detail.canCancel && isInitiator && (
                 <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setCanceling(true)}>

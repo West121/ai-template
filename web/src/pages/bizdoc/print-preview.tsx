@@ -157,7 +157,8 @@ export function PrintPreview({ doc, open, onClose }: { doc: BizDoc | null; open:
         printData &&
         createPortal(
           <div className="bd-print-root fixed left-[-200vw] top-0" aria-hidden>
-            <style>{buildPrintPageCss(printData.tpl.content)}</style>
+            {/* @page：纸张/边距 + 页码/页眉/页脚 margin box（band 文本按单据数据插值） */}
+            <style>{buildPrintPageCss(printData.tpl.content, printData.data)}</style>
             <PaperRenderer
               tpl={printData.tpl.content}
               ctx={{ data: printData.data, fields: printData.fields }}

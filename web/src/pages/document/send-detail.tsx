@@ -16,6 +16,7 @@ import { OpinionActionBar, OpinionTimeline } from "./gongwen/handling"
 import { DocFlowTrack } from "./gongwen/flow-track"
 import { GwPredictButton } from "./gongwen/predict"
 import { DemoBanner } from "./gongwen/shared"
+import { InstancePrintButton } from "@/pages/bizdoc/instance-print"
 
 /** 次要项：规整的 key-value（弱化） */
 function Field({ label, children }: { label: string; children: ReactNode }) {
@@ -127,6 +128,8 @@ export default function SendDetailPage() {
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
+              {/* §11 单据模板打印入口（有匹配已发布模板才显示） */}
+              {doc.processInstanceId && <InstancePrintButton instanceId={doc.processInstanceId} defCode="gw_send" />}
               <GwPredictButton doc={doc} />
               <Button variant="ghost" size="icon" className="size-8" title="刷新" onClick={() => void load()}>
                 <RotateCw className="size-4" />

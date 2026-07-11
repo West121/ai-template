@@ -4,25 +4,40 @@
  * CODE / 存量 ONLINE → 维持统一字段清单（getFormManifest：CODE 前端 registry / ONLINE 后端派生）。
  * 纯函数（deriveSchemaFields / schemaKeyIssues）供台账配置、模板设计器字段树、单测共用。
  */
-import { widgetsToFields } from "@/pages/workflow/designer/form/fields"
-import type { FormWidget as DesignerWidget } from "@/pages/workflow/designer/form/model"
+import { isContainerType, isLayoutType, isSubformType } from "@/pages/workflow/designer/form/model"
 import { getFormManifest } from "@/lib/form-registry"
-import type { FormWidget } from "@/types/workflow"
+import type { FormWidget, WidgetType } from "@/types/workflow"
 import type { BizDocDef } from "./mock"
 
 export interface DefField {
   key: string
   label: string
+  /** widget/字段类型（user/dept 等关联类字段在字段选择器展开「显示属性」用） */
+  type?: string
 }
 
 /**
- * 私有 schema → 字段清单（纯）：复用表单设计器的 widgetsToFields
- * （容器 grid/group/tabs/collapse 透明下钻、跳过 divider/note 布局件与 subform 本身、key 缺省回退 id）。
+ * 私有 schema → 字段清单（纯，口径同表单设计器 widgetsToFields）：
+ * 容器 grid/group/tabs/collapse 透明下钻、跳过 divider/note 布局件与 subform 本身、
+ * key 缺省回退 id；额外携带 widget type（关联字段显示属性判断用）。
  */
 export function deriveSchemaFields(widgets: FormWidget[] | null | undefined): DefField[] {
   if (!Array.isArray(widgets) || widgets.length === 0) return []
-  // 运行时 FormWidget 全可选，结构上是设计器模型的宽化；派生只读 key/label/type/children，安全收窄
-  return widgetsToFields(widgets as unknown as DesignerWidget[]).map((f) => ({ key: f.key, label: f.label }))
+  const out: DefField[] = []
+  const walk = (list: FormWidget[]) => {
+    for (const w of list) {
+      const t = w.type as WidgetType
+      if (isLayoutType(t)) continue
+      if (isContainerType(t)) {
+        if (Array.isArray(w.children)) walk(w.children)
+        continue
+      }
+      if (isSubformType(t)) continue
+      out.push({ key: w.key?.trim() || w.id, label: w.label, type: w.type })
+    }
+  }
+  walk(widgets)
+  return out
 }
 
 /**
@@ -43,7 +58,7 @@ export async function fieldsForDef(def: Pick<BizDocDef, "formType" | "formCode" 
   if (!def.formCode) return []
   try {
     const manifest = await getFormManifest(def.formCode)
-    return manifest.fields.map((f) => ({ key: f.key, label: f.label }))
+    return manifest.fields.map((f) => ({ key: f.key, label: f.label, type: f.type }))
   } catch {
     return []
   }

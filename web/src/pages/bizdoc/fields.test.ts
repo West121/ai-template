@@ -25,10 +25,15 @@ describe("deriveSchemaFields（INLINE 本地派生）", () => {
   it("跳过布局件、容器透明下钻、key 缺省回退 id、subform 本身不入清单", () => {
     const fields = deriveSchemaFields(SCHEMA)
     expect(fields).toEqual([
-      { key: "plate", label: "车牌号" },
-      { key: "amount", label: "金额" },
-      { key: "f5", label: "日期" },
+      { key: "plate", label: "车牌号", type: "input" },
+      { key: "amount", label: "金额", type: "number" },
+      { key: "f5", label: "日期", type: "date" },
     ])
+  })
+
+  it("携带 widget type（user 关联字段供选择器展开显示属性）", () => {
+    const fields = deriveSchemaFields([{ id: "u1", type: "user", label: "经办人", key: "handler" }])
+    expect(fields[0]).toEqual({ key: "handler", label: "经办人", type: "user" })
   })
 
   it("空/非法输入回空数组", () => {

@@ -1,22 +1,26 @@
 /**
- * 套打模板设计器 v2（bizdoc-design.md §9.2，文档流式）。
+ * 套打模板设计器 v2（bizdoc-design.md §9.2 文档流式 + §11 独立模板接入）。
  * 三栏：左=元素库（分组照参考图）｜中=纸面文档流画布｜右=属性面板（未选中=页面设置）。
- * 顶部：撤销/重做（≤20步，Ctrl+Z/Y）/ 预览（样例+审批样例）/ JSON 源码（导入导出）/ 保存。
- * 路由 /bizdoc/tpl/:defCode/:tplId（tplId=new 新建）；v1 旧模板只读兼容不进设计器。
+ * 顶部：撤销/重做（≤20步，Ctrl+Z/Y）/ 预览（样例+审批样例）/ JSON 源码（导入导出）/ 保存（独立模板另有发布）。
+ * 路由：/bizdoc/tpl/:defCode/:tplId（业务单据绑定，tplId=new 新建）｜/bizdoc/tpl/t/:tplId（§11 独立模板，
+ * 字段树按绑定来源聚合端点取，FLOW 绑定 _approvals 组常驻）。v1 旧模板只读兼容不进设计器。
  */
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
-import { ArrowLeft, Braces, Eye, Loader2, Redo2, Save, Undo2 } from "lucide-react"
+import { ArrowLeft, Braces, Eye, Loader2, Redo2, Save, Undo2, Upload } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { useHasPerm } from "@/stores/auth-store"
 import {
+  FOOTER_ID,
+  HEADER_ID,
   emptyTemplateV2,
   findBlock,
   isV2,
   newBlock,
+  newPageBand,
   patchBlock,
   type BdBlock,
   type BdBlockType,
@@ -24,20 +28,25 @@ import {
   type BdTemplateV2,
 } from "@/components/bizdoc/model-v2"
 import { fetchDef, fetchPrintTpl, savePrintTpl, type BizDocDef } from "../mock"
+import { fetchTpl, fetchTplFields, publishTpl, saveTpl, type BizDocTpl } from "../tpls"
 import { fieldsForDef } from "../fields"
 import { useHistory } from "./history"
 import { Palette } from "./palette"
 import { DesignerCanvas } from "./canvas"
-import { PagePanel, BlockPanel } from "./props-panel"
+import { PagePanel, BlockPanel, BandPanel } from "./props-panel"
 import { PreviewDialog, JsonDialog } from "./dialogs"
 import type { FieldOption } from "./field-picker"
 
 export default function TplDesignerPage() {
-  const { defCode = "", tplId = "new" } = useParams()
+  const { defCode, tplId = "new" } = useParams()
+  // §11 独立模板路由 /bizdoc/tpl/t/:tplId（无 defCode 参数）
+  const standalone = defCode === undefined
   const navigate = useNavigate()
   const canWrite = useHasPerm("bizdoc:def:write")
 
   const [def, setDef] = useState<BizDocDef | null>(null)
+  /** §11 独立模板（绑定信息/状态/版本） */
+  const [sTpl, setSTpl] = useState<BizDocTpl | null>(null)
   const [fields, setFields] = useState<FieldOption[]>([])
   const [loading, setLoading] = useState(true)
   const [legacyV1, setLegacyV1] = useState(false)
@@ -52,13 +61,31 @@ export default function TplDesignerPage() {
   const tpl = history.state
   const resetHistory = history.reset
 
-  /* ---- 载入定义 + 模板 + 字段清单 ---- */
+  /* ---- 载入（独立模板 或 定义绑定模板）+ 字段清单 ---- */
   useEffect(() => {
     let alive = true
     void (async () => {
       setLoading(true)
       try {
-        const defRes = await fetchDef(defCode)
+        if (standalone) {
+          // §11：独立模板 + 绑定来源字段树（FLOW→表单清单+_approvals；FORM→统一清单）
+          const res = await fetchTpl(Number(tplId))
+          if (!alive) return
+          if (!res.data) {
+            toast.error("模板不存在")
+            return
+          }
+          setSTpl(res.data)
+          setName(res.data.name)
+          setTplDbId(res.data.id)
+          const f = await fetchTplFields(res.data)
+          if (!alive) return
+          setFields(f.data)
+          if (isV2(res.data.content)) resetHistory(res.data.content)
+          else setLegacyV1(true)
+          return
+        }
+        const defRes = await fetchDef(defCode ?? "")
         if (!alive) return
         setDef(defRes.data)
         if (defRes.data) {
@@ -88,7 +115,7 @@ export default function TplDesignerPage() {
     return () => {
       alive = false
     }
-  }, [defCode, tplId, resetHistory])
+  }, [defCode, tplId, standalone, resetHistory])
 
   /* ---- 快捷键：撤销/重做 ---- */
   useEffect(() => {
@@ -110,7 +137,8 @@ export default function TplDesignerPage() {
   }, [history])
 
   const fieldMap = useMemo(() => Object.fromEntries(fields.map((f) => [f.key, f.label])), [fields])
-  const selected = selectedId ? findBlock(tpl.blocks, selectedId)?.block ?? null : null
+  const selectedBand = selectedId === HEADER_ID ? "header" : selectedId === FOOTER_ID ? "footer" : null
+  const selected = selectedId && !selectedBand ? findBlock(tpl.blocks, selectedId)?.block ?? null : null
 
   const onBlocks = useCallback(
     (blocks: BdBlock[]) => history.push({ ...history.state, blocks }),
@@ -123,6 +151,13 @@ export default function TplDesignerPage() {
     setSelectedId(block.id)
   }
 
+  /** 启用文档页眉/页脚（页面级） */
+  const addBand = (which: "header" | "footer") => {
+    if (tpl.page[which]) return
+    history.push({ ...tpl, page: { ...tpl.page, [which]: newPageBand(which) } })
+    setSelectedId(which === "header" ? HEADER_ID : FOOTER_ID)
+  }
+
   const patchSelected = (patch: Partial<BdBlock>) => {
     if (!selectedId) return
     const next = patchBlock(tpl.blocks, selectedId, patch)
@@ -133,26 +168,50 @@ export default function TplDesignerPage() {
     history.push({ ...tpl, page: { ...tpl.page, ...patch } })
   }
 
-  const doSave = async () => {
-    if (!def) return
+  const doSave = async (silent = false) => {
     if (!name.trim()) {
       toast.error("请填写模板名称")
-      return
+      return false
     }
     setSaving(true)
     try {
-      const saved = await savePrintTpl({
-        id: tplDbId,
-        defId: def.id,
-        name: name.trim(),
-        paper: tpl.page.size,
-        landscape: tpl.page.landscape,
-        content: tpl,
-      })
-      setTplDbId(saved.data.id)
-      toast.success(`模板「${name.trim()}」已保存`)
+      if (standalone) {
+        if (!sTpl) return false
+        const saved = await saveTpl(sTpl.id, { name: name.trim(), content: tpl, paper: tpl.page.size, landscape: tpl.page.landscape })
+        setSTpl(saved.data)
+      } else {
+        if (!def) return false
+        const saved = await savePrintTpl({
+          id: tplDbId,
+          defId: def.id,
+          name: name.trim(),
+          paper: tpl.page.size,
+          landscape: tpl.page.landscape,
+          content: tpl,
+        })
+        setTplDbId(saved.data.id)
+      }
+      if (!silent) toast.success(`模板「${name.trim()}」已保存`)
+      return true
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "保存失败")
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /** §11 独立模板：先保存再发布（version+1） */
+  const doPublish = async () => {
+    if (!sTpl) return
+    if (!(await doSave(true))) return
+    setSaving(true)
+    try {
+      const res = await publishTpl(sTpl.id)
+      setSTpl(res.data)
+      toast.success(`「${name.trim()}」已发布 v${res.data.version}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "发布失败")
     } finally {
       setSaving(false)
     }
@@ -180,9 +239,9 @@ export default function TplDesignerPage() {
       <Card>
         <CardContent className="space-y-3 py-14 text-center text-sm">
           <p>该模板为 v1（自由定位）旧格式：打印/预览保留兼容渲染，但设计器仅支持 v2（文档流式）。</p>
-          <p className="text-xs text-muted-foreground">如需改版式，请在定义里新建 v2 模板。</p>
-          <Button variant="outline" size="sm" onClick={() => navigate("/bizdoc/defs")}>
-            返回单据管理
+          <p className="text-xs text-muted-foreground">如需改版式，请新建 v2 模板。</p>
+          <Button variant="outline" size="sm" onClick={() => navigate(standalone ? "/bizdoc/tpls" : "/bizdoc/defs")}>
+            返回{standalone ? "单据模板" : "单据管理"}
           </Button>
         </CardContent>
       </Card>
@@ -193,14 +252,17 @@ export default function TplDesignerPage() {
     <div className="-mx-4 -my-4 flex h-[calc(100dvh-6.5rem)] min-h-[34rem] flex-col overflow-hidden md:-mx-5 md:-my-5">
       {/* 顶部条 */}
       <div className="flex h-12 shrink-0 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur">
-        <Button variant="ghost" size="sm" className="gap-1" onClick={() => navigate("/bizdoc/defs")}>
+        <Button variant="ghost" size="sm" className="gap-1" onClick={() => navigate(standalone ? "/bizdoc/tpls" : "/bizdoc/defs")}>
           <ArrowLeft className="size-4" />
           退出
         </Button>
         <div className="mx-1 h-6 w-px bg-border" />
         <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="模板名称" className="h-8 w-52 text-sm" />
         <span className="hidden text-xs text-muted-foreground sm:inline">
-          {def?.name ?? defCode} · {tpl.page.size}
+          {standalone
+            ? `${sTpl?.bindType === "FLOW" ? "绑定流程" : "绑定表单"} ${sTpl?.bindCode ?? ""} · ${sTpl?.status === "PUBLISHED" ? `已发布 v${sTpl.version}` : "草稿"}`
+            : `${def?.name ?? defCode}`}{" "}
+          · {tpl.page.size}
           {tpl.page.landscape ? "·横" : ""}
         </span>
         <div className="ml-auto flex items-center gap-1.5">
@@ -217,9 +279,14 @@ export default function TplDesignerPage() {
           <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setJsonOpen(true)}>
             <Braces className="size-3.5" /> JSON
           </Button>
-          <Button size="sm" className="h-8 gap-1.5" disabled={saving} onClick={() => void doSave()}>
+          <Button size="sm" variant={standalone ? "outline" : "default"} className="h-8 gap-1.5" disabled={saving} onClick={() => void doSave()}>
             <Save className="size-3.5" /> {saving ? "保存中…" : "保存"}
           </Button>
+          {standalone && (
+            <Button size="sm" className="h-8 gap-1.5" disabled={saving} onClick={() => void doPublish()}>
+              <Upload className="size-3.5" /> 发布{sTpl && sTpl.version > 0 ? ` v${sTpl.version + 1}` : ""}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -227,19 +294,41 @@ export default function TplDesignerPage() {
       <div className="flex min-h-0 flex-1">
         {/* 左：元素库 */}
         <aside className="w-52 shrink-0 overflow-y-auto border-r bg-background/60">
-          <Palette onAdd={addBlock} />
+          <Palette onAdd={addBlock} onAddBand={addBand} hasBand={{ header: !!tpl.page.header, footer: !!tpl.page.footer }} />
         </aside>
 
         {/* 中：纸面画布 */}
         <main className="bd-desk min-w-0 flex-1 overflow-auto p-8">
           <div className="mx-auto w-fit">
-            <DesignerCanvas tpl={tpl} ctx={{ data: {}, fields: fieldMap }} selectedId={selectedId} onSelect={setSelectedId} onBlocks={onBlocks} />
+            <DesignerCanvas
+              tpl={tpl}
+              ctx={{ data: {}, fields: fieldMap }}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              onBlocks={onBlocks}
+              onPatchPage={patchPage}
+            />
           </div>
         </main>
 
         {/* 右：属性面板 */}
         <aside className="w-72 shrink-0 overflow-y-auto border-l bg-background/60">
-          {selected ? <BlockPanel block={selected} fields={fields} onPatch={patchSelected} /> : <PagePanel page={tpl.page} onPatch={patchPage} />}
+          {selectedBand && tpl.page[selectedBand] ? (
+            <BandPanel
+              which={selectedBand}
+              band={tpl.page[selectedBand]!}
+              fields={fields}
+              onChange={(b) => patchPage(selectedBand === "header" ? { header: b } : { footer: b })}
+              onRemove={() => {
+                patchPage(selectedBand === "header" ? { header: null } : { footer: null })
+                setSelectedId(null)
+              }}
+            />
+          ) : selected ? (
+            <BlockPanel block={selected} fields={fields} onPatch={patchSelected} />
+          ) : (
+            <PagePanel page={tpl.page} onPatch={patchPage} />
+          )}
         </aside>
       </div>
 

@@ -18,12 +18,14 @@ import {
 } from "./model"
 import {
   BD_FONT_STACKS,
+  PAGENO_DEFAULT_COLOR,
   formatPageNo,
   isV2,
   pageSizeMm,
   type AnyBdTemplate,
   type BdBlock,
   type BdBlockStyle,
+  type BdPageV2,
   type BdTemplateV2,
 } from "./model-v2"
 import { QrSvg } from "./qr"
@@ -49,12 +51,26 @@ const SYS_LABELS: Record<string, string> = {
   status: "状态",
 }
 
-/** token 的人话名（chip 展示）：字段 label / 系统字段 / 审批N·子项 */
+/** 关联类字段（user/dept…）显示属性子键 → 人话名（磐石把值解析为 {id,name,...} 对象后按子键取） */
+const SUB_KEY_LABELS: Record<string, string> = {
+  name: "名称",
+  username: "账号",
+  id: "ID",
+  code: "编号",
+}
+
+/** token 的人话名（chip 展示）：字段 label / 系统字段 / 审批N·子项 / 字段(显示属性) */
 function tokenLabel(expr: string, fields: Record<string, string>): string {
   if (fields[expr]) return fields[expr]
   if (SYS_LABELS[expr]) return SYS_LABELS[expr]
   const m = /^_approvals\.(\d+)\.(\w+)$/.exec(expr)
   if (m) return `审批${Number(m[1]) + 1}·${APPROVAL_SUB_LABEL[m[2]] ?? m[2]}`
+  // 关联字段显示属性：{{applicant.name}} → 用车人(名称)
+  const sub = /^(\w+)\.(\w+)$/.exec(expr)
+  if (sub) {
+    const root = fields[sub[1]] ?? SYS_LABELS[sub[1]]
+    if (root) return `${root}(${SUB_KEY_LABELS[sub[2]] ?? sub[2]})`
+  }
   return expr
 }
 
@@ -354,6 +370,55 @@ export function V2BlockBody({
   }
 }
 
+/**
+ * 页眉/页脚行（3 对齐槽并排：band 与页码同边时各占其槽，同槽依次排列）。
+ * 屏幕按单页近似呈现（bd-editing-only）；打印由 buildPrintPageCss 的 @page margin box 逐页输出。
+ * design 态设计器用 wrapBand 给 band 包选中壳。
+ */
+export function PageBandRow({
+  page,
+  edge,
+  ctx,
+  mode,
+  wrapBand,
+}: {
+  page: BdPageV2
+  edge: "header" | "footer"
+  ctx: BdRenderCtx
+  mode: RenderMode
+  wrapBand?: (node: ReactNode) => ReactNode
+}) {
+  const band = edge === "header" ? page.header : page.footer
+  const pn = page.pageNumber
+  const pnHere = pn.show && pn.position === edge
+  if (!band && !pnHere) return null
+  const slots: Record<"left" | "center" | "right", ReactNode[]> = { left: [], center: [], right: [] }
+  if (band) {
+    const el = (
+      <div key="band" style={{ fontSize: `${band.fontSize}pt` }}>
+        <TokenText text={band.text} ctx={ctx} mode={mode} />
+      </div>
+    )
+    slots[band.align].push(wrapBand ? <div key="band-w">{wrapBand(el)}</div> : el)
+  }
+  if (pnHere) {
+    slots[pn.align].push(
+      <div key="pn" style={{ fontSize: `${pn.fontSize}pt`, color: pn.color ?? PAGENO_DEFAULT_COLOR }}>
+        {formatPageNo(pn.format, 1, 1)}
+      </div>,
+    )
+  }
+  return (
+    <div className={`bd-band-row bd-editing-only${edge === "footer" ? " bd-band-row--footer" : ""}`}>
+      {(["left", "center", "right"] as const).map((s) => (
+        <div key={s} className="bd-band-slot" style={{ textAlign: s }}>
+          {slots[s]}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /** v2 文档流整纸渲染（final：预览/打印共用） */
 function V2Paper({
   tpl,
@@ -370,15 +435,6 @@ function V2Paper({
 }) {
   const size = pageSizeMm(tpl.page)
   const [mt, mr, mb, ml] = tpl.page.margin
-  const pn = tpl.page.pageNumber
-  const pageNoEl = pn.show ? (
-    <div
-      className="bd-pageno bd-editing-only"
-      style={{ textAlign: pn.align, fontSize: `${pn.fontSize}pt`, ...(pn.position === "header" ? { order: -1, marginBottom: "2mm" } : {}) }}
-    >
-      {formatPageNo(pn.format, 1, 1)}
-    </div>
-  ) : null
   return (
     <div
       className={`bd-paper bd-paper--flow${scale !== 1 ? " bd-paper--scaled" : ""}`}
@@ -391,13 +447,13 @@ function V2Paper({
         ...(scale !== 1 ? { transform: `scale(${scale})` } : {}),
       }}
     >
-      {pn.position === "header" && pageNoEl}
+      <PageBandRow page={tpl.page} edge="header" ctx={ctx} mode={mode} />
       <div className="bd-flow-list">
         {tpl.blocks.map((b) => (
           <V2BlockBody key={b.id} block={b} ctx={ctx} mode={mode} />
         ))}
       </div>
-      {pn.position === "footer" && pageNoEl}
+      <PageBandRow page={tpl.page} edge="footer" ctx={ctx} mode={mode} />
       {watermark}
     </div>
   )

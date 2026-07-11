@@ -17,6 +17,7 @@ import {
   isV2,
   moveBlock,
   newBlock,
+  newPageBand,
   pageSizeMm,
   parseAnyTemplate,
   removeBlock,
@@ -204,12 +205,13 @@ describe("预览样例与打印 @page CSS", () => {
     expect(cssPageContent("- {page} -")).toBe('"- " counter(page) " -"')
   })
 
-  it("buildPrintPageCss：v2 出纸张/边距/页码 margin box；v1 margin 0", () => {
+  it("buildPrintPageCss：v2 出纸张/边距/页码 margin box（缺省 muted 灰）；v1 margin 0", () => {
     const css = buildPrintPageCss(TPL)
     expect(css).toContain("size: A4 portrait")
     expect(css).toContain("margin: 20mm 18mm 20mm 18mm")
     expect(css).toContain("@bottom-center")
     expect(css).toContain("counter(pages)")
+    expect(css).toContain("color: #9ca3af")
 
     const noPn: BdTemplateV2 = { ...TPL, page: { ...TPL.page, pageNumber: { ...TPL.page.pageNumber, show: false } } }
     expect(buildPrintPageCss(noPn)).not.toContain("@bottom")
@@ -224,5 +226,74 @@ describe("预览样例与打印 @page CSS", () => {
     expect(t.page.margin).toEqual([20, 20, 20, 20])
     expect(t.page.pageNumber.show).toBe(true)
     expect(t.blocks).toEqual([])
+  })
+})
+
+describe("页眉/页脚 band 与页码颜色（对齐参考编辑器四项差距）", () => {
+  it("buildPrintPageCss：band 按数据插值出 @top/@bottom；页码自定义色生效", () => {
+    const withBands: BdTemplateV2 = {
+      ...TPL,
+      page: {
+        ...TPL.page,
+        pageNumber: { ...TPL.page.pageNumber, align: "center", color: "#1d4ed8" },
+        header: { text: "星辰科技", align: "left", fontSize: 8.5 },
+        footer: { text: "编号 {{docNo}}", align: "right", fontSize: 8.5 },
+      },
+    }
+    const css = buildPrintPageCss(withBands, { docNo: "CL〔2026〕003" })
+    expect(css).toContain('@top-left { content: "星辰科技"')
+    expect(css).toContain('@bottom-right { content: "编号 CL〔2026〕003"')
+    expect(css).toContain("@bottom-center")
+    expect(css).toContain("color: #1d4ed8")
+  })
+
+  it("band 与页码同边同槽 → 并排合并到一个 margin box（全角空格分隔）", () => {
+    const merged: BdTemplateV2 = {
+      ...TPL,
+      page: {
+        ...TPL.page,
+        pageNumber: { ...TPL.page.pageNumber, position: "footer", align: "center" },
+        footer: { text: "机密", align: "center", fontSize: 9 },
+      },
+    }
+    const css = buildPrintPageCss(merged, {})
+    expect(css.match(/@bottom-center/g)?.length).toBe(1)
+    expect(css).toContain('"机密" "　" "第 " counter(page)')
+  })
+
+  it("collectTokens / buildSampleData 覆盖 band token", () => {
+    const withBands: BdTemplateV2 = {
+      ...TPL,
+      page: {
+        ...TPL.page,
+        header: { text: "{{orgName}}", align: "left", fontSize: 8.5 },
+        footer: { text: "编号 {{docNo}}", align: "right", fontSize: 8.5 },
+      },
+    }
+    const exprs = collectTokens(withBands).map((t) => t.expr)
+    expect(exprs).toContain("orgName")
+    const data = buildSampleData(withBands, {})
+    expect(data.orgName).toBe("orgName示例")
+  })
+
+  it("关联字段显示属性：{{handler.name}} 走对象子键（磐石解析 user/dept 为对象）", () => {
+    expect(
+      interpolate("经办：{{handler.name}}（{{handler.username}}）", { handler: { id: 5, name: "李文", username: "liwen" } }),
+    ).toBe("经办：李文（liwen）")
+    // 根 token 落对象 → formatValue 取 name
+    expect(interpolate("{{handler}}", { handler: { name: "李文" } })).toBe("李文")
+  })
+
+  it("v2 往返：header/footer/pageNumber.color 序列化不丢", () => {
+    const t: BdTemplateV2 = {
+      ...TPL,
+      page: {
+        ...TPL.page,
+        pageNumber: { ...TPL.page.pageNumber, color: "#000000" },
+        header: newPageBand("header"),
+        footer: { text: "自定义页脚", align: "left", fontSize: 10 },
+      },
+    }
+    expect(parseAnyTemplate(JSON.stringify(t))).toEqual(t)
   })
 })

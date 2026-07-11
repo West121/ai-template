@@ -7,7 +7,8 @@
  * 发文 CODE form 卡 / confirm 全状态（普通/危险/过期）/ 多轮上下文（「再按部门」）。
  */
 import { api, ApiError, NetworkError } from "@/lib/api"
-import type { AiCard, AiChatResponse, AiConfirmResponse, AiMessage, AiSession } from "./types"
+import type { AiAttachment, AiCard, AiChatResponse, AiConfirmResponse, AiMessage, AiModelOption, AiSession } from "./types"
+import { formatBytes } from "./attachments"
 
 export interface AiResult<T> {
   data: T
@@ -48,6 +49,14 @@ function mockSession(id: string | undefined): MockSession {
   return s
 }
 
+/* ============================ mock 模型列表（§11） ============================ */
+
+const MOCK_MODELS: AiModelOption[] = [
+  { credentialId: 1, name: "DeepSeek", model: "deepseek-chat", supportsVision: false },
+  { credentialId: 2, name: "GPT-4o", model: "gpt-4o", supportsVision: true },
+  { credentialId: 3, name: "GLM-4V", model: "glm-4v", supportsVision: true },
+]
+
 /* ============================ mock 应答脑（关键词驱动演示） ============================ */
 
 const LEAVE_SCHEMA = [
@@ -58,11 +67,42 @@ const LEAVE_SCHEMA = [
   { id: "w5", type: "textarea", label: "请假事由", key: "reason", required: true, width: "full" as const },
 ]
 
-function mockReply(text: string, session: MockSession): AiMessage {
+function mockReply(text: string, session: MockSession, opts?: ChatOpts): AiMessage {
   const t = text.toLowerCase()
   const has = (...kws: string[]) => kws.some((k) => text.includes(k) || t.includes(k))
   const cards: AiCard[] = []
   let content: string
+
+  // §11 多模态演示：带附件优先按附件应答
+  const atts = opts?.attachments ?? []
+  if (atts.length > 0) {
+    const model = MOCK_MODELS.find((m) => m.credentialId === opts?.credentialId) ?? MOCK_MODELS[0]
+    const images = atts.filter((a) => a.kind === "IMAGE")
+    const texts = atts.filter((a) => a.kind === "TEXT")
+    if (images.length > 0 && !model.supportsVision) {
+      // 后端真实路径为 400 明确文案；mock 以助手消息演示同一文案
+      return {
+        role: "ASSISTANT",
+        content:
+          `当前模型 **${model.name}（${model.model}）** 不支持图片理解。\n\n` +
+          "请在输入框上方的模型选择器切换到带 👁 徽标的视觉模型（如 GPT-4o / GLM-4V）后重新发送图片。",
+        createdAt: now(),
+      }
+    }
+    const parts: string[] = []
+    if (images.length > 0) {
+      parts.push(`收到 ${images.length} 张图片（${images.map((a) => a.name).join("、")}）。演示模式下没有真实视觉模型；接入后端后可识别票据、截图、表格照片等内容。`)
+    }
+    if (texts.length > 0) {
+      parts.push(
+        texts
+          .map((a) => `已读取文本文件《${a.name}》${a.size != null ? `（${formatBytes(a.size)}）` : ""}，内容将以引用块注入上下文（超 16k 字符截断）。`)
+          .join("\n"),
+      )
+    }
+    if (text.trim()) parts.push(`你的问题「${text}」我会结合附件内容回答——演示模式先回显附件解析结果。`)
+    return { role: "ASSISTANT", content: parts.join("\n\n"), createdAt: now() }
+  }
 
   if (has("待办", "todo", "要处理", "急")) {
     content = has("急")
@@ -208,7 +248,8 @@ function mockReply(text: string, session: MockSession): AiMessage {
       "3. 「本月审批量统计」→ 再问「再按部门分一下」— 图表卡 + 多轮上下文\n" +
       "4. 「我要请假」— 表单卡；「我要发文」— CODE 表单跳转\n" +
       "5. 「同意这条审批」/「驳回它」/「演示过期」— 确认卡全状态\n" +
-      "6. 「带我去审批中心」— 导航卡"
+      "6. 「带我去审批中心」— 导航卡\n" +
+      "7. 点回形针附图片/文本文件 — 多模态演示（DeepSeek 附图会提示切换视觉模型）"
   }
 
   return { role: "ASSISTANT", content, cards: cards.length ? cards : undefined, createdAt: now() }
@@ -216,20 +257,45 @@ function mockReply(text: string, session: MockSession): AiMessage {
 
 /* ============================ API ============================ */
 
+/** chat 可选项（§11）：模型切换（credentialId/model，存 session）+ 多模态附件 */
+export interface ChatOpts {
+  credentialId?: number
+  model?: string
+  attachments?: AiAttachment[]
+}
+
 /** 发消息（sessionId 空=新会话）。mock：0.6s 假延迟出打字态 */
-export function sendChat(sessionId: string | undefined, message: string): Promise<AiResult<AiChatResponse>> {
+export function sendChat(sessionId: string | undefined, message: string, opts?: ChatOpts): Promise<AiResult<AiChatResponse>> {
   return withMock(
-    () => api<AiChatResponse>("/api/ai/chat", { method: "POST", body: JSON.stringify({ sessionId, message }) }),
+    () =>
+      api<AiChatResponse>("/api/ai/chat", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId,
+          message,
+          credentialId: opts?.credentialId,
+          model: opts?.model,
+          attachments: opts?.attachments?.map((a) => ({ kind: a.kind, name: a.name, dataUrl: a.dataUrl, fileId: a.fileId })),
+        }),
+      }),
     async () => {
       await new Promise((r) => setTimeout(r, 600))
       const session = mockSession(sessionId)
-      if (session.messages.length === 0) session.title = message.slice(0, 20)
-      const userMsg: AiMessage = { role: "USER", content: message, createdAt: now() }
-      const reply = mockReply(message, session)
+      if (session.messages.length === 0) session.title = message.slice(0, 20) || "附件对话"
+      const userMsg: AiMessage = { role: "USER", content: message, attachments: opts?.attachments, createdAt: now() }
+      const reply = mockReply(message, session, opts)
       session.messages.push(userMsg, reply)
       session.updatedAt = now()
       return { sessionId: session.id, messages: [reply] }
     },
+  )
+}
+
+/** GET /api/ai/models：可选凭据列表（启用的 LLM 型，含 supportsVision） */
+export function fetchModels(): Promise<AiResult<AiModelOption[]>> {
+  return withMock(
+    () => api<AiModelOption[]>("/api/ai/models"),
+    () => [...MOCK_MODELS],
   )
 }
 

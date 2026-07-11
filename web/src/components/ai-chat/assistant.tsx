@@ -10,9 +10,10 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { Sparkles, X } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { ApiError } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
-import { deleteSession, fetchSessionMessages, fetchSessions, sendChat } from "./api"
-import type { AiMessage, AiSession } from "./types"
+import { deleteSession, fetchModels, fetchSessionMessages, fetchSessions, sendChat } from "./api"
+import type { AiAttachment, AiMessage, AiModelOption, AiSession } from "./types"
 
 const AssistantPanel = lazy(() => import("./assistant-panel"))
 
@@ -26,39 +27,72 @@ export function AiAssistant() {
   const [messages, setMessages] = useState<AiMessage[]>([])
   const [sessions, setSessions] = useState<AiSession[]>([])
   const [sending, setSending] = useState(false)
-  const [sendError, setSendError] = useState(false)
+  /** null=无错误；有值=失败文案（后端 400 明确文案友好呈现，如 视觉能力缺失） */
+  const [sendError, setSendError] = useState<string | null>(null)
   const [demo, setDemo] = useState(false)
-  const lastSentRef = useRef<string | null>(null)
+  const lastSentRef = useRef<{ text: string; attachments: AiAttachment[] } | null>(null)
   const fabRef = useRef<HTMLButtonElement>(null)
   const [focusSignal, setFocusSignal] = useState(0)
 
-  /* ---- 发送（重试复用：不新增用户气泡） ---- */
+  /* ---- §11 模型切换：可选凭据 + 当前选择（会话内记忆） ---- */
+  const [models, setModels] = useState<AiModelOption[]>([])
+  const [modelId, setModelId] = useState<number | null>(null)
+  const modelBySessionRef = useRef(new Map<string, number | null>())
+  const modelsLoadedRef = useRef(false)
+
+  useEffect(() => {
+    if (!open || offline || modelsLoadedRef.current) return
+    modelsLoadedRef.current = true
+    void fetchModels()
+      .then((res) => setModels(res.data))
+      .catch(() => setModels([]))
+  }, [open, offline])
+
+  const changeModel = useCallback(
+    (id: number | null) => {
+      setModelId(id)
+      if (sessionId) modelBySessionRef.current.set(sessionId, id)
+    },
+    [sessionId],
+  )
+
+  /* ---- 发送（重试复用：不新增用户气泡；随消息带 credentialId/model/attachments） ---- */
   const doSend = useCallback(
-    async (text: string, isRetry: boolean) => {
+    async (text: string, attachments: AiAttachment[], isRetry: boolean) => {
       setSending(true)
-      setSendError(false)
+      setSendError(null)
       if (!isRetry) {
-        setMessages((prev) => [...prev, { role: "USER", content: text, createdAt: new Date().toISOString() }])
+        setMessages((prev) => [
+          ...prev,
+          { role: "USER", content: text, attachments: attachments.length ? attachments : undefined, createdAt: new Date().toISOString() },
+        ])
       }
-      lastSentRef.current = text
+      lastSentRef.current = { text, attachments }
       try {
-        const res = await sendChat(sessionId, text)
+        const selected = models.find((m) => m.credentialId === modelId)
+        const res = await sendChat(sessionId, text, {
+          credentialId: selected?.credentialId,
+          model: selected?.model,
+          attachments: attachments.length ? attachments : undefined,
+        })
         setDemo(res.demo)
         setSessionId(res.data.sessionId)
-        if (!sessionTitle) setSessionTitle(text.slice(0, 20))
+        modelBySessionRef.current.set(res.data.sessionId, modelId)
+        if (!sessionTitle) setSessionTitle(text.slice(0, 20) || "附件对话")
         setMessages((prev) => [...prev, ...res.data.messages])
-      } catch {
-        setSendError(true)
+      } catch (err) {
+        // 400（如所选模型不支持图片）按后端明确文案呈现；其余通用文案
+        setSendError(err instanceof ApiError && err.code === 400 && err.message ? err.message : "")
       } finally {
         setSending(false)
       }
     },
-    [sessionId, sessionTitle],
+    [sessionId, sessionTitle, models, modelId],
   )
 
-  const handleSend = useCallback((text: string) => void doSend(text, false), [doSend])
+  const handleSend = useCallback((text: string, attachments: AiAttachment[]) => void doSend(text, attachments, false), [doSend])
   const handleRetry = useCallback(() => {
-    if (lastSentRef.current) void doSend(lastSentRef.current, true)
+    if (lastSentRef.current) void doSend(lastSentRef.current.text, lastSentRef.current.attachments, true)
   }, [doSend])
 
   /* ---- 会话管理 ---- */
@@ -66,7 +100,7 @@ export function AiAssistant() {
     setSessionId(undefined)
     setSessionTitle(null)
     setMessages([])
-    setSendError(false)
+    setSendError(null)
     setView("chat")
     setFocusSignal((n) => n + 1)
   }, [])
@@ -87,6 +121,9 @@ export function AiAssistant() {
       setSessionId(id)
       setMessages(res.data)
       setSessionTitle(null)
+      setSendError(null)
+      // 会话级模型记忆：切回会话恢复其选择
+      setModelId(modelBySessionRef.current.get(id) ?? null)
       setView("chat")
       setFocusSignal((n) => n + 1)
     } catch {
@@ -168,6 +205,9 @@ export function AiAssistant() {
             activeSessionId={sessionId}
             sending={sending}
             sendError={sendError}
+            models={models}
+            modelId={modelId}
+            onModelChange={changeModel}
             focusSignal={focusSignal}
             onSend={handleSend}
             onRetry={handleRetry}

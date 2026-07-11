@@ -23,6 +23,7 @@ const BizdocCenterPage = lazy(() => import("@/pages/bizdoc/center"))
 const BizdocDefsPage = lazy(() => import("@/pages/bizdoc/defs"))
 const BizdocRunPage = lazy(() => import("@/pages/bizdoc/run"))
 const BizdocTplDesignerPage = lazy(() => import("@/pages/bizdoc/tpl-designer"))
+const BizdocTplsPage = lazy(() => import("@/pages/bizdoc/tpls-page"))
 const AutomationDesignerPage = lazy(() => import("@/pages/automation/designer-page"))
 const DocumentReceivePage = lazy(() => import("@/pages/document/receive"))
 const DocumentReceiveDetailPage = lazy(() => import("@/pages/document/receive-detail"))
@@ -138,6 +139,9 @@ export default function App() {
               <Route path="center" element={<BizdocCenterPage />} />
               <Route path="defs" element={<BizdocDefsPage />} />
               <Route path="run/:defCode" element={<BizdocRunPage />} />
+              <Route path="tpls" element={<BizdocTplsPage />} />
+              {/* §11 独立模板（静态段 t 优先匹配，与定义绑定路由并存） */}
+              <Route path="tpl/t/:tplId" element={<BizdocTplDesignerPage />} />
               <Route path="tpl/:defCode/:tplId" element={<BizdocTplDesignerPage />} />
             </Route>
             <Route path="automation">

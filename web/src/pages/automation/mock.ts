@@ -80,6 +80,8 @@ export interface OrchCredential {
   baseUrl?: string
   /** LLM 默认模型 */
   model?: string
+  /** LLM：支持视觉（图片理解；AI 助手多模态能力检测用，ai-assistant §11） */
+  supportsVision?: boolean
   /** 是否已配置密钥（key 只写不回显） */
   hasKey?: boolean
 }
@@ -243,9 +245,10 @@ const EXECS: OrchExec[] = [
 ]
 
 const CREDENTIALS: OrchCredential[] = [
-  { id: 1, name: "DeepSeek 生产", type: "LLM", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", hasKey: true },
+  { id: 1, name: "DeepSeek 生产", type: "LLM", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", supportsVision: false, hasKey: true },
   { id: 2, name: "内部网关 Bearer", type: "HTTP_BEARER", baseUrl: "https://oa.internal", hasKey: true },
   { id: 3, name: "报表库（只读）", type: "JDBC", baseUrl: "jdbc:postgresql://report-db:5432/report", hasKey: true },
+  { id: 4, name: "GPT-4o 视觉", type: "LLM", baseUrl: "https://api.openai.com/v1", model: "gpt-4o", supportsVision: true, hasKey: true },
 ]
 
 /** 发布版本快照（§9.5 mock：flow 1 三个版本） */
@@ -533,6 +536,8 @@ export interface SaveCredentialPayload {
   type: CredentialType
   baseUrl?: string
   model?: string
+  /** LLM：支持视觉（ai-assistant §11） */
+  supportsVision?: boolean
   /** 只写不回显；留空=不修改 */
   apiKey?: string
 }
@@ -551,6 +556,7 @@ export function saveCredential(payload: SaveCredentialPayload): Promise<OrchResu
           type: payload.type,
           baseUrl: payload.baseUrl,
           model: payload.model,
+          supportsVision: payload.supportsVision,
           hasKey: existing.hasKey || !!payload.apiKey,
         })
         return { ...existing }
@@ -561,6 +567,7 @@ export function saveCredential(payload: SaveCredentialPayload): Promise<OrchResu
         type: payload.type,
         baseUrl: payload.baseUrl,
         model: payload.model,
+        supportsVision: payload.supportsVision,
         hasKey: !!payload.apiKey,
       }
       CREDENTIALS.push(cred)

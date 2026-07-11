@@ -11,6 +11,24 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 export interface FieldOption {
   key: string
   label: string
+  /** widget/字段类型（user/dept 等关联类字段展开「显示属性」） */
+  type?: string
+}
+
+/**
+ * 关联类字段的「显示属性」（对齐参考编辑器：绑定时可选对象子键）。
+ * 磐石在打印数据里把 user/dept 等值解析为 {id,name,...} 对象，token 走点路径取子键。
+ */
+const DISPLAY_ATTRS: Record<string, { sub: string; label: string }[]> = {
+  user: [
+    { sub: "name", label: "名称" },
+    { sub: "username", label: "账号" },
+  ],
+  dept: [{ sub: "name", label: "名称" }],
+  relation: [
+    { sub: "name", label: "名称" },
+    { sub: "id", label: "ID" },
+  ],
 }
 
 const SYS_FIELD_OPTIONS_V2: FieldOption[] = [
@@ -78,19 +96,38 @@ export function FieldPicker({
         <div className="mt-2 max-h-56 space-y-0.5 overflow-y-auto">
           {tab === "form" &&
             (fields.length === 0 ? (
-              <p className="px-1 py-2 text-xs text-muted-foreground">暂无表单字段（先在定义里绑定表单）</p>
+              <p className="px-1 py-2 text-xs text-muted-foreground">暂无表单字段（先在定义里设计字段）</p>
             ) : (
-              fields.map((f) => (
-                <button
-                  key={f.key}
-                  type="button"
-                  className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs hover:bg-accent"
-                  onClick={() => pick(f.key)}
-                >
-                  <span>{f.label}</span>
-                  <span className="font-mono text-[10px] text-muted-foreground">{f.key}</span>
-                </button>
-              ))
+              fields.map((f) => {
+                const attrs = f.type ? DISPLAY_ATTRS[f.type] : undefined
+                return (
+                  <div key={f.key}>
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs hover:bg-accent"
+                      onClick={() => pick(f.key)}
+                    >
+                      <span>{f.label}</span>
+                      <span className="font-mono text-[10px] text-muted-foreground">{f.key}</span>
+                    </button>
+                    {attrs && (
+                      <div className="mb-0.5 ml-3 flex flex-wrap gap-1 border-l pl-2">
+                        {attrs.map((a) => (
+                          <button
+                            key={a.sub}
+                            type="button"
+                            title={`{{${f.key}.${a.sub}}}`}
+                            className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-primary/40 hover:text-primary"
+                            onClick={() => pick(`${f.key}.${a.sub}`)}
+                          >
+                            {a.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })
             ))}
           {tab === "sys" &&
             SYS_FIELD_OPTIONS_V2.map((f) => (

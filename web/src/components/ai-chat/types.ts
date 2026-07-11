@@ -79,6 +79,27 @@ export type AiCard =
   | AiChartCard
   | AiLinkCard
 
+/* ============================ 附件 / 模型（§11 增强批） ============================ */
+
+/** 多模态附件：小图/文本直接 dataURL（或走 /api/infra/files 得 fileId，磐石定） */
+export interface AiAttachment {
+  kind: "IMAGE" | "TEXT"
+  name: string
+  dataUrl?: string
+  fileId?: number
+  /** 字节数（chip 展示） */
+  size?: number
+}
+
+/** GET /api/ai/models 可选凭据（启用的 LLM 型） */
+export interface AiModelOption {
+  credentialId: number
+  name: string
+  model: string
+  /** 支持视觉（图片理解）；选择器加 👁 徽标 */
+  supportsVision?: boolean
+}
+
 /* ============================ 消息 / 会话 ============================ */
 
 export interface AiMessage {
@@ -86,6 +107,8 @@ export interface AiMessage {
   /** 助手消息为 markdown；用户消息按纯文本渲染（不套 .ai-md，防注入+反白） */
   content: string
   cards?: AiCard[]
+  /** 随消息附带的附件（用户气泡回显） */
+  attachments?: AiAttachment[]
   createdAt?: string
 }
 

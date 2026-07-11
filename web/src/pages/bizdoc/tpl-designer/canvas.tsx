@@ -4,14 +4,15 @@
  * 行容器分栏为嵌套放置区（row 不允许再嵌 row）。渲染体复用 V2BlockBody（同源红线）。
  */
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react"
-import { Copy, GripVertical, Trash2 } from "lucide-react"
-import { V2BlockBody } from "@/components/bizdoc/paper-renderer"
+import { ChevronDown, ChevronUp, Copy, GripVertical, Trash2, X } from "lucide-react"
+import { PageBandRow, V2BlockBody } from "@/components/bizdoc/paper-renderer"
 import type { BdRenderCtx } from "@/components/bizdoc/model"
 import {
   BD_FONT_STACKS,
+  FOOTER_ID,
+  HEADER_ID,
   cloneBlock,
   findBlock,
-  formatPageNo,
   insertBlock,
   moveBlock,
   newBlock,
@@ -19,6 +20,7 @@ import {
   removeBlock,
   type BdBlock,
   type BdBlockType,
+  type BdPageV2,
   type BdTemplateV2,
 } from "@/components/bizdoc/model-v2"
 import { BLOCK_META, DND_MOVE, DND_NEW } from "./meta"
@@ -37,28 +39,34 @@ export interface CanvasProps {
   onSelect: (id: string | null) => void
   /** 结构变化（插入/移动/复制/删除/行内编辑）→ 提交历史 */
   onBlocks: (blocks: BdBlock[]) => void
+  /** 页面级补丁（页眉/页脚删除等） */
+  onPatchPage: (p: Partial<BdPageV2>) => void
 }
 
 const sameAt = (a: DropAt | null, b: DropAt) => a != null && a.parent === b.parent && a.col === b.col && a.index === b.index
 
-export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks }: CanvasProps) {
+export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks, onPatchPage }: CanvasProps) {
   const size = pageSizeMm(tpl.page)
   const [mt, mr, mb, ml] = tpl.page.margin
   const [indicator, setIndicator] = useState<DropAt | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
 
-  // 删除选中块：Delete 键
+  // 删除选中块/页眉/页脚：Delete 键
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Delete" || !selectedId) return
       const target = e.target as HTMLElement
       if (target.closest("input,textarea,[contenteditable]")) return
-      onBlocks(removeBlock(tpl.blocks, selectedId))
+      if (selectedId === HEADER_ID || selectedId === FOOTER_ID) {
+        onPatchPage(selectedId === HEADER_ID ? { header: null } : { footer: null })
+      } else {
+        onBlocks(removeBlock(tpl.blocks, selectedId))
+      }
       onSelect(null)
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [selectedId, tpl.blocks, onBlocks, onSelect])
+  }, [selectedId, tpl.blocks, onBlocks, onSelect, onPatchPage])
 
   const handleDrop = (e: DragEvent, at: DropAt) => {
     e.preventDefault()
@@ -141,7 +149,7 @@ export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks }: Can
 
   /* -------- 块外壳 + 容器列表 -------- */
 
-  const BlockShell = ({ block, at }: { block: BdBlock; at: DropAt }) => {
+  const BlockShell = ({ block, at, count }: { block: BdBlock; at: DropAt; count: number }) => {
     const selected = selectedId === block.id
     const editing = editingId === block.id
     const editable = block.type === "title" || block.type === "text" || block.type === "labelField"
@@ -183,6 +191,32 @@ export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks }: Can
             className="bd-shell-btn cursor-grab active:cursor-grabbing"
           >
             <GripVertical className="size-3" />
+          </button>
+          <button
+            type="button"
+            title="上移"
+            className="bd-shell-btn disabled:opacity-30"
+            disabled={at.index === 0}
+            onClick={(e) => {
+              e.stopPropagation()
+              const next = moveBlock(tpl.blocks, block.id, { ...at, index: at.index - 1 })
+              if (next !== tpl.blocks) onBlocks(next)
+            }}
+          >
+            <ChevronUp className="size-3" />
+          </button>
+          <button
+            type="button"
+            title="下移"
+            className="bd-shell-btn disabled:opacity-30"
+            disabled={at.index >= count - 1}
+            onClick={(e) => {
+              e.stopPropagation()
+              const next = moveBlock(tpl.blocks, block.id, { ...at, index: at.index + 2 })
+              if (next !== tpl.blocks) onBlocks(next)
+            }}
+          >
+            <ChevronDown className="size-3" />
           </button>
           <button
             type="button"
@@ -237,7 +271,7 @@ export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks }: Can
       {blocks.map((b, i) => (
         <div key={b.id} className="relative">
           {sameAt(indicator, { parent, col, index: i }) && <div className="bd-drop-line" />}
-          <BlockShell block={b} at={{ parent, col, index: i }} />
+          <BlockShell block={b} at={{ parent, col, index: i }} count={blocks.length} />
         </div>
       ))}
       {sameAt(indicator, { parent, col, index: blocks.length }) && <div className="bd-drop-line" />}
@@ -247,7 +281,37 @@ export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks }: Can
     </div>
   )
 
-  const pn = tpl.page.pageNumber
+  /** 页眉/页脚 band 的选中壳（点击选中，右上 X 删除） */
+  const bandShell = (which: "header" | "footer") => (node: ReactNode) => {
+    const id = which === "header" ? HEADER_ID : FOOTER_ID
+    const selected = selectedId === id
+    return (
+      <div
+        className={`bd-shell group/band relative inline-block w-full ${selected ? "bd-shell--selected" : ""}`}
+        onClick={(e) => {
+          e.stopPropagation()
+          onSelect(id)
+        }}
+      >
+        <div className="bd-shell-tools opacity-0 transition-opacity group-hover/band:opacity-100">
+          <span className="bd-shell-name">{which === "header" ? "文档页眉" : "文档页脚"}</span>
+          <button
+            type="button"
+            title="删除"
+            className="bd-shell-btn hover:!text-red-600"
+            onClick={(e) => {
+              e.stopPropagation()
+              onPatchPage(which === "header" ? { header: null } : { footer: null })
+              if (selected) onSelect(null)
+            }}
+          >
+            <X className="size-3" />
+          </button>
+        </div>
+        {node}
+      </div>
+    )
+  }
 
   return (
     <div
@@ -270,12 +334,9 @@ export function DesignerCanvas({ tpl, ctx, selectedId, onSelect, onBlocks }: Can
         style={{ top: `${mt}mm`, right: `${mr}mm`, bottom: `${mb}mm`, left: `${ml}mm` }}
         aria-hidden
       />
+      <PageBandRow page={tpl.page} edge="header" ctx={ctx} mode="design" wrapBand={bandShell("header")} />
       <BlockList blocks={tpl.blocks} parent={null} col={0} />
-      {pn.show && (
-        <div className="bd-pageno" style={{ textAlign: pn.align, fontSize: `${pn.fontSize}pt`, color: "#9ca3af" }}>
-          {formatPageNo(pn.format, 1, 1)}
-        </div>
-      )}
+      <PageBandRow page={tpl.page} edge="footer" ctx={ctx} mode="design" wrapBand={bandShell("footer")} />
     </div>
   )
 }

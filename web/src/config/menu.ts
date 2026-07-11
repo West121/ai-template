@@ -44,6 +44,7 @@ import {
   FileSpreadsheet,
   Files,
   FileCog,
+  LayoutTemplate,
 } from "lucide-react"
 
 export interface MenuItem {
@@ -82,6 +83,7 @@ export const menuTree: MenuItem[] = [
     children: [
       { title: "单据中心", path: "/bizdoc/center", icon: Files },
       { title: "单据定义", path: "/bizdoc/defs", icon: FileCog },
+      { title: "单据模板", path: "/bizdoc/tpls", icon: LayoutTemplate },
     ],
   },
   {

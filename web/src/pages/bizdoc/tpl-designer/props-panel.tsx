@@ -1,6 +1,7 @@
 /**
- * 属性面板（§9.2 右栏）：未选中块 = 页面设置（大小/方向/边距/字体/页码）；
- * 选中块 = 该块属性（全 13 类）。文本输入失焦提交（一次编辑一步撤销），开关/下拉即时提交。
+ * 属性面板（§9.2 右栏）：未选中块 = 页面设置（大小/方向/边距/字体/页码含颜色）；
+ * 选中块 = 该块属性（全 13 类）；选中页眉/页脚 = BandPanel。
+ * 文本输入失焦提交（一次编辑一步撤销），开关/下拉即时提交。
  */
 import { useEffect, useRef, useState } from "react"
 import { Plus, Trash2, Upload } from "lucide-react"
@@ -10,9 +11,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import {
+  PAGENO_DEFAULT_COLOR,
   type BdBlock,
   type BdBlockStyle,
   type BdFontName,
+  type BdPageBand,
   type BdPageSize,
   type BdPageV2,
 } from "@/components/bizdoc/model-v2"
@@ -106,6 +109,33 @@ function AlignSelect({ value, onChange }: { value: "left" | "center" | "right"; 
   )
 }
 
+/** 色板：预设 + 自定义取色（页码颜色等） */
+const COLOR_PRESETS = [PAGENO_DEFAULT_COLOR, "#6b7280", "#000000", "#1d4ed8", "#b91c1c"]
+
+function ColorSwatches({ value, onChange }: { value: string; onChange: (c: string) => void }) {
+  return (
+    <div className="flex items-center gap-1">
+      {COLOR_PRESETS.map((c) => (
+        <button
+          key={c}
+          type="button"
+          title={c}
+          onClick={() => onChange(c)}
+          className={`size-5 rounded-full border ${value.toLowerCase() === c ? "ring-2 ring-primary ring-offset-1 ring-offset-background" : ""}`}
+          style={{ background: c }}
+        />
+      ))}
+      <input
+        type="color"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        title="自定义颜色"
+        className="size-5 cursor-pointer rounded border bg-transparent p-0"
+      />
+    </div>
+  )
+}
+
 /* -------- 页面设置 -------- */
 
 export function PagePanel({ page, onPatch }: { page: BdPageV2; onPatch: (p: Partial<BdPageV2>) => void }) {
@@ -187,9 +217,52 @@ export function PagePanel({ page, onPatch }: { page: BdPageV2; onPatch: (p: Part
           <Row label="字号">
             <CommitNumber value={page.pageNumber.fontSize} min={6} max={16} step={0.5} suffix="pt" onCommit={(v) => patchPn({ fontSize: v })} />
           </Row>
+          <Row label="颜色">
+            <ColorSwatches value={page.pageNumber.color ?? PAGENO_DEFAULT_COLOR} onChange={(c) => patchPn({ color: c })} />
+          </Row>
           <p className="text-[10px] leading-snug text-muted-foreground">屏幕预览按单页显示；打印按实际页数由浏览器生成（{"{page}"}/{"{total}"} 占位）。</p>
         </>
       )}
+    </div>
+  )
+}
+
+/* -------- 页眉/页脚属性 -------- */
+
+export function BandPanel({
+  which,
+  band,
+  fields,
+  onChange,
+  onRemove,
+}: {
+  which: "header" | "footer"
+  band: BdPageBand
+  fields: FieldOption[]
+  onChange: (b: BdPageBand) => void
+  onRemove: () => void
+}) {
+  return (
+    <div className="space-y-3 p-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xs font-semibold">{which === "header" ? "文档页眉" : "文档页脚"} 属性</h3>
+        <Button variant="ghost" size="sm" className="h-6 gap-1 px-1.5 text-[11px] text-muted-foreground hover:text-red-600" onClick={onRemove}>
+          <Trash2 className="size-3" /> 移除
+        </Button>
+      </div>
+      <div className="space-y-1.5">
+        <Label className="text-[11px] text-muted-foreground">内容（单行，支持 {"{{字段}}"} 插值）</Label>
+        <TokenInput value={band.text} onCommit={(v) => onChange({ ...band, text: v })} fields={fields} />
+      </div>
+      <Row label="对齐">
+        <AlignSelect value={band.align} onChange={(v) => onChange({ ...band, align: v })} />
+      </Row>
+      <Row label="字号">
+        <CommitNumber value={band.fontSize} min={6} max={16} step={0.5} suffix="pt" onCommit={(v) => onChange({ ...band, fontSize: v })} />
+      </Row>
+      <p className="text-[10px] leading-snug text-muted-foreground">
+        每页{which === "header" ? "顶部" : "底部"}固定；打印经 @page 边距区输出，与页码同侧时按对齐槽并排。
+      </p>
     </div>
   )
 }

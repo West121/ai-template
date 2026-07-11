@@ -1,16 +1,21 @@
 /**
  * 对话视图：消息流（气泡 + 卡片平铺 + 打字三点 + 错误重试 + 欢迎态 + 自动滚底）+ 输入区。
  * 丹青 §1.2/§1.3/§2：md 仅助手消息（mdToHtml→sanitizeHtml→.ai-md 作用域）；用户消息纯文本。
+ * §11 增强：输入区上方模型选择器（👁 视觉徽标）+ 附件按钮（图片/文本，就地校验与预览，
+ * 所选模型不支持视觉时附图就地提示引导切换）；用户气泡回显附件。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
-import { AlertTriangle, ArrowDown, ArrowUp, CloudOff, Loader2, RotateCw, Sparkles } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react"
+import { AlertTriangle, ArrowDown, ArrowUp, CloudOff, Eye, FileText, Loader2, Paperclip, RotateCw, Sparkles, X } from "lucide-react"
+import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { sanitizeHtml } from "@/lib/sanitize"
 import { Button } from "@/components/ui/button"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { mdToHtml } from "./markdown"
 import { CardRouter } from "./cards/card-router"
 import { LinkCard } from "./cards/simple-cards"
-import type { AiMessage } from "./types"
+import { MAX_ATTACHMENTS, checkAttachmentFile, formatBytes, needsVisionWarning } from "./attachments"
+import type { AiAttachment, AiMessage, AiModelOption } from "./types"
 
 function formatTime(iso?: string): string {
   return iso ? iso.slice(11, 16) : ""
@@ -28,12 +33,49 @@ function AssistantMarkdown({ content }: { content: string }) {
   )
 }
 
+/** 附件回显（用户气泡内 / 输入区预览通用视觉）：图片缩略图 + 文本 chip */
+function AttachmentStrip({ items, onRemove }: { items: AiAttachment[]; onRemove?: (index: number) => void }) {
+  if (items.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {items.map((a, i) => (
+        <div key={i} className="group/att relative">
+          {a.kind === "IMAGE" && a.dataUrl ? (
+            <img src={a.dataUrl} alt={a.name} title={a.name} className="size-14 rounded-lg border object-cover" />
+          ) : (
+            <span className="flex max-w-44 items-center gap-1.5 rounded-lg border bg-card px-2 py-1.5 text-xs">
+              <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 truncate">{a.name}</span>
+              {a.size != null && <span className="shrink-0 text-[10px] text-muted-foreground">{formatBytes(a.size)}</span>}
+            </span>
+          )}
+          {onRemove && (
+            <button
+              type="button"
+              aria-label={`移除附件 ${a.name}`}
+              onClick={() => onRemove(i)}
+              className="absolute -right-1.5 -top-1.5 flex size-4 items-center justify-center rounded-full bg-foreground text-background opacity-0 transition-opacity group-hover/att:opacity-100"
+            >
+              <X className="size-2.5" />
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function MessageRow({ message }: { message: AiMessage }) {
   if (message.role === "USER") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] min-w-0 whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-primary px-3.5 py-2.5 text-sm text-primary-foreground">
-          {message.content}
+        <div className="flex max-w-[85%] min-w-0 flex-col items-end gap-1.5">
+          {message.attachments && message.attachments.length > 0 && <AttachmentStrip items={message.attachments} />}
+          {message.content && (
+            <div className="min-w-0 whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-primary px-3.5 py-2.5 text-sm text-primary-foreground">
+              {message.content}
+            </div>
+          )}
         </div>
       </div>
     )
@@ -104,23 +146,42 @@ function Welcome({ onPick }: { onPick: (text: string) => void }) {
   )
 }
 
+/** 文件 → dataURL */
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(new Error("读取文件失败"))
+    reader.readAsDataURL(file)
+  })
+}
+
 export interface ChatViewProps {
   messages: AiMessage[]
   sending: boolean
-  /** 上次发送失败（展示错误条 + 重试） */
-  sendError: boolean
+  /** 上次发送失败文案（null=无错误；后端 400 明确文案友好呈现） */
+  sendError: string | null
   offline: boolean
-  onSend: (text: string) => void
+  /** §11 模型切换：可选凭据列表 + 当前选择（null=默认凭据） */
+  models: AiModelOption[]
+  modelId: number | null
+  onModelChange: (id: number | null) => void
+  onSend: (text: string, attachments: AiAttachment[]) => void
   onRetry: () => void
   /** 面板打开时聚焦输入框 */
   focusSignal: number
 }
 
-export function ChatView({ messages, sending, sendError, offline, onSend, onRetry, focusSignal }: ChatViewProps) {
+export function ChatView({ messages, sending, sendError, offline, models, modelId, onModelChange, onSend, onRetry, focusSignal }: ChatViewProps) {
   const [value, setValue] = useState("")
+  const [pending, setPending] = useState<AiAttachment[]>([])
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
   const [stickBottom, setStickBottom] = useState(true)
+
+  const selectedModel = models.find((m) => m.credentialId === modelId) ?? null
+  const visionWarn = needsVisionWarning(pending, selectedModel)
 
   // 打开面板 ~300ms（动画后）聚焦输入框（丹青 §5.1）
   useEffect(() => {
@@ -143,11 +204,40 @@ export function ChatView({ messages, sending, sendError, offline, onSend, onRetr
     setStickBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 48)
   }, [])
 
+  /* ---- 附件选择：就地校验（类型/大小/数量）→ dataURL → 预览 ---- */
+  const onPickFiles = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = [...(e.target.files ?? [])]
+    e.target.value = ""
+    let count = pending.length
+    for (const file of files) {
+      if (count >= MAX_ATTACHMENTS) {
+        toast.warning(`一条消息最多 ${MAX_ATTACHMENTS} 个附件`)
+        break
+      }
+      const check = checkAttachmentFile(file.name, file.type, file.size)
+      if (!check.ok) {
+        toast.error(check.reason)
+        continue
+      }
+      try {
+        const dataUrl = await readAsDataUrl(file)
+        count += 1
+        setPending((prev) =>
+          prev.length >= MAX_ATTACHMENTS ? prev : [...prev, { kind: check.kind, name: file.name, dataUrl, size: file.size }],
+        )
+      } catch {
+        toast.error(`读取「${file.name}」失败`)
+      }
+    }
+  }
+
   const send = () => {
     const text = value.trim()
-    if (!text || sending || offline) return
+    if ((!text && pending.length === 0) || sending || offline) return
     setValue("")
-    onSend(text)
+    const atts = pending
+    setPending([])
+    onSend(text, atts)
     setStickBottom(true)
   }
 
@@ -174,18 +264,18 @@ export function ChatView({ messages, sending, sendError, offline, onSend, onRetr
             智能助手需要连接后端服务，当前处于离线演示模式，暂不可用。
           </div>
         ) : messages.length === 0 && !sending ? (
-          <Welcome onPick={(t) => onSend(t)} />
+          <Welcome onPick={(t) => onSend(t, [])} />
         ) : (
           <>
             {messages.map((m, i) => (
               <MessageRow key={i} message={m} />
             ))}
             {sending && <TypingIndicator />}
-            {sendError && (
+            {sendError != null && (
               <div className="flex w-fit max-w-[85%] flex-col gap-2 rounded-2xl rounded-bl-md border border-destructive/40 bg-destructive/5 px-3.5 py-2.5">
                 <div className="flex items-center gap-2 text-sm text-destructive">
                   <AlertTriangle className="size-4 shrink-0" />
-                  <span>回复失败，请稍后重试</span>
+                  <span className="min-w-0 break-words">{sendError || "回复失败，请稍后重试"}</span>
                 </div>
                 <Button variant="outline" size="sm" className="h-7 w-fit gap-1.5 text-xs" onClick={onRetry}>
                   <RotateCw className="size-3.5" /> 重试
@@ -214,13 +304,69 @@ export function ChatView({ messages, sending, sendError, offline, onSend, onRetr
       )}
 
       {/* 输入区 */}
-      <div className="shrink-0 border-t p-3">
+      <div className="shrink-0 space-y-2 border-t p-3">
+        {/* §11 模型选择器（会话内记忆；👁=支持视觉） */}
+        {!offline && models.length > 0 && (
+          <div className="flex items-center gap-2">
+            <Select value={modelId != null ? String(modelId) : "default"} onValueChange={(v) => onModelChange(v === "default" ? null : Number(v))}>
+              <SelectTrigger size="sm" className="h-7 w-fit gap-1.5 border-dashed text-xs text-muted-foreground">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">默认模型</SelectItem>
+                {models.map((m) => (
+                  <SelectItem key={m.credentialId} value={String(m.credentialId)}>
+                    <span className="flex items-center gap-1.5">
+                      {m.name} · {m.model}
+                      {m.supportsVision && <Eye className="size-3 text-emerald-500" aria-label="支持视觉" />}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {selectedModel?.supportsVision && (
+              <span className="flex items-center gap-1 text-[10px] text-emerald-600">
+                <Eye className="size-3" /> 支持图片理解
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* 附件预览 + 视觉能力提示 */}
+        {pending.length > 0 && (
+          <AttachmentStrip items={pending} onRemove={(i) => setPending((prev) => prev.filter((_, x) => x !== i))} />
+        )}
+        {visionWarn && (
+          <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-xs text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="size-3.5 shrink-0" />
+            当前模型不支持图片，请在上方切换支持视觉（👁）的模型后再发送。
+          </div>
+        )}
+
         <div
           className={cn(
             "flex items-end gap-2 rounded-xl border bg-background px-3 py-2",
             "focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
           )}
         >
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            accept="image/png,image/jpeg,image/webp,.txt,.md,.csv,.json,.log,.pdf,.doc,.docx"
+            className="hidden"
+            onChange={(e) => void onPickFiles(e)}
+          />
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0 text-muted-foreground"
+            aria-label="添加附件（图片/文本文件）"
+            disabled={offline || sending}
+            onClick={() => fileRef.current?.click()}
+          >
+            <Paperclip className="size-4" />
+          </Button>
           <textarea
             ref={inputRef}
             rows={1}
@@ -234,7 +380,7 @@ export function ChatView({ messages, sending, sendError, offline, onSend, onRetr
             onKeyDown={onKeyDown}
             className="max-h-32 min-h-6 flex-1 resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground disabled:opacity-60"
           />
-          <Button size="icon-sm" disabled={!value.trim() || sending || offline} aria-label="发送" onClick={send}>
+          <Button size="icon-sm" disabled={(!value.trim() && pending.length === 0) || sending || offline} aria-label="发送" onClick={send}>
             {sending ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
           </Button>
         </div>

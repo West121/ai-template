@@ -148,6 +148,24 @@ th.bd-tbl-label {
   color: #000;
 }
 
+/* 页眉/页脚行：3 对齐槽并排（band 与页码同区协调）；打印本行隐藏、走 @page margin box */
+.bd-band-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 2mm;
+  align-items: end;
+  color: #000;
+  margin-bottom: 2mm;
+}
+.bd-band-row--footer {
+  margin-top: auto;
+  margin-bottom: 0;
+  padding-top: 2mm;
+}
+.bd-band-slot {
+  min-width: 0;
+}
+
 /* 字段 token 蓝 chip（设计态专属；打印/最终态不会渲染 chip） */
 .bd-chip {
   display: inline-block;

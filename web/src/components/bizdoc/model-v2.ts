@@ -6,7 +6,7 @@
  * v1（自由定位）保留兼容读取（schemaVersion 判别），新建默认 v2。
  * 本文件纯逻辑（无 React），供 paper-renderer / 套打设计器 / 单测共用。
  */
-import { getByPath, type BdRenderCtx, type BdTemplate } from "./model"
+import { getByPath, interpolate, type BdRenderCtx, type BdTemplate } from "./model"
 
 /* ============================ 页面设置 ============================ */
 
@@ -20,9 +20,19 @@ export interface BdPageNumber {
   format: string
   /** pt */
   fontSize: number
+  /** CSS 颜色；缺省 muted 灰 #9ca3af */
+  color?: string
 }
 
 export type BdFontName = "宋体" | "黑体" | "仿宋" | "楷体"
+
+/** 文档页眉/页脚（单行富内容：文本 + `{{token}}` + 对齐；每页固定，打印走 @page margin box） */
+export interface BdPageBand {
+  text: string
+  align: "left" | "center" | "right"
+  /** pt，缺省 9 */
+  fontSize: number
+}
 
 export interface BdPageV2 {
   size: BdPageSize
@@ -31,6 +41,18 @@ export interface BdPageV2 {
   margin: [number, number, number, number]
   fontFamily: BdFontName
   pageNumber: BdPageNumber
+  /** 文档页眉（每页顶部固定） */
+  header?: BdPageBand | null
+  /** 文档页脚（每页底部固定；与页码同在页脚时按对齐槽并排） */
+  footer?: BdPageBand | null
+}
+
+/** 页码缺省色（muted 灰） */
+export const PAGENO_DEFAULT_COLOR = "#9ca3af"
+
+/** 新页眉/页脚缺省值 */
+export function newPageBand(which: "header" | "footer"): BdPageBand {
+  return { text: which === "header" ? "文档页眉" : "文档页脚", align: "center", fontSize: 9 }
 }
 
 /* ============================ 块契约 ============================ */
@@ -394,9 +416,15 @@ function tokensIn(text: string): string[] {
   return out
 }
 
-/** 收集模板全部插值表达式（含块内所有 value/content/text） */
+/** 页眉/页脚在选中态与 token 归属上的哨兵 id */
+export const HEADER_ID = "__header__"
+export const FOOTER_ID = "__footer__"
+
+/** 收集模板全部插值表达式（含块内所有 value/content/text + 页眉/页脚 band） */
 export function collectTokens(tpl: BdTemplateV2): { blockId: string; expr: string }[] {
   const out: { blockId: string; expr: string }[] = []
+  if (tpl.page.header) for (const expr of tokensIn(tpl.page.header.text)) out.push({ blockId: HEADER_ID, expr })
+  if (tpl.page.footer) for (const expr of tokensIn(tpl.page.footer.text)) out.push({ blockId: FOOTER_ID, expr })
   walkBlocks(tpl.blocks, (b) => {
     const texts: string[] = []
     switch (b.type) {
@@ -510,25 +538,56 @@ export function cssPageContent(format: string): string {
     .join(" ")
 }
 
+/** CSS content 字符串字面量（转义引号/反斜杠，页眉页脚为单行：换行折为空格） */
+function cssLiteral(text: string): string {
+  return `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\s*\n\s*/g, " ")}"`
+}
+
+const slotOf = (align: "left" | "center" | "right") => align
+
 /**
  * 打印容器的 @page 规则：
- * v2 → 纸张/方向/边距 + 页码 margin box（@bottom-center 等，Chrome 131+）；
+ * v2 → 纸张/方向/边距 + 页码/页眉/页脚 margin box（@top-… / @bottom-…，Chrome 131+）；
+ *      band 文本按 data 插值；band 与页码同边同槽时并排（全角空格分隔）；
  * v1 → margin 0（坐标相对纸张原点，元素自带边距）。
  */
-export function buildPrintPageCss(tpl: AnyBdTemplate): string {
+export function buildPrintPageCss(tpl: AnyBdTemplate, data: Record<string, unknown> = {}): string {
   if (!isV2(tpl)) {
     return `@page { size: ${tpl.paper} ${tpl.landscape ? "landscape" : "portrait"}; margin: 0; }`
   }
   const { page } = tpl
   const [mt, mr, mb, ml] = page.margin
-  const pn = page.pageNumber
-  let box = ""
-  if (pn.show) {
-    const edge = pn.position === "header" ? "top" : "bottom"
-    const slot = pn.align === "left" ? "left" : pn.align === "right" ? "right" : "center"
-    box = ` @${edge}-${slot} { content: ${cssPageContent(pn.format)}; font-size: ${pn.fontSize}pt; font-family: ${BD_FONT_STACKS[page.fontFamily] ?? BD_FONT_STACKS["宋体"]}; color: #000; }`
+  const font = BD_FONT_STACKS[page.fontFamily] ?? BD_FONT_STACKS["宋体"]
+
+  // 槽位聚合：edge-slot → { 内容片段, 字号, 颜色 }
+  const boxes = new Map<string, { parts: string[]; fontSize: number; color: string }>()
+  const put = (edge: "top" | "bottom", slot: string, contentCss: string, fontSize: number, color: string) => {
+    const key = `${edge}-${slot}`
+    const box = boxes.get(key)
+    if (box) {
+      box.parts.push(contentCss)
+    } else {
+      boxes.set(key, { parts: [contentCss], fontSize, color })
+    }
   }
-  return `@page { size: ${page.size} ${page.landscape ? "landscape" : "portrait"}; margin: ${mt}mm ${mr}mm ${mb}mm ${ml}mm;${box} }`
+
+  // 页眉/页脚 band（先放，页码后并排拼接）
+  if (page.header?.text) {
+    put("top", slotOf(page.header.align), cssLiteral(interpolate(page.header.text, data)), page.header.fontSize, "#000")
+  }
+  if (page.footer?.text) {
+    put("bottom", slotOf(page.footer.align), cssLiteral(interpolate(page.footer.text, data)), page.footer.fontSize, "#000")
+  }
+  const pn = page.pageNumber
+  if (pn.show) {
+    put(pn.position === "header" ? "top" : "bottom", slotOf(pn.align), cssPageContent(pn.format), pn.fontSize, pn.color ?? PAGENO_DEFAULT_COLOR)
+  }
+
+  let boxCss = ""
+  for (const [key, box] of boxes) {
+    boxCss += ` @${key} { content: ${box.parts.join(' "　" ')}; font-size: ${box.fontSize}pt; font-family: ${font}; color: ${box.color}; }`
+  }
+  return `@page { size: ${page.size} ${page.landscape ? "landscape" : "portrait"}; margin: ${mt}mm ${mr}mm ${mb}mm ${ml}mm;${boxCss} }`
 }
 
 export { getByPath }
