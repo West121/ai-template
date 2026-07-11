@@ -1,6 +1,6 @@
 package com.xingchen.oa.boot.ai.tool;
 
-import com.xingchen.oa.boot.ai.service.AiConfirmService;
+import com.xingchen.oa.boot.ai.service.AiActionService;
 import com.xingchen.oa.boot.ai.support.AiSessionHolder;
 import com.xingchen.oa.office.dto.MeetingCreateRequest;
 import com.xingchen.oa.office.dto.ScheduleCreateRequest;
@@ -25,8 +25,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 变更工具（§4）：一律二段式——工具只产 confirm/form 卡，不落库；
- * 用户确认 → /api/ai/confirm 调 {@link AiConfirmService} 执行注册的执行器（底层 Service 权限二验）。
+ * 变更工具（§4/V2 §7）：一律 Prepare→Confirm→Execute——工具只产 confirm/form 卡，动作草稿经
+ * {@link AiActionService} 持久化到 ai_action_draft（PENDING_CONFIRM）；用户确认
+ * → POST /api/ai/actions/{id}/confirm 执行注册的执行器（底层 Service 权限二验 + TOCTOU 预检）。
  * start_approval 产 form 卡（表单直提交走既有 /api/wf/instances，不经 LLM）。
  */
 @Component
@@ -34,7 +35,7 @@ import java.util.Map;
 public class ChangeTools {
 
     private final AiToolSupport support;
-    private final AiConfirmService confirmService;
+    private final AiActionService actionService;
     private final AiSessionHolder sessionHolder;
     private final ObjectMapper objectMapper;
 
@@ -44,10 +45,10 @@ public class ChangeTools {
     private final ScheduleService scheduleService;
     private final MeetingService meetingService;
 
-    /** 注册确认执行器（confirm 时在请求线程执行，UserContext 生效）。 */
+    /** 注册确认执行器（confirm 时在确认请求线程执行，UserContext=确认者 → 权限二验生效）。 */
     @PostConstruct
     public void registerExecutors() {
-        confirmService.registerExecutor("approve_task", params -> {
+        actionService.registerExecutor("approve_task", params -> {
             String taskId = String.valueOf(params.get("taskId"));
             String decision = String.valueOf(params.getOrDefault("decision", "APPROVE")).toUpperCase();
             String comment = params.get("comment") == null ? null : String.valueOf(params.get("comment"));
@@ -59,18 +60,26 @@ public class ChangeTools {
             }
             return Map.of("taskId", taskId, "decision", decision);
         });
-        confirmService.registerExecutor("create_schedule", params ->
+        actionService.registerExecutor("create_schedule", params ->
                 scheduleService.create(new ScheduleCreateRequest(
                         String.valueOf(params.get("title")),
                         LocalDate.parse(String.valueOf(params.get("date"))),
                         strOrNull(params, "startTime"), strOrNull(params, "endTime"),
                         strOrNull(params, "place"),
                         String.valueOf(params.getOrDefault("type", "OTHER")))));
-        confirmService.registerExecutor("create_meeting", params ->
+        actionService.registerExecutor("create_meeting", params ->
                 meetingService.create(new MeetingCreateRequest(
                         asLong(params.get("roomId")), String.valueOf(params.get("subject")),
                         LocalDate.parse(String.valueOf(params.get("date"))),
                         asInt(params.get("startHour")), asInt(params.get("endHour")))));
+    }
+
+    /** 暂存动作草稿（当前轮次 session/message 绑定；target=TOCTOU 快照，可空）。 */
+    private String stage(String toolName, String actionType, Map<String, Object> params,
+                         AiActionService.Target target) {
+        AiSessionHolder.Turn turn = sessionHolder.currentTurn();
+        return actionService.stage(turn != null ? turn.sessionId() : null,
+                turn != null ? turn.messageId() : null, toolName, actionType, params, target);
     }
 
     @AiTool(name = "start_approval",
@@ -111,8 +120,9 @@ public class ChangeTools {
         String decision = String.valueOf(args.getOrDefault("decision", "APPROVE")).toUpperCase();
         boolean reject = "REJECT".equals(decision);
         Map<String, Object> params = new LinkedHashMap<>(args);
-        String actionId = confirmService.stage(sessionHolder.currentSessionId(), "approve_task", params,
-                (reject ? "驳回" : "同意") + "任务", reject);
+        // §7.4 TOCTOU：stage 时快照 Flowable 任务 assignee，确认前比对（任务被办/改派 → AI_ACTION_STALE）
+        String actionId = stage("approve_task", reject ? "TASK_REJECT" : "TASK_APPROVE", params,
+                actionService.snapshotTask(String.valueOf(args.get("taskId"))));
         Map<String, Object> card = support.confirmCard(actionId,
                 (reject ? "驳回" : "同意") + "审批任务",
                 "将" + (reject ? "驳回" : "同意") + "任务 " + args.get("taskId")
@@ -130,8 +140,7 @@ public class ChangeTools {
             required = {"title", "date"})
     public ToolResult createSchedule(Map<String, Object> args) {
         Map<String, Object> params = new LinkedHashMap<>(args);
-        String actionId = confirmService.stage(sessionHolder.currentSessionId(), "create_schedule", params,
-                "创建日程「" + args.get("title") + "」", false);
+        String actionId = stage("create_schedule", "SCHEDULE_CREATE", params, null);
         Map<String, Object> card = support.confirmCard(actionId, "创建日程",
                 args.get("date") + " " + args.get("title"), params, false);
         return ToolResult.of(support.toJson(Map.of("staged", true, "actionId", actionId)), card);
@@ -145,8 +154,7 @@ public class ChangeTools {
             required = {"roomId", "subject", "date", "startHour", "endHour"})
     public ToolResult createMeeting(Map<String, Object> args) {
         Map<String, Object> params = new LinkedHashMap<>(args);
-        String actionId = confirmService.stage(sessionHolder.currentSessionId(), "create_meeting", params,
-                "预订会议「" + args.get("subject") + "」", false);
+        String actionId = stage("create_meeting", "MEETING_CREATE", params, null);
         Map<String, Object> card = support.confirmCard(actionId, "预订会议",
                 args.get("date") + " " + args.get("startHour") + ":00-" + args.get("endHour") + ":00 "
                         + args.get("subject"), params, false);

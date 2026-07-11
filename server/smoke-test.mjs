@@ -34,7 +34,8 @@ function cleanupTestData() {
     "DELETE FROM oa_doc_number_ledger; DELETE FROM oa_doc_number_seq;",
     // 编排（V25）冒烟数据
     "DELETE FROM orch_exec_node; DELETE FROM orch_exec; DELETE FROM orch_flow_version;",
-    "DELETE FROM ai_chat_message; DELETE FROM ai_chat_session;",
+    "DELETE FROM ai_chat_message_part; DELETE FROM ai_tool_call; DELETE FROM ai_action_draft;",
+    "DELETE FROM ai_conversation_state; DELETE FROM ai_chat_message; DELETE FROM ai_chat_session;",
     "DELETE FROM oa_bizdoc; DELETE FROM oa_bizdoc_print_tpl; DELETE FROM oa_bizdoc_def WHERE code LIKE 'smoke_bd%';",
     "DELETE FROM orch_flow WHERE code LIKE 'smoke_orch%'; DELETE FROM orch_credential WHERE name LIKE '冒烟%';",
   ].join(" ")
@@ -2470,6 +2471,11 @@ async function hlCompleted(token, iid) {
           : rawUser
         const hasTool = msgs.some((m) => m.role === "tool")
         res.writeHead(200, { "Content-Type": "application/json" })
+        // V2 批A：慢响应脚本（会话串行化 409 测试用——首条消息占住会话时插队）
+        if (lastUser.includes("慢")) {
+          setTimeout(() => res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "慢回复完成。" } }] })), 1500)
+          return
+        }
         if (!hasTool) {
           let tool = null
           if (lastUser.includes("待办")) tool = { name: "query_todo", arguments: "{}" }
@@ -2477,6 +2483,7 @@ async function hlCompleted(token, iid) {
           else if (lastUser.includes("统计") || lastUser.includes("报表")) tool = { name: "stats_report", arguments: '{"module":"approval","dimension":"status"}' }
           else if (lastUser.includes("急")) tool = { name: "query_urgent", arguments: "{}" }
           else if (lastUser.includes("同意") && lastUser.includes("任务")) tool = { name: "approve_task", arguments: '{"taskId":"' + (lastUser.match(/任务(\S+)/)?.[1] ?? "x") + '","decision":"APPROVE"}' }
+          else if (lastUser.includes("V2日程")) tool = { name: "create_schedule", arguments: JSON.stringify({ title: `AI冒烟V2日程${TS}`, date: "2026-08-02", type: "OTHER" }) }
           else if (lastUser.includes("日程")) tool = { name: "create_schedule", arguments: JSON.stringify({ title: `AI冒烟日程${TS}`, date: "2026-08-01", type: "OTHER" }) }
           else if (lastUser.includes("公文")) tool = { name: "query_documents", arguments: "{}" }
           if (tool) {
@@ -3187,6 +3194,151 @@ async function hlCompleted(token, iid) {
   const imgUserMsg = (imgMsgs.body?.data?.list ?? []).find((m) => m.role === "USER")
   check("ai 消息回显 attachments(kind/name)", (imgUserMsg?.attachments ?? []).some((a) => a.kind === "IMAGE" && a.name === "pic.png"),
     JSON.stringify(imgUserMsg?.attachments))
+
+  /* ---- AI 助手 V2 批A（V33）：SSE / clientMessageId 幂等 / 会话串行 / Part 化 / 动作草稿状态机 ---- */
+
+  // SSE 读流 helper：POST /api/ai/chat/messages，整流读完解析 data: 行为事件数组；JSON 错误则回 body
+  const sse = async (token, body) => {
+    const res = await fetch(`${BASE}/api/ai/chat/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    })
+    const ctype = res.headers.get("content-type") ?? ""
+    if (!ctype.includes("text/event-stream")) {
+      let j = null
+      try { j = await res.json() } catch { /* 非 JSON */ }
+      return { status: res.status, events: [], body: j }
+    }
+    const text = await res.text()
+    const events = []
+    for (const chunk of text.split("\n\n")) {
+      const dataLine = chunk.split("\n").find((l) => l.startsWith("data:"))
+      if (dataLine) {
+        try { events.push(JSON.parse(dataLine.slice(5))) } catch { /* 非 JSON data 行 */ }
+      }
+    }
+    return { status: res.status, events, body: null }
+  }
+  // 带自定义头的调用（Idempotency-Key）
+  const callH = async (token, method, path, body, headers = {}) => {
+    const res = await fetch(BASE + path, {
+      method,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+    let json = null
+    try { json = await res.json() } catch { /* 非 JSON */ }
+    return { status: res.status, body: json }
+  }
+  const psql = (q) => execFileSync("docker",
+    ["exec", process.env.OA_PG_CONTAINER ?? "oa-postgres", "psql", "-U", "oa", "-d", "oa_platform", "-t", "-A", "-c", q],
+    { stdio: ["ignore", "pipe", "pipe"] }).toString().trim()
+
+  // 1) SSE 事件序（message.started → tool.started → tool.completed → message.part.created → message.completed）
+  const cmid1 = `smoke_v2_${TS}_1`
+  const sse1 = await sse(admin.token, { clientMessageId: cmid1, message: "帮我查下待办", credentialId: aiCred.body?.data?.id })
+  const types1 = sse1.events.map((e) => e.type)
+  check("aiV2 SSE 事件序(started<tool.started<tool.completed<part<completed)",
+    types1[0] === "message.started" && types1[types1.length - 1] === "message.completed" &&
+      types1.indexOf("tool.started") > 0 && types1.indexOf("tool.started") < types1.indexOf("tool.completed") &&
+      types1.indexOf("tool.completed") < types1.indexOf("message.part.created"),
+    JSON.stringify(types1))
+  check("aiV2 SSE sequence 递增", sse1.events.length >= 4 &&
+    sse1.events.every((e, i, arr) => i === 0 || e.sequence > arr[i - 1].sequence),
+    JSON.stringify(sse1.events.map((e) => e.sequence)))
+  check("aiV2 SSE part 事件含 text 与 list partType",
+    sse1.events.some((e) => e.type === "message.part.created" && e.payload?.part?.partType === "text") &&
+      sse1.events.some((e) => e.type === "message.part.created" && e.payload?.part?.partType === "list"),
+    JSON.stringify(sse1.events.filter((e) => e.type === "message.part.created").map((e) => e.payload?.part?.partType)))
+  const v2SessionId = sse1.events[0]?.sessionId
+  check("aiV2 SSE 事件携带 sessionId/messageId", !!v2SessionId && !!sse1.events[0]?.messageId)
+
+  // 2) clientMessageId 幂等：重试不重复调模型，重放原回复
+  const aiReqsAfterFirst = aiReqs.length
+  const sse1r = await sse(admin.token, { sessionId: v2SessionId, clientMessageId: cmid1, message: "帮我查下待办", credentialId: aiCred.body?.data?.id })
+  check("aiV2 clientMessageId 重试不重复调模型(重放 duplicate=true)",
+    aiReqs.length === aiReqsAfterFirst && sse1r.events[0]?.payload?.duplicate === true &&
+      sse1r.events.some((e) => e.type === "message.completed") &&
+      sse1r.events.some((e) => e.type === "message.part.created" && e.payload?.part?.partType === "list"),
+    JSON.stringify({ reqs: aiReqs.length - aiReqsAfterFirst, t: sse1r.events.map((e) => e.type) }))
+
+  // 3) 会话串行化：慢消息占住会话（RUNNING），同会话再发 → 409 AI_SESSION_BUSY
+  const slowP = sse(admin.token, { sessionId: v2SessionId, clientMessageId: `smoke_v2_${TS}_slow`, message: "慢一点", credentialId: aiCred.body?.data?.id })
+  await new Promise((r) => setTimeout(r, 600))
+  const busy = await call(admin.token, "POST", "/api/ai/chat", { sessionId: v2SessionId, message: "插队" })
+  check("aiV2 会话并发 → 409 AI_SESSION_BUSY", busy.body?.code === 409 && (busy.body?.message ?? "").includes("AI_SESSION_BUSY"),
+    JSON.stringify({ c: busy.body?.code, m: busy.body?.message }))
+  const slowDone = await slowP
+  check("aiV2 慢消息正常完成(锁释放)", slowDone.events.some((e) => e.type === "message.completed"), JSON.stringify(slowDone.events.map((e) => e.type)))
+
+  // 4) Part 化落库 + 历史返回（与旧 cards 字段并存）
+  const v2msgs = await call(admin.token, "GET", `/api/ai/sessions/${v2SessionId}/messages?pageNum=1&pageSize=100`)
+  const asstWithParts = (v2msgs.body?.data?.list ?? []).find((m) => m.role === "ASSISTANT" && (m.parts ?? []).some((p) => p.partType === "list"))
+  check("aiV2 parts 落库+历史返回(text/list part,cards 兼容并存)",
+    !!asstWithParts && (asstWithParts.parts ?? []).some((p) => p.partType === "text" && !!p.partId) &&
+      Array.isArray(asstWithParts.cards) && asstWithParts.cards.some((c) => c.type === "list"),
+    JSON.stringify((asstWithParts?.parts ?? []).map((p) => p.partType)))
+
+  // 5) 动作草稿状态机：确认前不生效 / 新端点确认 / Idempotency-Key 仅执行一次 / 异键 409
+  const chatV2s = await call(admin.token, "POST", "/api/ai/chat", { message: "帮我建个V2日程" })
+  const v2card = (chatV2s.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "confirm")
+  check("aiV2 confirm 卡(actionId=草稿数字id)", !!v2card?.actionId && /^\d+$/.test(String(v2card.actionId)), JSON.stringify(v2card?.actionId))
+  const schedPre = await call(admin.token, "GET", "/api/office/schedules?month=2026-08")
+  check("aiV2 确认前不生效", !(schedPre.body?.data ?? []).some((x) => x.title === `AI冒烟V2日程${TS}`))
+  const idemKey = `idem-${TS}`
+  const cf1 = await callH(admin.token, "POST", `/api/ai/actions/${v2card?.actionId}/confirm`, {}, { "Idempotency-Key": idemKey })
+  check("aiV2 新端点确认执行成功", cf1.body?.code === 0 && cf1.body?.data?.success === true && cf1.body?.data?.replayed === false, JSON.stringify(cf1.body))
+  const cf2 = await callH(admin.token, "POST", `/api/ai/actions/${v2card?.actionId}/confirm`, {}, { "Idempotency-Key": idemKey })
+  check("aiV2 同幂等键重复确认 → 重放原结果(仅执行一次)", cf2.body?.code === 0 && cf2.body?.data?.replayed === true, JSON.stringify(cf2.body?.data?.replayed))
+  const schedPost = await call(admin.token, "GET", "/api/office/schedules?month=2026-08")
+  check("aiV2 确认后生效且仅创建一条", (schedPost.body?.data ?? []).filter((x) => x.title === `AI冒烟V2日程${TS}`).length === 1,
+    JSON.stringify((schedPost.body?.data ?? []).filter((x) => x.title === `AI冒烟V2日程${TS}`).length))
+  const cf3 = await callH(admin.token, "POST", `/api/ai/actions/${v2card?.actionId}/confirm`, {}, { "Idempotency-Key": `other-${TS}` })
+  check("aiV2 异键重复确认 → 409 AI_ACTION_ALREADY_EXECUTED", cf3.body?.code === 409 && (cf3.body?.message ?? "").includes("AI_ACTION_ALREADY_EXECUTED"),
+    JSON.stringify(cf3.body?.message))
+
+  // 6) 取消：PENDING_CONFIRM → CANCELLED，取消后确认 410
+  const chatV2c = await call(admin.token, "POST", "/api/ai/chat", { message: "再建一个V2日程" })
+  const v2card2 = (chatV2c.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "confirm")
+  const cx = await call(admin.token, "POST", `/api/ai/actions/${v2card2?.actionId}/cancel`)
+  check("aiV2 取消动作(CANCELLED)", cx.body?.code === 0 && cx.body?.data?.status === "CANCELLED", JSON.stringify(cx.body))
+  const cfCancelled = await callH(admin.token, "POST", `/api/ai/actions/${v2card2?.actionId}/confirm`, {}, {})
+  check("aiV2 取消后确认 → 410 AI_ACTION_EXPIRED", cfCancelled.body?.code === 410 && (cfCancelled.body?.message ?? "").includes("AI_ACTION_EXPIRED"),
+    JSON.stringify(cfCancelled.body?.message))
+
+  // 7) 过期：psql 改 expires_at 已过 → 确认 410 AI_ACTION_EXPIRED（懒标记）
+  const chatV2e = await call(admin.token, "POST", "/api/ai/chat", { message: "V2日程 又来一单" })
+  const v2card3 = (chatV2e.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "confirm")
+  psql(`UPDATE ai_action_draft SET expires_at = now() - interval '1 minute' WHERE id = ${Number(v2card3?.actionId)}`)
+  const cfExpired = await callH(admin.token, "POST", `/api/ai/actions/${v2card3?.actionId}/confirm`, {}, {})
+  check("aiV2 过期确认 → 410 AI_ACTION_EXPIRED", cfExpired.body?.code === 410 && (cfExpired.body?.message ?? "").includes("AI_ACTION_EXPIRED"),
+    JSON.stringify(cfExpired.body?.message))
+
+  // 8) 越权：zhangsan 确认 admin 的动作 → 403
+  const chatV2z = await call(admin.token, "POST", "/api/ai/chat", { message: "V2日程 越权用" })
+  const v2card4 = (chatV2z.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "confirm")
+  const zsCf = await callH(zhangsan.token, "POST", `/api/ai/actions/${v2card4?.actionId}/confirm`, {}, {})
+  check("aiV2 A 用户不可确认 B 的 action → 403", zsCf.body?.code === 403, JSON.stringify(zsCf.body?.code))
+
+  // 9) TOCTOU：确认前任务先被直接办掉 → 409 AI_ACTION_STALE（不静默按旧状态执行）
+  const tocTitle = `AI冒烟TOCTOU-${TS}`
+  await call(zhangsan.token, "POST", "/api/wf/instances", {
+    defCode: "leave_approval", title: tocTitle, formData: { leaveType: "ANNUAL", days: 2, reason: "toctou" },
+  })
+  const tocTask = await findTodo(manager.token, tocTitle)
+  check("aiV2 TOCTOU 前置(经理待办可见)", !!tocTask)
+  const chatToc = await call(manager.token, "POST", "/api/ai/chat", { message: `同意 任务${tocTask?.taskId}` })
+  const tocCard = (chatToc.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "confirm")
+  check("aiV2 TOCTOU 确认卡生成", !!tocCard?.actionId, JSON.stringify(chatToc.body?.data?.messages?.[0]?.content))
+  await call(manager.token, "POST", `/api/wf/tasks/${tocTask?.taskId}/approve`, { comment: "抢先直接办理" })
+  const cfStale = await callH(manager.token, "POST", `/api/ai/actions/${tocCard?.actionId}/confirm`, {}, {})
+  check("aiV2 TOCTOU 任务已办 → 409 AI_ACTION_STALE", cfStale.body?.code === 409 && (cfStale.body?.message ?? "").includes("AI_ACTION_STALE"),
+    JSON.stringify(cfStale.body?.message))
+
+  // 10) ai_tool_call 审计落库（本会话工具调用 ≥1 行，risk 占位 READ_ONLY）
+  const auditCount = psql(`SELECT count(*) FROM ai_tool_call WHERE session_id = ${Number(v2SessionId)} AND risk_level = 'READ_ONLY'`)
+  check("aiV2 ai_tool_call 审计落库(≥1)", Number(auditCount) >= 1, auditCount)
 
   sink.close()
 }

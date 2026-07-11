@@ -37,7 +37,10 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // B-18：放行 ERROR 派发。否则匿名/出错请求向 /error 二次派发时会被再次鉴权拒绝，
                         // 而此时 401 响应已写出 → "response already committed" → 连接被重置（keep-alive 复用后表现为 socket closed）。
-                        .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                        // AI-V2 批A：放行 ASYNC 派发。SseEmitter 完成时容器做 ASYNC 二次派发，该派发无认证上下文
+                        // （JwtAuthFilter shouldNotFilterAsyncDispatch）→ 被拒则 chunked 流不写终止块，客户端报 socket closed。
+                        // REQUEST 首次派发已完成鉴权，ASYNC 派发放行不构成越权面（Spring Security 官方口径）。
+                        .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.ASYNC).permitAll()
                         .requestMatchers(
                                 "/api/auth/login",
                                 "/swagger-ui/**",
