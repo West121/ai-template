@@ -5,10 +5,16 @@
 import { useMemo } from "react"
 import qrcode from "qrcode-generator"
 
-// 多字节（中文）内容按 UTF-8 编码
-if (qrcode.stringToBytesFuncs["UTF-8"]) {
-  qrcode.stringToBytes = qrcode.stringToBytesFuncs["UTF-8"]
+// 多字节（中文）内容按 UTF-8 编码。
+// 注意 qrcode-generator 2.x 的 ESM 构建里 stringToBytesFuncs **不在默认导出上**（CJS 才有）——
+// dev(esbuild) 下曾因模块顶层读 undefined["UTF-8"] 崩掉所有引用二维码的路由（白屏）。
+// 全防御取用；两种形态都拿不到时用标准 TextEncoder（本身就是 UTF-8）兜底。
+const qrAny = qrcode as unknown as {
+  stringToBytesFuncs?: Record<string, (s: string) => number[]>
+  stringToBytes?: (s: string) => number[]
 }
+qrAny.stringToBytes =
+  qrAny.stringToBytesFuncs?.["UTF-8"] ?? ((s: string) => Array.from(new TextEncoder().encode(s)))
 
 export function QrSvg({ value, sizeMm, ecLevel = "M" }: { value: string; sizeMm: number; ecLevel?: "L" | "M" | "Q" | "H" }) {
   const cells = useMemo(() => {
