@@ -44,6 +44,10 @@ public class AiChatMessage {
     @Column(name = "tool_calls", columnDefinition = "text")
     private String toolCalls;
 
+    /** 附件 JSON [{fileId|dataUrl, kind:IMAGE|TEXT, name}]（§11 多模态，回显用；仅 USER 消息）。 */
+    @Column(columnDefinition = "text")
+    private String attachments;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private OffsetDateTime createdAt;

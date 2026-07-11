@@ -64,6 +64,9 @@ public class OrchCredentialService {
         if (req.enabled() != null) {
             c.setEnabled(req.enabled());
         }
+        if (req.supportsVision() != null) {
+            c.setSupportsVision(req.supportsVision());
+        }
         if (StringUtils.hasText(req.apiKey())) {
             c.setApiKeyEnc(cipher.encrypt(req.apiKey())); // 只写：留空不改
         }
@@ -71,7 +74,7 @@ public class OrchCredentialService {
 
     private CredentialResponse toResponse(OrchCredential c) {
         return new CredentialResponse(c.getId(), c.getName(), c.getType(), c.getBaseUrl(),
-                c.getModel(), c.getHeaderName(), c.getEnabled(),
+                c.getModel(), c.getHeaderName(), c.getEnabled(), c.getSupportsVision(),
                 StringUtils.hasText(c.getApiKeyEnc()), c.getCreatedAt());
     }
 }

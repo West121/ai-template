@@ -217,9 +217,30 @@ public class BizDocService {
         if (!tpl.getDefId().equals(def.getId())) {
             throw new BusinessException(400, "打印模板不属于该单据定义");
         }
+        Map<String, Object> data = renderFormData(doc.getFormData(), def.getFormSchema());
+        // 系统字段（sysfield/qrcode 插值用）
+        data.put("docNo", doc.getDocNo());
+        data.put("title", doc.getTitle());
+        data.put("creatorName", doc.getCreatorName());
+        data.put("deptName", doc.getDeptId() != null ? deptNameResolver.name(doc.getDeptId()) : null);
+        data.put("status", doc.getStatus()); // VOID → 前端渲染 45°作废水印（§8 裁定）
+        data.put("createdAt", doc.getCreatedAt() == null ? null
+                : doc.getCreatedAt().format(DateTimeFormatter.ofPattern("yyyy-MM-dd")));
+        // §9.3 审批记录区：绑流程单据从流程实例取办理记录（与已办/时间线同源=wf_operation，按办理顺序）
+        data.put("_approvals", approvalRecords(doc.getProcessInstanceId()));
+        List<Map<String, String>> fields = defService.formFields(def);
+        return new PrintData(defService.toTplResponse(tpl), data, fields);
+    }
+
+    /**
+     * 表单数据 → 打印数据 map（§11 独立模板 render-data 复用）：值平铺为字符串；
+     * schemaJson（form_schema / 实例 schema 快照）中 user/dept 选人类字段解析为 {id,name[,username]}
+     * + 便利键 {field}_names。schemaJson 可空（无选人解析）。
+     */
+    public Map<String, Object> renderFormData(String formDataJson, String schemaJson) {
         Map<String, Object> data = new LinkedHashMap<>();
-        JsonNode form = parse(doc.getFormData());
-        Map<String, String> pickers = pickerFieldTypes(def); // user/dept 选人类字段（按 form_schema widget type）
+        JsonNode form = parse(formDataJson);
+        Map<String, String> pickers = pickerFieldTypes(schemaJson); // user/dept 选人类字段（按 widget type）
         if (form != null && form.isObject()) {
             form.properties().forEach(e -> {
                 String pickerType = pickers.get(e.getKey());
@@ -238,23 +259,12 @@ public class BizDocService {
                 }
             });
         }
-        // 系统字段（sysfield/qrcode 插值用）
-        data.put("docNo", doc.getDocNo());
-        data.put("title", doc.getTitle());
-        data.put("creatorName", doc.getCreatorName());
-        data.put("deptName", doc.getDeptId() != null ? deptNameResolver.name(doc.getDeptId()) : null);
-        data.put("status", doc.getStatus()); // VOID → 前端渲染 45°作废水印（§8 裁定）
-        data.put("createdAt", doc.getCreatedAt() == null ? null
-                : doc.getCreatedAt().format(DateTimeFormatter.ofPattern("yyyy-MM-dd")));
-        // §9.3 审批记录区：绑流程单据从流程实例取办理记录（与已办/时间线同源=wf_operation，按办理顺序）
-        data.put("_approvals", approvals(doc.getProcessInstanceId()));
-        List<Map<String, String>> fields = defService.formFields(def);
-        return new PrintData(defService.toTplResponse(tpl), data, fields);
+        return data;
     }
 
     /** 办理记录 [{nodeName, assigneeName, opinion, time}]：wf_operation 原生查询（无流程/未办=[]）。 */
     @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> approvals(String processInstanceId) {
+    public List<Map<String, Object>> approvalRecords(String processInstanceId) {
         List<Map<String, Object>> out = new ArrayList<>();
         if (!StringUtils.hasText(processInstanceId)) {
             return out;
@@ -293,14 +303,14 @@ public class BizDocService {
 
     // ==================== 选人类字段解析（打印数据） ====================
 
-    /** 定义私有 form_schema 中 user/dept 类字段：key → type（无 schema/解析失败 → 空）。 */
-    private Map<String, String> pickerFieldTypes(BizDocDef def) {
+    /** schema JSON 中 user/dept 类字段：key → type（无 schema/解析失败 → 空）。 */
+    private Map<String, String> pickerFieldTypes(String schemaJson) {
         Map<String, String> out = new LinkedHashMap<>();
-        if (!StringUtils.hasText(def.getFormSchema())) {
+        if (!StringUtils.hasText(schemaJson)) {
             return out;
         }
         try {
-            collectPickerTypes(objectMapper.readTree(def.getFormSchema()), out);
+            collectPickerTypes(objectMapper.readTree(schemaJson), out);
         } catch (Exception ignored) {
             // schema 非法按无选人字段
         }

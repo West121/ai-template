@@ -53,6 +53,10 @@ public class OrchCredential {
     @Column(nullable = false)
     private Boolean enabled = true;
 
+    /** LLM 视觉能力（多模态图片输入；ai-assistant §11 能力检测）。 */
+    @Column(name = "supports_vision", nullable = false)
+    private Boolean supportsVision = false;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private OffsetDateTime createdAt;

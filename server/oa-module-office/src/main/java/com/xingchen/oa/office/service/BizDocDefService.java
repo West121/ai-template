@@ -139,6 +139,8 @@ public class BizDocDefService {
         BizDocDef def = find(defId);
         BizDocPrintTpl tpl = new BizDocPrintTpl();
         tpl.setDefId(defId);
+        tpl.setBindType(BizDocPrintTpl.BIND_BIZDOC);
+        tpl.setCode(genTplCode()); // §11 code 唯一；BIZDOC 原路径自动生成（status/version 沿实体默认 PUBLISHED/1，零回归）
         applyTpl(tpl, req);
         boolean first = tplRepository.findByDefIdOrderByIdAsc(defId).isEmpty();
         tpl.setIsDefault(first);
@@ -160,6 +162,10 @@ public class BizDocDefService {
     @Transactional
     public void deleteTpl(Long tplId) {
         BizDocPrintTpl tpl = findTpl(tplId);
+        if (tpl.getDefId() == null) { // §11 独立模板（FLOW/FORM）无定义附属
+            tplRepository.delete(tpl);
+            return;
+        }
         BizDocDef def = find(tpl.getDefId());
         if (tplId.equals(def.getDefaultPrintTplId())) {
             def.setDefaultPrintTplId(null);
@@ -171,6 +177,9 @@ public class BizDocDefService {
     @Transactional
     public PrintTplResponse setDefaultTpl(Long tplId) {
         BizDocPrintTpl tpl = findTpl(tplId);
+        if (tpl.getDefId() == null) {
+            throw new BusinessException(400, "独立模板（FLOW/FORM 绑定）无默认模板概念");
+        }
         BizDocDef def = find(tpl.getDefId());
         for (BizDocPrintTpl t : tplRepository.findByDefIdOrderByIdAsc(def.getId())) {
             t.setIsDefault(t.getId().equals(tplId));
@@ -184,6 +193,11 @@ public class BizDocDefService {
     public BizDocPrintTpl findTpl(Long tplId) {
         return tplRepository.findById(tplId)
                 .orElseThrow(() -> new BusinessException(404, "打印模板不存在"));
+    }
+
+    /** 模板编码自动生成（tpl_ + 8 位 hex，唯一约束兜底）。 */
+    public String genTplCode() {
+        return "tpl_" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 8);
     }
 
     // ==================== 校验 / 字段清单（原生查 wf 表，office 不依赖 workflow 模块） ====================
@@ -242,13 +256,19 @@ public class BizDocDefService {
             }
             return out;
         }
-        if (!StringUtils.hasText(def.getFormCode())) {
+        return formFieldsByFormCode(def.getFormCode());
+    }
+
+    /** wf 表单统一字段清单 [{key,label}]（CODE=field_manifest / ONLINE=schema 递归；§11 FLOW/FORM 模板复用）。 */
+    public List<Map<String, String>> formFieldsByFormCode(String formCode) {
+        List<Map<String, String>> out = new ArrayList<>();
+        if (!StringUtils.hasText(formCode)) {
             return out;
         }
         List<?> rows = entityManager.createNativeQuery(
                         "SELECT form_type, schema_json, field_manifest FROM wf_form_def "
                                 + "WHERE code = :code ORDER BY version DESC LIMIT 1")
-                .setParameter("code", def.getFormCode())
+                .setParameter("code", formCode)
                 .getResultList();
         if (rows.isEmpty()) {
             return out;

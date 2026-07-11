@@ -40,13 +40,14 @@ public final class OrchDtos {
     public record ExecDetailResponse(ExecResponse exec, List<ExecNodeResponse> nodes) {
     }
 
-    /** 凭据（key 只写不回显；hasKey 供前端标识）。 */
+    /** 凭据（key 只写不回显；hasKey 供前端标识；supportsVision=LLM 视觉能力 §11）。 */
     public record CredentialResponse(
             Long id, String name, String type, String baseUrl, String model,
-            String headerName, Boolean enabled, boolean hasKey, OffsetDateTime createdAt) {
+            String headerName, Boolean enabled, Boolean supportsVision, boolean hasKey, OffsetDateTime createdAt) {
     }
 
     public record CredentialRequest(String name, String type, String baseUrl,
-                                    String apiKey, String model, String headerName, Boolean enabled) {
+                                    String apiKey, String model, String headerName, Boolean enabled,
+                                    Boolean supportsVision) {
     }
 }

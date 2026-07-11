@@ -29,7 +29,9 @@ public class AiChatController {
     private final AiChatService chatService;
     private final AiConfirmService confirmService;
 
-    public record ChatRequest(Long sessionId, String message) {
+    /** §11：credentialId/model 覆盖默认凭据；attachments=[{fileId|dataUrl, kind:IMAGE|TEXT, name}]。 */
+    public record ChatRequest(Long sessionId, String message, Long credentialId, String model,
+                              List<AiChatService.Attachment> attachments) {
     }
 
     public record ConfirmRequest(String actionId) {
@@ -38,7 +40,14 @@ public class AiChatController {
     /** 对话：sessionId 空=新会话。返回 {sessionId, messages:[{role,content,cards?}]}。 */
     @PostMapping("/chat")
     public R<ChatResponse> chat(@RequestBody ChatRequest req) {
-        return R.ok(chatService.chat(req.sessionId(), req.message()));
+        return R.ok(chatService.chat(req.sessionId(), req.message(), req.credentialId(), req.model(),
+                req.attachments()));
+    }
+
+    /** §11 模型切换：启用的 LLM 凭据列表 [{id,name,model,supportsVision}]（前端模型选择器）。 */
+    @GetMapping("/models")
+    public R<List<Map<String, Object>>> models() {
+        return R.ok(chatService.models());
     }
 
     /** 确认执行暂存的变更动作（§0.2 二段式）。不存在/过期 → 410，他人动作 → 403。 */

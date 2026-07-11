@@ -55,4 +55,28 @@ public final class BizDocDtos {
     /** 打印数据（渲染在前端：套打设计器同一渲染器）。 */
     public record PrintData(PrintTplResponse tpl, Map<String, Object> data, List<Map<String, String>> fields) {
     }
+
+    // ---------- §11 单据模板独立化 ----------
+
+    /** 独立模板（bindType=BIZDOC 用 defId；FLOW=wf defCode / FORM=formCode 用 bindCode）。 */
+    public record TplResponse(
+            Long id, String code, String name, String bindType, String bindCode, Long defId,
+            String category, String description, String paper, Boolean landscape, JsonNode content,
+            String status, Integer version, Boolean isDefault,
+            OffsetDateTime createdAt, OffsetDateTime updatedAt) {
+    }
+
+    /** 新建/更新（code 缺省自动生成且不可改；独立 API 仅 FLOW/FORM，BIZDOC 走 defs/{id}/print-tpls）。 */
+    public record TplRequest(String code, String name, String bindType, String bindCode,
+                             String category, String description,
+                             String paper, Boolean landscape, JsonNode content) {
+    }
+
+    /** 编辑器字段树：fields=绑定来源统一清单；groups=伪字段组（FLOW 含 _approvals）。 */
+    public record TplFields(String bindType, String bindCode,
+                            List<Map<String, String>> fields, List<TplFieldGroup> groups) {
+    }
+
+    public record TplFieldGroup(String key, String label, List<Map<String, String>> fields) {
+    }
 }

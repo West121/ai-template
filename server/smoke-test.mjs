@@ -2428,6 +2428,7 @@ async function hlCompleted(token, iid) {
   const llmReqs = []
   const agentReqs = []
   const botReqs = []
+  const aiReqs = []
   let flakyCount = 0
   const sink = createServer((req, res) => {
     let body = ""
@@ -2459,10 +2460,14 @@ async function hlCompleted(token, iid) {
           res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: `用户是${JSON.parse(toolContent).name}` } }] }))
         }
       } else if (req.url === "/ai/v1/chat/completions") {
-        // AI 助手假端点：按用户消息脚本化回复（识别关键词→调工具→final）
+        // AI 助手假端点：按用户消息脚本化回复（识别关键词→调工具→final）；§11 捕获请求（model/多模态形状断言）
         const reqBody = JSON.parse(body || "{}")
+        aiReqs.push(reqBody)
         const msgs = reqBody.messages ?? []
-        const lastUser = [...msgs].reverse().find((m) => m.role === "user")?.content ?? ""
+        const rawUser = [...msgs].reverse().find((m) => m.role === "user")?.content ?? ""
+        const lastUser = Array.isArray(rawUser)
+          ? rawUser.filter((p) => p.type === "text").map((p) => p.text).join("\n")
+          : rawUser
         const hasTool = msgs.some((m) => m.role === "tool")
         res.writeHead(200, { "Content-Type": "application/json" })
         if (!hasTool) {
@@ -3123,6 +3128,66 @@ async function hlCompleted(token, iid) {
   const zsChat2 = await call(zhangsan.token, "POST", "/api/ai/chat", { message: "查下公文列表" })
   check("ai zhangsan 对话正常(工具带其数据权限,不 500)", zsChat2.body?.code === 0 && zsChat2.body?.data?.messages?.[0]?.role === "ASSISTANT", JSON.stringify(zsChat2.body?.code))
 
+  /* ---- §11 增强批：models / credentialId 切换 / 多模态附件 / 能力检测 ---- */
+
+  // models 列表（启用 LLM 凭据；aiCred 无视觉）
+  const models1 = await call(admin.token, "GET", "/api/ai/models")
+  const aiCredInList = (models1.body?.data ?? []).find((m) => m.id === aiCred.body?.data?.id)
+  check("ai models 列表(id/name/model/supportsVision)", models1.body?.code === 0 &&
+    aiCredInList?.model === "fake-ai" && aiCredInList?.supportsVision === false, JSON.stringify(models1.body?.data?.length))
+
+  // 视觉凭据（supportsVision=true，凭据 CRUD DTO 带上）
+  const visCred = await call(admin.token, "POST", "/api/orch/credentials", {
+    name: "冒烟视觉LLM", type: "LLM", baseUrl: `${SINK}/ai/v1`, apiKey: "sk-vis", model: "fake-vision", supportsVision: true,
+  })
+  check("ai 凭据 supportsVision 回传", visCred.body?.code === 0 && visCred.body?.data?.supportsVision === true, JSON.stringify(visCred.body?.data?.supportsVision))
+
+  // credentialId 切换生效：假端点收到 fake-vision
+  const swChat = await call(admin.token, "POST", "/api/ai/chat", { message: "你好", credentialId: visCred.body?.data?.id })
+  check("ai credentialId 切换(假端点收到对应 model)", swChat.body?.code === 0 &&
+    aiReqs[aiReqs.length - 1]?.model === "fake-vision", JSON.stringify(aiReqs[aiReqs.length - 1]?.model))
+  // model 再覆盖
+  const ovChat = await call(admin.token, "POST", "/api/ai/chat", { message: "你好", credentialId: visCred.body?.data?.id, model: "fake-vision-pro" })
+  check("ai model 覆盖凭据 model", ovChat.body?.code === 0 && aiReqs[aiReqs.length - 1]?.model === "fake-vision-pro", JSON.stringify(aiReqs[aiReqs.length - 1]?.model))
+  // 坏 credentialId → 400
+  const badCred = await call(admin.token, "POST", "/api/ai/chat", { message: "你好", credentialId: 999999 })
+  check("ai credentialId 不存在 400", badCred.body?.code === 400, JSON.stringify(badCred.body?.message))
+
+  // TEXT 附件注入（截 16k 引用块进 user content）
+  const txtB64 = Buffer.from(`机密预算数据ABC-${TS}`, "utf8").toString("base64")
+  const txtChat = await call(admin.token, "POST", "/api/ai/chat", {
+    message: "总结附件", credentialId: visCred.body?.data?.id,
+    attachments: [{ dataUrl: `data:text/plain;base64,${txtB64}`, kind: "TEXT", name: "note.txt" }],
+  })
+  const txtReqUser = [...(aiReqs[aiReqs.length - 1]?.messages ?? [])].reverse().find((m) => m.role === "user")?.content
+  check("ai TEXT 附件注入 user content(引用块含名称与内容)", txtChat.body?.code === 0 &&
+    typeof txtReqUser === "string" && txtReqUser.includes("note.txt") && txtReqUser.includes(`机密预算数据ABC-${TS}`),
+    JSON.stringify((txtReqUser ?? "").slice(0, 80)))
+
+  // IMAGE + 不支持视觉凭据 → 400 明确文案
+  const png1px = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+  const noVis = await call(admin.token, "POST", "/api/ai/chat", {
+    message: "看图", credentialId: aiCred.body?.data?.id,
+    attachments: [{ dataUrl: `data:image/png;base64,${png1px}`, kind: "IMAGE", name: "pic.png" }],
+  })
+  check("ai IMAGE+不支持视觉 → 400(明确文案)", noVis.body?.code === 400 && (noVis.body?.message ?? "").includes("不支持图片"), JSON.stringify(noVis.body?.message))
+
+  // IMAGE + 视觉凭据 → content parts 形状正确 + 消息回显 attachments
+  const imgChat = await call(admin.token, "POST", "/api/ai/chat", {
+    message: "看图", credentialId: visCred.body?.data?.id,
+    attachments: [{ dataUrl: `data:image/png;base64,${png1px}`, kind: "IMAGE", name: "pic.png" }],
+  })
+  const imgReqUser = [...(aiReqs[aiReqs.length - 1]?.messages ?? [])].reverse().find((m) => m.role === "user")?.content
+  check("ai IMAGE content parts 形状(text+image_url base64)", imgChat.body?.code === 0 &&
+    Array.isArray(imgReqUser) && imgReqUser[0]?.type === "text" &&
+      imgReqUser[1]?.type === "image_url" && (imgReqUser[1]?.image_url?.url ?? "").startsWith("data:image/png;base64,"),
+    JSON.stringify(Array.isArray(imgReqUser) ? imgReqUser.map((p) => p.type) : typeof imgReqUser))
+  const imgSess = imgChat.body?.data?.sessionId
+  const imgMsgs = await call(admin.token, "GET", `/api/ai/sessions/${imgSess}/messages`)
+  const imgUserMsg = (imgMsgs.body?.data?.list ?? []).find((m) => m.role === "USER")
+  check("ai 消息回显 attachments(kind/name)", (imgUserMsg?.attachments ?? []).some((a) => a.kind === "IMAGE" && a.name === "pic.png"),
+    JSON.stringify(imgUserMsg?.attachments))
+
   sink.close()
 }
 
@@ -3204,6 +3269,56 @@ async function hlCompleted(token, iid) {
   check("bizdoc print data 含 _approvals(办理记录,assigneeName 非空)",
     approvalsB.length >= 1 && !!approvalsB[0].assigneeName && !!approvalsB[0].nodeName && !!approvalsB[0].time,
     JSON.stringify(approvalsB))
+
+  // ---- §11 单据模板独立化：模板绑流程/表单，在流程实例上打印（docB 实例=leave_approval/leave 表单，已办结） ----
+  const bdPid = subB.body?.data?.processInstanceId
+  const tplBad = await call(admin.token, "POST", "/api/bizdoc/tpls", {
+    name: "坏绑定", bindType: "FLOW", bindCode: "no_such_flow",
+  })
+  check("bizdoc §11 模板新建 bindCode 不存在 400", tplBad.body?.code === 400, JSON.stringify(tplBad.body?.message))
+  const tplFlow = await call(admin.token, "POST", "/api/bizdoc/tpls", {
+    code: `smoke_tpl_flow_${TS}`, name: "请假审批打印单", bindType: "FLOW", bindCode: "leave_approval",
+    category: "人事", paper: "A4", content: { schemaVersion: 2, paper: "A4", elements: [] },
+  })
+  check("bizdoc §11 FLOW 模板新建(DRAFT v0)", tplFlow.body?.code === 0 &&
+    tplFlow.body?.data?.status === "DRAFT" && tplFlow.body?.data?.version === 0 &&
+    tplFlow.body?.data?.bindType === "FLOW", JSON.stringify(tplFlow.body?.data?.status))
+  const tplFlowId = tplFlow.body?.data?.id
+  const fiBefore = await call(manager.token, "GET", `/api/bizdoc/tpls/for-instance/${bdPid}`)
+  check("bizdoc §11 未发布模板 for-instance 不命中", (fiBefore.body?.data ?? []).every((t) => t.id !== tplFlowId))
+  const tplPub = await call(admin.token, "POST", `/api/bizdoc/tpls/${tplFlowId}/publish`)
+  check("bizdoc §11 发布(PUBLISHED v1)", tplPub.body?.data?.status === "PUBLISHED" && tplPub.body?.data?.version === 1)
+  const tplFields = await call(admin.token, "GET", `/api/bizdoc/tpls/${tplFlowId}/fields`)
+  check("bizdoc §11 FLOW 字段树(表单统一清单+_approvals 伪字段组)",
+    (tplFields.body?.data?.fields ?? []).some((f) => f.key === "days") &&
+      (tplFields.body?.data?.groups ?? []).some((g) => g.key === "_approvals" && (g.fields ?? []).some((f) => f.key === "assigneeName")),
+    JSON.stringify(tplFields.body?.data?.groups))
+  const fiAfter = await call(manager.token, "GET", `/api/bizdoc/tpls/for-instance/${bdPid}`)
+  check("bizdoc §11 for-instance 命中已发布 FLOW 模板", (fiAfter.body?.data ?? []).some((t) => t.id === tplFlowId))
+  const rd = await call(manager.token, "GET", `/api/bizdoc/tpls/${tplFlowId}/render-data?instanceId=${bdPid}`)
+  check("bizdoc §11 render-data(formData 历史变量兜底+_approvals+系统字段,docNo=null)",
+    rd.body?.code === 0 && String(rd.body?.data?.data?.days) === "2" && rd.body?.data?.data?.title === `冒烟审批单B-${TS}` &&
+      (rd.body?.data?.data?._approvals ?? []).length >= 1 && rd.body?.data?.data?.docNo === null &&
+      !!rd.body?.data?.tpl?.content, JSON.stringify({ d: rd.body?.data?.data?.days, t: rd.body?.data?.data?.title }))
+  // FORM 绑定：leave 表单
+  const tplForm = await call(admin.token, "POST", "/api/bizdoc/tpls", {
+    code: `smoke_tpl_form_${TS}`, name: "请假表单打印单", bindType: "FORM", bindCode: "leave",
+  })
+  await call(admin.token, "POST", `/api/bizdoc/tpls/${tplForm.body?.data?.id}/publish`)
+  const fiForm = await call(manager.token, "GET", `/api/bizdoc/tpls/for-instance/${bdPid}`)
+  check("bizdoc §11 for-instance 同时命中 FORM 绑定模板", (fiForm.body?.data ?? []).some((t) => t.id === tplForm.body?.data?.id))
+  const rdForm = await call(manager.token, "GET", `/api/bizdoc/tpls/${tplForm.body?.data?.id}/render-data?instanceId=${bdPid}`)
+  check("bizdoc §11 FORM 绑定 render-data 可用", rdForm.body?.code === 0 && String(rdForm.body?.data?.data?.days) === "2")
+  // 绑定不匹配 400：gw_send 表单模板 × leave 实例
+  const tplMis = await call(admin.token, "POST", "/api/bizdoc/tpls", {
+    name: "发文打印单", bindType: "FORM", bindCode: "gw_send",
+  })
+  const rdMis = await call(manager.token, "GET", `/api/bizdoc/tpls/${tplMis.body?.data?.id}/render-data?instanceId=${bdPid}`)
+  check("bizdoc §11 绑定不匹配 render-data 400", rdMis.body?.code === 400, JSON.stringify(rdMis.body?.message))
+  const tplPage = await call(admin.token, "GET", `/api/bizdoc/tpls?bindType=FLOW&keyword=smoke_tpl_flow_${TS}`)
+  check("bizdoc §11 模板分页(keyword+bindType,列表 content=null)",
+    tplPage.body?.data?.total === 1 && tplPage.body?.data?.list?.[0]?.content === null &&
+      tplPage.body?.data?.list?.[0]?.code === `smoke_tpl_flow_${TS}`, JSON.stringify(tplPage.body?.data?.total))
 
   // 3. 驳回→REJECTED 可改再提
   const docC = await call(zhangsan.token, "POST", "/api/bizdoc/docs", {
