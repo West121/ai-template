@@ -1555,3 +1555,23 @@ AgentScope           不进入首期主链路
 3. **tenant_id 预留列**(常量 'default'),不做全局多租户;Spring Authorization Server **不引入**;
    OTel 列 P3(先业务审计表+指标);报表目录直接改造现有 4 统计;Feature Catalog 种子自 menu.ts
    生成 + 校验脚本防漂移;向量库选 pgvector(批D)。
+
+## 附2:技术栈符合度裁定(主控,批A前置约束)
+
+1. **AI 助手保留在 oa-boot 内**(依赖方向 oa-boot→oa-module-*,业务模块互不依赖,只有 boot 全见
+   各业务 Service)——按 §21 做 com.xingchen.oa.boot.ai 下子包划分,不建独立 Maven 模块群。
+2. **SSE=异步执行,UserContext/SecurityContext 必须显式传播**(V1"同步线程天然安全"前提失效):
+   统一 AiExecutionContext 快照 + 执行器装饰器传播(含 MDC/requestId),工具入口断言上下文存在,
+   缺失即拒执行。这是批A/B 的第一验收项。
+3. Chat Memory **自实现**(读写我们的 ai_chat_message/part),禁止引入 Spring AI Jdbc memory 的
+   第二套表。
+4. 模型档案:model_profile → 按 profile 构造并缓存 ChatModel(动态 baseUrl/apiKey 来自
+   orch_credential,AES-GCM 解密),凭据永不出 API。
+5. 会话串行/幂等用 **PG**(session.version 乐观锁 + (tenant,user,client_message_id) 唯一约束),
+   不依赖 Redis;配额批B 内存实现留扩展点。
+6. 前端 SSE 用 fetch ReadableStream(POST 流式,EventSource 不支持 POST);面板保留非流式回退
+   (SSE 建立失败→现有阻塞路径,行为兼容)。
+7. FeatureRouteRegistry 为前端单文件映射(featureCode→path+参数 Schema),不破坏全站
+   「route path 即唯一键」约定;后端校验 featureCode 合法性。
+8. pgvector 批D 落地(镜像 pgvector/pgvector:pg17);OTel P3;Spring Authorization Server 不引入;
+   tenant_id 预留常量列。
