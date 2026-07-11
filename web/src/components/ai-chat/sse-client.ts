@@ -22,7 +22,8 @@ export interface ChatMessageRequest {
   /** 前端生成 ULID（重试幂等，§9.1） */
   clientMessageId: string
   message: string
-  /** 批B model_profile 就位前过渡：沿用凭据选择 */
+  /** V2 模型档案（§4.3）；旧后端忽略之，凭据字段为回退兼容 */
+  modelProfileId?: string
   credentialId?: number
   model?: string
   attachments?: { kind: string; name: string; dataUrl?: string; fileId?: number }[]

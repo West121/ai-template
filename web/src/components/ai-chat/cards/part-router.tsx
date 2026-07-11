@@ -4,7 +4,7 @@
  * navigate/form/confirm/list/chart 经 partToCard 适配后复用现有卡片组件（渐进替换，行为兼容）；
  * status/error/approval 为 V2 新增轻量卡。
  */
-import { AlertTriangle, CheckCircle2, ExternalLink, Info, PackageX } from "lucide-react"
+import { AlertTriangle, CheckCircle2, Circle, ExternalLink, Info, Loader2, PackageX, ShieldAlert, XCircle } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { partToCard, resolvePart, resolveFeaturePath, type AiMessagePart } from "../protocol"
@@ -36,16 +36,85 @@ function StatusPart({ part }: { part: AiMessagePart }) {
   )
 }
 
-/** error 卡：可恢复错误反馈（§10.1） */
+/**
+ * error 卡：可恢复错误反馈（§10.1）+ 批B亮点② 权限解释器：
+ * payload 可带 missingAuthority / holderRoles / adminHint → 缺失权限码、持有角色、申请引导。
+ */
 function ErrorPart({ part }: { part: AiMessagePart }) {
   const p = part.payload
+  const missing = typeof p.missingAuthority === "string" && p.missingAuthority ? p.missingAuthority : null
+  const roles = Array.isArray(p.holderRoles) ? (p.holderRoles as unknown[]).map(String).filter(Boolean) : []
+  const adminHint = typeof p.adminHint === "string" && p.adminHint ? p.adminHint : null
   return (
     <div className="flex w-full min-w-0 items-start gap-2 rounded-xl border border-destructive/40 bg-destructive/5 px-3 py-2.5 text-xs text-destructive">
-      <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-      <div className="min-w-0 space-y-0.5">
-        <p className="font-medium">{String(p.title ?? "处理失败")}</p>
+      {missing ? <ShieldAlert className="mt-0.5 size-4 shrink-0" /> : <AlertTriangle className="mt-0.5 size-4 shrink-0" />}
+      <div className="min-w-0 flex-1 space-y-1">
+        <p className="font-medium">{String(p.title ?? (missing ? "权限不足" : "处理失败"))}</p>
         {typeof p.message === "string" && p.message && <p className="break-words">{p.message}</p>}
+        {missing && (
+          <p className="flex flex-wrap items-center gap-1.5 text-foreground/70">
+            缺少权限
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-foreground/80">{missing}</code>
+          </p>
+        )}
+        {roles.length > 0 && (
+          <p className="flex flex-wrap items-center gap-1.5 text-foreground/70">
+            该权限由角色
+            {roles.map((r) => (
+              <span key={r} className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-600">
+                {r}
+              </span>
+            ))}
+            持有
+          </p>
+        )}
+        {missing && <p className="text-foreground/70">{adminHint ?? "请联系管理员开通。"}</p>}
+        {missing && (
+          <Button variant="outline" size="sm" className="h-6 px-2 text-[11px]" disabled title="权限申请流程即将上线（P1）">
+            申请开通（即将上线）
+          </Button>
+        )}
       </div>
+    </div>
+  )
+}
+
+/** plan 卡（批B亮点① Plan-then-Execute）：步骤列表，SSE 期间同 partId 覆盖更新逐步打勾 */
+function PlanPart({ part }: { part: AiMessagePart }) {
+  const p = part.payload
+  const steps = Array.isArray(p.steps)
+    ? (p.steps as { title?: unknown; status?: unknown }[]).map((s) => ({
+        title: String(s?.title ?? ""),
+        status: String(s?.status ?? "pending"),
+      }))
+    : []
+  const doneCount = steps.filter((s) => s.status === "done").length
+  return (
+    <div className="w-full min-w-0 rounded-xl border bg-card p-3.5 shadow-sm">
+      <div className="mb-2 flex items-center gap-2">
+        <p className="min-w-0 flex-1 text-sm font-semibold">{String(p.title ?? "执行计划")}</p>
+        <span className="shrink-0 text-[10px] text-muted-foreground">
+          {doneCount}/{steps.length}
+        </span>
+      </div>
+      <ol className="space-y-1.5">
+        {steps.map((s, i) => (
+          <li key={i} className="flex items-center gap-2 text-xs">
+            {s.status === "running" ? (
+              <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
+            ) : s.status === "done" ? (
+              <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" />
+            ) : s.status === "failed" ? (
+              <XCircle className="size-3.5 shrink-0 text-destructive" />
+            ) : (
+              <Circle className="size-3.5 shrink-0 text-muted-foreground/40" />
+            )}
+            <span className={`min-w-0 ${s.status === "done" ? "text-muted-foreground" : s.status === "failed" ? "text-destructive" : ""}`}>
+              {s.title}
+            </span>
+          </li>
+        ))}
+      </ol>
     </div>
   )
 }
@@ -93,6 +162,8 @@ export function PartRouter({ part }: { part: AiMessagePart }) {
       return <ErrorPart part={part} />
     case "approval":
       return <ApprovalPart part={part} />
+    case "plan":
+      return <PlanPart part={part} />
     case "navigate":
     case "form":
     case "confirm":

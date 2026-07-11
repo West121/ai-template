@@ -93,13 +93,27 @@ export interface AiAttachment {
   size?: number
 }
 
-/** GET /api/ai/models 可选凭据（启用的 LLM 型） */
+/** GET /api/ai/models 可选凭据（启用的 LLM 型；V2 由 model-profiles 替代，保留兼容回退） */
 export interface AiModelOption {
   credentialId: number
   name: string
   model: string
   /** 支持视觉（图片理解）；选择器加 👁 徽标 */
   supportsVision?: boolean
+}
+
+/** V2 模型档案（§4.3：用户只选档案 FAST/STANDARD/REASONING/VISION，真实凭据不出 API） */
+export interface AiModelProfile {
+  id: string
+  name: string
+  description?: string
+  supportsVision?: boolean
+}
+
+/** 选择器统一条目：V2 档案，或 model-profiles 404 时映射的旧凭据（legacyCredentialId 存在 = 旧协议发送 credentialId/model） */
+export interface AiModelChoice extends AiModelProfile {
+  legacyCredentialId?: number
+  legacyModel?: string
 }
 
 /* ============================ 消息 / 会话 ============================ */

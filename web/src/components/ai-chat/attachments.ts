@@ -2,7 +2,7 @@
  * 多模态附件（ai-assistant-design.md §11）：类型/大小校验纯函数 + 视觉能力检测。
  * 图片 png/jpg/webp ≤5MB；文本类 txt/md/csv/json/log ≤1MB；pdf/docx 本批不支持（就地提示）。
  */
-import type { AiAttachment, AiModelOption } from "./types"
+import type { AiAttachment } from "./types"
 
 export const IMAGE_MIMES = ["image/png", "image/jpeg", "image/webp"] as const
 export const TEXT_EXTS = ["txt", "md", "csv", "json", "log"] as const
@@ -42,8 +42,8 @@ export function checkAttachmentFile(name: string, mime: string, size: number): A
   return { ok: false, reason: `不支持的文件类型「${ext || mime || "未知"}」（图片 png/jpg/webp 或文本 txt/md/csv/json/log）` }
 }
 
-/** 带图片但所选模型不支持视觉 → true（就地提示引导切换；未知模型交给后端 400 文案） */
-export function needsVisionWarning(attachments: Pick<AiAttachment, "kind">[], model: AiModelOption | null | undefined): boolean {
+/** 带图片但所选模型档案不支持视觉 → true（就地提示引导切换；未知/默认档案交给后端 400 文案） */
+export function needsVisionWarning(attachments: Pick<AiAttachment, "kind">[], model: { supportsVision?: boolean } | null | undefined): boolean {
   if (!attachments.some((a) => a.kind === "IMAGE")) return false
   if (!model) return false
   return !model.supportsVision

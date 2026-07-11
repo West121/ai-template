@@ -12,7 +12,7 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth-store"
 import type { ToolStatusItem } from "./api"
-import type { AiAttachment, AiMessage, AiModelOption, AiSession } from "./types"
+import type { AiAttachment, AiMessage, AiModelChoice, AiSession } from "./types"
 
 const AssistantPanel = lazy(() => import("./assistant-panel"))
 /** API/协议层（SSE 客户端/解析器/mock）随首次使用懒加载——主包只留 FAB 与会话壳（分片纪律） */
@@ -39,23 +39,23 @@ export function AiAssistant() {
   const fabRef = useRef<HTMLButtonElement>(null)
   const [focusSignal, setFocusSignal] = useState(0)
 
-  /* ---- §11 模型切换：可选凭据 + 当前选择（会话内记忆） ---- */
-  const [models, setModels] = useState<AiModelOption[]>([])
-  const [modelId, setModelId] = useState<number | null>(null)
-  const modelBySessionRef = useRef(new Map<string, number | null>())
+  /* ---- V2 模型档案（§4.3）：FAST/STANDARD/REASONING/VISION；端点 404 回退旧凭据；会话内记忆 ---- */
+  const [models, setModels] = useState<AiModelChoice[]>([])
+  const [modelId, setModelId] = useState<string | null>(null)
+  const modelBySessionRef = useRef(new Map<string, string | null>())
   const modelsLoadedRef = useRef(false)
 
   useEffect(() => {
     if (!open || offline || modelsLoadedRef.current) return
     modelsLoadedRef.current = true
     void loadApi()
-      .then((m) => m.fetchModels())
+      .then((m) => m.fetchModelProfiles())
       .then((res) => setModels(res.data))
       .catch(() => setModels([]))
   }, [open, offline])
 
   const changeModel = useCallback(
-    (id: number | null) => {
+    (id: string | null) => {
       setModelId(id)
       if (sessionId) modelBySessionRef.current.set(sessionId, id)
     },
@@ -65,7 +65,7 @@ export function AiAssistant() {
   /* ---- 发送（V2 流式：SSE 事件驱动 UI；重试复用同一 clientMessageId，不新增用户气泡） ---- */
   const doSend = useCallback(
     async (text: string, attachments: AiAttachment[], isRetry: boolean) => {
-      const [{ sendChatStream }, { friendlyAiError, ulid }] = await Promise.all([loadApi(), loadProtocol()])
+      const [{ sendChatStream }, { friendlyAiError, mergePart, ulid }] = await Promise.all([loadApi(), loadProtocol()])
       const clientMessageId = (isRetry && lastSentRef.current?.clientMessageId) || ulid()
       setSending(true)
       setSendError(null)
@@ -107,20 +107,23 @@ export function AiAssistant() {
       }
 
       try {
-        const selected = models.find((m) => m.credentialId === modelId)
+        const selected = models.find((m) => m.id === modelId)
         const res = await sendChatStream(
           {
             sessionId,
             clientMessageId,
             message: text,
-            credentialId: selected?.credentialId,
-            model: selected?.model,
+            // V2 档案优先；回退条目（legacyCredentialId）走旧协议字段
+            modelProfileId: selected && selected.legacyCredentialId == null ? selected.id : undefined,
+            credentialId: selected?.legacyCredentialId,
+            model: selected?.legacyModel,
             attachments: attachments.length ? attachments : undefined,
           },
           {
             onStarted: () => ensureStreamMsg(),
             onTextDelta: (t) => patchStreamMsg((m) => ({ ...m, content: m.content + t })),
-            onPart: (part) => patchStreamMsg((m) => ({ ...m, parts: [...(m.parts ?? []), part] })),
+            // 同 partId 覆盖更新（计划卡逐步打勾等），否则追加
+            onPart: (part) => patchStreamMsg((m) => ({ ...m, parts: mergePart(m.parts ?? [], part) })),
             onToolStatus: (item) =>
               setToolStatuses((prev) => {
                 const i = prev.findIndex((x) => x.id === item.id)

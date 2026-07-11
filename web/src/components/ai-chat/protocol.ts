@@ -146,7 +146,7 @@ export interface AiMessagePart {
 }
 
 /** 卡片/内容白名单（§10.1 + text）：不在名单内一律降级组件 */
-export const PART_TYPES = ["text", "navigate", "form", "confirm", "list", "chart", "approval", "status", "error"] as const
+export const PART_TYPES = ["text", "navigate", "form", "confirm", "list", "chart", "approval", "status", "error", "plan"] as const
 export type KnownPartType = (typeof PART_TYPES)[number]
 
 /** 各 partType 当前支持的最高 schemaVersion（§16.3：更高版本走降级组件） */
@@ -160,6 +160,7 @@ export const PART_SCHEMA_SUPPORT: Record<KnownPartType, number> = {
   approval: 1,
   status: 1,
   error: 1,
+  plan: 1,
 }
 
 export type PartResolution =
@@ -287,6 +288,32 @@ export function cardsToParts(cards: AiCard[] | undefined): AiMessagePart[] {
     out.push(cardToPart(card, seq++))
   }
   return out
+}
+
+/* ============================ 批B：Part 覆盖合并 / 模型档案回退映射 ============================ */
+
+/**
+ * SSE part 合并（计划卡逐步打勾等）：同 partId 的后到 part **覆盖**先到（后端推送更新态），
+ * 否则追加。纯函数（渲染层按 sequenceNo 排序不受影响）。
+ */
+export function mergePart(parts: AiMessagePart[], incoming: AiMessagePart): AiMessagePart[] {
+  const i = parts.findIndex((p) => p.partId === incoming.partId)
+  if (i >= 0) return parts.map((p, x) => (x === i ? incoming : p))
+  return [...parts, incoming]
+}
+
+/** 旧 /api/ai/models 凭据 → 选择器统一条目（model-profiles 404 时的兼容回退，§4.3） */
+export function legacyModelsToChoices(
+  models: { credentialId: number; name: string; model: string; supportsVision?: boolean }[],
+): { id: string; name: string; description?: string; supportsVision?: boolean; legacyCredentialId: number; legacyModel: string }[] {
+  return models.map((m) => ({
+    id: `cred:${m.credentialId}`,
+    name: m.name,
+    description: m.model,
+    supportsVision: m.supportsVision,
+    legacyCredentialId: m.credentialId,
+    legacyModel: m.model,
+  }))
 }
 
 /* ============================ 错误码文案（§22，可修复/需重查/权限/系统） ============================ */

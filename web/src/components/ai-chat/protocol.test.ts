@@ -9,6 +9,8 @@ import {
   cardToPart,
   createSseParser,
   friendlyAiError,
+  legacyModelsToChoices,
+  mergePart,
   parseAiEvent,
   partToCard,
   resolveFeaturePath,
@@ -75,8 +77,8 @@ const part = (over: Partial<AiMessagePart>): AiMessagePart => ({
 })
 
 describe("Part 协议：白名单 + schemaVersion 降级", () => {
-  it("白名单 partType v1 → ok", () => {
-    for (const t of ["text", "navigate", "form", "confirm", "list", "chart", "approval", "status", "error"]) {
+  it("白名单 partType v1 → ok（批B 增 plan）", () => {
+    for (const t of ["text", "navigate", "form", "confirm", "list", "chart", "approval", "status", "error", "plan"]) {
       expect(resolvePart(part({ partType: t }))).toEqual({ status: "ok", type: t })
     }
   })
@@ -123,6 +125,33 @@ describe("cards ↔ parts 适配（兼容读旧消息 / mock 升级）", () => {
     ])
     expect(parts.map((x) => x.partType)).toEqual(["navigate", "navigate", "navigate"])
     expect(parts.map((x) => x.sequenceNo)).toEqual([1, 2, 3])
+  })
+})
+
+/* ============================ 批B：Part 覆盖合并 / 档案回退映射 ============================ */
+
+describe("mergePart（计划卡逐步打勾：同 partId 覆盖）", () => {
+  const plan = (status: string) =>
+    part({ partId: "pt_plan", partType: "plan", payload: { steps: [{ title: "步骤一", status }] }, sequenceNo: 1 })
+
+  it("同 partId 覆盖（位置不变），不同 partId 追加", () => {
+    const a = plan("pending")
+    const b = part({ partId: "pt_other", partType: "text", payload: { text: "x" }, sequenceNo: 2 })
+    let parts = mergePart([], a)
+    parts = mergePart(parts, b)
+    expect(parts.map((p) => p.partId)).toEqual(["pt_plan", "pt_other"])
+    const updated = mergePart(parts, plan("done"))
+    expect(updated.map((p) => p.partId)).toEqual(["pt_plan", "pt_other"])
+    expect((updated[0].payload.steps as { status: string }[])[0].status).toBe("done")
+  })
+})
+
+describe("legacyModelsToChoices（model-profiles 404 回退映射）", () => {
+  it("凭据 → 统一条目：id 带 cred: 前缀、保留 legacyCredentialId/legacyModel/supportsVision", () => {
+    const out = legacyModelsToChoices([{ credentialId: 2, name: "GPT-4o", model: "gpt-4o", supportsVision: true }])
+    expect(out).toEqual([
+      { id: "cred:2", name: "GPT-4o", description: "gpt-4o", supportsVision: true, legacyCredentialId: 2, legacyModel: "gpt-4o" },
+    ])
   })
 })
 

@@ -9,9 +9,9 @@
  */
 import { api, ApiError, NetworkError } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
-import type { AiAttachment, AiCard, AiChatResponse, AiConfirmResponse, AiMessage, AiModelOption, AiSession } from "./types"
+import type { AiAttachment, AiCard, AiChatResponse, AiConfirmResponse, AiMessage, AiModelChoice, AiModelOption, AiModelProfile, AiSession } from "./types"
 import { formatBytes } from "./attachments"
-import { cardsToParts, friendlyAiError, ulid, type AiMessagePart, type AiSseEvent } from "./protocol"
+import { cardsToParts, friendlyAiError, legacyModelsToChoices, ulid, type AiMessagePart, type AiSseEvent } from "./protocol"
 import { SseUnavailableError, streamChatMessage } from "./sse-client"
 
 export interface AiResult<T> {
@@ -61,6 +61,14 @@ const MOCK_MODELS: AiModelOption[] = [
   { credentialId: 3, name: "GLM-4V", model: "glm-4v", supportsVision: true },
 ]
 
+/** V2 模型档案 mock（§4.3：用户只选档案，凭据映射在后端） */
+const MOCK_PROFILES: AiModelProfile[] = [
+  { id: "FAST", name: "快速", description: "快速问答、标题、摘要" },
+  { id: "STANDARD", name: "标准", description: "系统操作和一般工具调用" },
+  { id: "REASONING", name: "深度推理", description: "深度分析和复杂报表解释" },
+  { id: "VISION", name: "视觉", description: "支持图片理解", supportsVision: true },
+]
+
 /* ============================ mock 应答脑（关键词驱动演示） ============================ */
 
 const LEAVE_SCHEMA = [
@@ -77,19 +85,23 @@ function mockReply(text: string, session: MockSession, opts?: ChatOpts): AiMessa
   const cards: AiCard[] = []
   let content: string
 
-  // §11 多模态演示：带附件优先按附件应答
+  // §11 多模态演示：带附件优先按附件应答（V2：视觉能力按模型档案判定，凭据回退兼容）
   const atts = opts?.attachments ?? []
   if (atts.length > 0) {
-    const model = MOCK_MODELS.find((m) => m.credentialId === opts?.credentialId) ?? MOCK_MODELS[0]
+    const profile = MOCK_PROFILES.find((x) => x.id === opts?.modelProfileId)
+    const cred = MOCK_MODELS.find((x) => x.credentialId === opts?.credentialId)
+    const chosen = profile ?? cred ?? MOCK_PROFILES[1] // 缺省 STANDARD（无视觉）
+    const chosenName = profile ? `${profile.name}（${profile.id}）` : cred ? `${cred.name}（${cred.model}）` : "标准（STANDARD）"
+    const visionOk = !!chosen.supportsVision
     const images = atts.filter((a) => a.kind === "IMAGE")
     const texts = atts.filter((a) => a.kind === "TEXT")
-    if (images.length > 0 && !model.supportsVision) {
+    if (images.length > 0 && !visionOk) {
       // 后端真实路径为 400 明确文案；mock 以助手消息演示同一文案
       return {
         role: "ASSISTANT",
         content:
-          `当前模型 **${model.name}（${model.model}）** 不支持图片理解。\n\n` +
-          "请在输入框上方的模型选择器切换到带 👁 徽标的视觉模型（如 GPT-4o / GLM-4V）后重新发送图片。",
+          `当前模型档案 **${chosenName}** 不支持图片理解。\n\n` +
+          "请在输入框上方的模型选择器切换到带 👁 徽标的视觉档案（VISION）后重新发送图片。",
         createdAt: now(),
       }
     }
@@ -253,7 +265,9 @@ function mockReply(text: string, session: MockSession, opts?: ChatOpts): AiMessa
       "4. 「我要请假」— 表单卡；「我要发文」— CODE 表单跳转\n" +
       "5. 「同意这条审批」/「驳回它」/「演示过期」— 确认卡全状态\n" +
       "6. 「带我去审批中心」— 导航卡\n" +
-      "7. 点回形针附图片/文本文件 — 多模态演示（DeepSeek 附图会提示切换视觉模型）"
+      "7. 点回形针附图片/文本文件 — 多模态演示（非视觉档案附图会提示切换 VISION）\n" +
+      "8. 「帮我做个统计计划」 — 计划卡逐步打勾（Plan-then-Execute）\n" +
+      "9. 「查全公司的报销数据」 — 权限解释卡（缺失权限码/持有角色/申请引导）"
   }
 
   return { role: "ASSISTANT", content, cards: cards.length ? cards : undefined, createdAt: now() }
@@ -261,8 +275,9 @@ function mockReply(text: string, session: MockSession, opts?: ChatOpts): AiMessa
 
 /* ============================ API ============================ */
 
-/** chat 可选项（§11）：模型切换（credentialId/model，存 session）+ 多模态附件 */
+/** chat 可选项：V2 模型档案（modelProfileId，§4.3）或旧凭据（credentialId/model，回退兼容）+ 多模态附件 */
 export interface ChatOpts {
+  modelProfileId?: string
   credentialId?: number
   model?: string
   attachments?: AiAttachment[]
@@ -295,12 +310,35 @@ export function sendChat(sessionId: string | undefined, message: string, opts?: 
   )
 }
 
-/** GET /api/ai/models：可选凭据列表（启用的 LLM 型，含 supportsVision） */
+/** GET /api/ai/models：可选凭据列表（启用的 LLM 型，含 supportsVision；V2 由 model-profiles 替代） */
 export function fetchModels(): Promise<AiResult<AiModelOption[]>> {
   return withMock(
     () => api<AiModelOption[]>("/api/ai/models"),
     () => [...MOCK_MODELS],
   )
+}
+
+/**
+ * V2 模型档案（§4.3）：GET /api/ai/model-profiles；端点 404/网络不可用 →
+ * 回退旧 /api/ai/models（凭据映射为兼容条目，legacyCredentialId 走旧协议）→ 仍不可用回 mock 档案。
+ */
+export async function fetchModelProfiles(): Promise<AiResult<AiModelChoice[]>> {
+  try {
+    const list = await api<AiModelProfile[]>("/api/ai/model-profiles")
+    if (Array.isArray(list)) return { data: list, demo: false }
+    return { data: [...MOCK_PROFILES], demo: true }
+  } catch (err) {
+    if (!(err instanceof NetworkError) && !(err instanceof ApiError && err.code === 404)) throw err
+  }
+  try {
+    const models = await api<AiModelOption[]>("/api/ai/models")
+    return { data: legacyModelsToChoices(models), demo: false }
+  } catch (err) {
+    if (err instanceof NetworkError || (err instanceof ApiError && err.code === 404)) {
+      return { data: [...MOCK_PROFILES], demo: true }
+    }
+    throw err
+  }
 }
 
 /** 确认执行暂存动作（10min 过期）。mock：过期演示 actionId 返回 expired */
@@ -369,6 +407,8 @@ export interface ChatSendRequest {
   /** 前端生成 ULID（重试沿用同一 id，服务端幂等去重） */
   clientMessageId: string
   message: string
+  /** V2 模型档案（§4.3）；与旧凭据二选一 */
+  modelProfileId?: string
   credentialId?: number
   model?: string
   attachments?: AiAttachment[]
@@ -427,6 +467,92 @@ function dispatchEvent(evt: AiSseEvent, h: ChatStreamHandlers, acc: { sessionId?
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/** 批B亮点① 计划卡演示：三步计划逐步打勾（同 partId 覆盖更新，Plan-then-Execute） */
+async function runPlanDemo(h: ChatStreamHandlers, session: MockSession, userMsg: AiMessage): Promise<ChatStreamOutcome> {
+  const partId = `pt_plan_${ulid()}`
+  type StepStatus = "pending" | "running" | "done" | "failed"
+  const titles = ["查询本月审批数据（数据权限范围内）", "按流程与部门两个维度汇总", "生成图表与结论"]
+  const emit = (statuses: StepStatus[]) =>
+    h.onPart?.({
+      partId,
+      partType: "plan",
+      schemaVersion: 1,
+      sequenceNo: 1,
+      payload: { title: "执行计划", steps: titles.map((title, i) => ({ title, status: statuses[i] })) },
+    })
+
+  await delay(250)
+  h.onStarted?.()
+  h.onTextDelta?.("这个请求需要分几步完成，我按下面的计划执行：")
+  await delay(200)
+  emit(["pending", "pending", "pending"])
+  const seq: StepStatus[][] = [
+    ["running", "pending", "pending"],
+    ["done", "running", "pending"],
+    ["done", "done", "running"],
+    ["done", "done", "done"],
+  ]
+  for (const st of seq) {
+    await delay(450)
+    emit(st)
+  }
+  await delay(200)
+  h.onTextDelta?.("\n\n计划执行完毕：本月审批量 187 件，研发中心占比最高（39%）；「本月审批量统计」可看图表明细。")
+
+  const finalMsg: AiMessage = {
+    role: "ASSISTANT",
+    content: "这个请求需要分几步完成，我按下面的计划执行：\n\n计划执行完毕：本月审批量 187 件，研发中心占比最高（39%）；「本月审批量统计」可看图表明细。",
+    parts: [
+      {
+        partId,
+        partType: "plan",
+        schemaVersion: 1,
+        sequenceNo: 1,
+        payload: { title: "执行计划", steps: titles.map((title) => ({ title, status: "done" })) },
+      },
+    ],
+    createdAt: now(),
+  }
+  session.messages.push(userMsg, finalMsg)
+  session.updatedAt = now()
+  return { sessionId: session.id, demo: true, mode: "mock" }
+}
+
+/** 批B亮点② 权限解释演示：403 → 缺失权限码 + 持有角色 + 申请引导（error part 扩展 payload） */
+async function runPermissionDemo(h: ChatStreamHandlers, session: MockSession, userMsg: AiMessage): Promise<ChatStreamOutcome> {
+  await delay(250)
+  h.onStarted?.()
+  const toolId = `tc_${ulid()}`
+  h.onToolStatus?.({ id: toolId, displayName: "正在查询财务报销数据", state: "running" })
+  await delay(420)
+  h.onToolStatus?.({ id: toolId, displayName: "正在查询财务报销数据", state: "failed" })
+  h.onTextDelta?.("这项查询涉及你当前没有的功能权限，我已停止执行：")
+  const errPart: AiMessagePart = {
+    partId: `pt_${ulid()}`,
+    partType: "error",
+    schemaVersion: 1,
+    sequenceNo: 1,
+    payload: {
+      title: "权限不足",
+      message: "查询全公司报销数据需要「finance:expense:query」权限。",
+      missingAuthority: "finance:expense:query",
+      holderRoles: ["财务专员", "财务经理"],
+      adminHint: "请联系管理员为你的岗位开通，或转由财务同事代查。",
+    },
+  }
+  await delay(200)
+  h.onPart?.(errPart)
+  const finalMsg: AiMessage = {
+    role: "ASSISTANT",
+    content: "这项查询涉及你当前没有的功能权限，我已停止执行：",
+    parts: [errPart],
+    createdAt: now(),
+  }
+  session.messages.push(userMsg, finalMsg)
+  session.updatedAt = now()
+  return { sessionId: session.id, demo: true, mode: "mock" }
+}
+
 /** SSE mock：把关键词应答脑的产物按可控事件序列回放（parts 形状 + 工具状态演示） */
 async function runMockStream(req: ChatSendRequest, h: ChatStreamHandlers): Promise<ChatStreamOutcome> {
   const session = mockSession(req.sessionId)
@@ -438,7 +564,17 @@ async function runMockStream(req: ChatSendRequest, h: ChatStreamHandlers): Promi
     clientMessageId: req.clientMessageId,
     createdAt: now(),
   }
-  const reply = mockReply(req.message, session, { credentialId: req.credentialId, model: req.model, attachments: req.attachments })
+  // 批B演示分支：计划卡 / 权限解释
+  if (!req.attachments?.length) {
+    if (/计划|分步|一步步|先.*再/.test(req.message)) return runPlanDemo(h, session, userMsg)
+    if (/全公司.*报销|权限演示|无权/.test(req.message)) return runPermissionDemo(h, session, userMsg)
+  }
+  const reply = mockReply(req.message, session, {
+    modelProfileId: req.modelProfileId,
+    credentialId: req.credentialId,
+    model: req.model,
+    attachments: req.attachments,
+  })
   const parts = cardsToParts(reply.cards)
 
   await delay(250)
@@ -498,6 +634,7 @@ export async function sendChatStream(req: ChatSendRequest, h: ChatStreamHandlers
         sessionId: req.sessionId,
         clientMessageId: req.clientMessageId,
         message: req.message,
+        modelProfileId: req.modelProfileId,
         credentialId: req.credentialId,
         model: req.model,
         attachments: req.attachments?.map((a) => ({ kind: a.kind, name: a.name, dataUrl: a.dataUrl, fileId: a.fileId })),
@@ -522,6 +659,7 @@ export async function sendChatStream(req: ChatSendRequest, h: ChatStreamHandlers
         sessionId: req.sessionId,
         message: req.message,
         clientMessageId: req.clientMessageId,
+        modelProfileId: req.modelProfileId,
         credentialId: req.credentialId,
         model: req.model,
         attachments: req.attachments?.map((a) => ({ kind: a.kind, name: a.name, dataUrl: a.dataUrl, fileId: a.fileId })),

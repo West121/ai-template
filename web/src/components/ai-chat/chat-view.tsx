@@ -18,7 +18,7 @@ import { LinkCard } from "./cards/simple-cards"
 import { MAX_ATTACHMENTS, checkAttachmentFile, formatBytes, needsVisionWarning } from "./attachments"
 import type { AiMessagePart } from "./protocol"
 import type { ToolStatusItem } from "./api"
-import type { AiAttachment, AiMessage, AiModelOption } from "./types"
+import type { AiAttachment, AiMessage, AiModelChoice } from "./types"
 
 function formatTime(iso?: string): string {
   return iso ? iso.slice(11, 16) : ""
@@ -190,10 +190,10 @@ export interface ChatViewProps {
   /** 上次发送失败文案（null=无错误；后端 400 明确文案友好呈现） */
   sendError: string | null
   offline: boolean
-  /** §11 模型切换：可选凭据列表 + 当前选择（null=默认凭据） */
-  models: AiModelOption[]
-  modelId: number | null
-  onModelChange: (id: number | null) => void
+  /** V2 模型档案选择（§4.3；回退条目=旧凭据映射）；null=默认 */
+  models: AiModelChoice[]
+  modelId: string | null
+  onModelChange: (id: string | null) => void
   onSend: (text: string, attachments: AiAttachment[]) => void
   onRetry: () => void
   /** 面板打开时聚焦输入框 */
@@ -208,7 +208,7 @@ export function ChatView({ messages, sending, toolStatuses, sendError, offline, 
   const fileRef = useRef<HTMLInputElement>(null)
   const [stickBottom, setStickBottom] = useState(true)
 
-  const selectedModel = models.find((m) => m.credentialId === modelId) ?? null
+  const selectedModel = models.find((m) => m.id === modelId) ?? null
   const visionWarn = needsVisionWarning(pending, selectedModel)
 
   // 打开面板 ~300ms（动画后）聚焦输入框（丹青 §5.1）
@@ -337,16 +337,17 @@ export function ChatView({ messages, sending, toolStatuses, sendError, offline, 
         {/* §11 模型选择器（会话内记忆；👁=支持视觉） */}
         {!offline && models.length > 0 && (
           <div className="flex items-center gap-2">
-            <Select value={modelId != null ? String(modelId) : "default"} onValueChange={(v) => onModelChange(v === "default" ? null : Number(v))}>
+            <Select value={modelId ?? "default"} onValueChange={(v) => onModelChange(v === "default" ? null : v)}>
               <SelectTrigger size="sm" className="h-7 w-fit gap-1.5 border-dashed text-xs text-muted-foreground">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="default">默认模型</SelectItem>
+                <SelectItem value="default">默认档案</SelectItem>
                 {models.map((m) => (
-                  <SelectItem key={m.credentialId} value={String(m.credentialId)}>
+                  <SelectItem key={m.id} value={m.id} title={m.description}>
                     <span className="flex items-center gap-1.5">
-                      {m.name} · {m.model}
+                      {m.name}
+                      {m.description && <span className="text-[10px] text-muted-foreground">· {m.description}</span>}
                       {m.supportsVision && <Eye className="size-3 text-emerald-500" aria-label="支持视觉" />}
                     </span>
                   </SelectItem>
@@ -368,7 +369,7 @@ export function ChatView({ messages, sending, toolStatuses, sendError, offline, 
         {visionWarn && (
           <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-xs text-amber-600 dark:text-amber-400">
             <AlertTriangle className="size-3.5 shrink-0" />
-            当前模型不支持图片，请在上方切换支持视觉（👁）的模型后再发送。
+            当前模型档案不支持图片，请在上方切换支持视觉（👁）的档案后再发送。
           </div>
         )}
 

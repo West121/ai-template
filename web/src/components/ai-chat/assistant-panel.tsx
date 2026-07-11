@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button"
 import { ChatView } from "./chat-view"
 import { SessionListView } from "./session-list"
 import type { ToolStatusItem } from "./api"
-import type { AiAttachment, AiMessage, AiModelOption, AiSession } from "./types"
+import type { AiAttachment, AiMessage, AiModelChoice, AiSession } from "./types"
 import "./ai-chat.css"
 
 const WIDTH_KEY = "ai-panel-width"
@@ -45,10 +45,10 @@ export interface AssistantPanelProps {
   toolStatuses: ToolStatusItem[]
   /** null=无错误；有值=失败文案（空串走默认文案） */
   sendError: string | null
-  /** §11 模型切换 */
-  models: AiModelOption[]
-  modelId: number | null
-  onModelChange: (id: number | null) => void
+  /** V2 模型档案选择（§4.3） */
+  models: AiModelChoice[]
+  modelId: string | null
+  onModelChange: (id: string | null) => void
   focusSignal: number
   onSend: (text: string, attachments: AiAttachment[]) => void
   onRetry: () => void
