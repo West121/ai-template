@@ -1575,3 +1575,25 @@ AgentScope           不进入首期主链路
    「route path 即唯一键」约定;后端校验 featureCode 合法性。
 8. pgvector 批D 落地(镜像 pgvector/pgvector:pg17);OTel P3;Spring Authorization Server 不引入;
    tenant_id 预留常量列。
+
+## 附3:增值亮点路线(主控提案,用户已全选,2026-07-11)
+
+**归位到批次(在附1 四批之上)**:
+- **批B 顺带**:①计划卡 Plan-then-Execute(复杂请求先出步骤计划卡,确认/修改后执行——Spring AI
+  Structured Output 产计划,状态随 SSE tool 事件逐步打勾);②权限解释器(403 时返回缺失权限码+
+  该权限管理员+申请引导卡)。
+- **批C 顺带**:③图表下钻(chart 卡点击类目→自动追加该维度筛选的 list 卡,datasetId 复用);
+  ④引用溯源强化(TextPart 支持 citations[](sourceType/sourceId/title/version),前端角标可跳)。
+- **批D 顺带**:⑤主动晨报(编排定时流调用 ai 简报服务→写入用户会话置顶简报卡:急事/会议/待阅;
+  用户可关);⑥斜杠命令(/待办 /请假 /统计…输入框唤起)+语音输入(Web Speech,失败降级)。
+- **批E(平台联动压轴,独有能力)**:
+  ⑦**对话固化成自动化**:意图"周期性/事件性任务"→工具 orchestration.prepare_flow 生成 OrchModel
+    草稿(CRON/事件触发+报表/通知节点)→FlowDraftCard(画布缩略+确认)→确认后建流(DRAFT)并跳
+    编排设计器微调启用。风险级 EXPLICIT_UI_SUBMIT。
+  ⑧**对话生成模板/表单草稿**:bizdoc.prepare_template(自然语言→BdTemplateV2 草稿,Structured
+    Output 强校验 schema)/form.prepare_schema(表单 widgets 草稿)→草稿卡→进设计器继续编辑,
+    永不直接发布。
+  ⑨**审批 AI 摘要+风险提示**:task.get_detail 附 aiSummary(3 行摘要+异常点:金额分位对比/超期/
+    高频申请),缓存按任务;待办详情与确认卡展示,标注"AI 生成仅供参考"。
+  ⑩**确认卡嵌流程预测**:审批类确认卡带 predictChain(复用既有 predict 能力),同意前可见后续
+    流转与预计办理人。
