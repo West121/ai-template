@@ -6,7 +6,8 @@
 import { api, ApiError, NetworkError, type PageResult } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
 import type { FormWidget } from "@/types/workflow"
-import { emptyTemplate, type BdTemplate } from "@/components/bizdoc/model"
+import type { BdTemplate } from "@/components/bizdoc/model"
+import { emptyTemplateV2, type AnyBdTemplate, type BdTemplateV2 } from "@/components/bizdoc/model-v2"
 
 /* ============================ 类型（对齐 §2 表结构） ============================ */
 
@@ -60,16 +61,17 @@ export interface BizDocPrintTpl {
   id: number
   defId: number
   name: string
-  paper: "A4" | "A5"
+  paper: "A4" | "A5" | "Letter"
   landscape: boolean
-  content: BdTemplate
+  /** v2（§9 文档流块级，新建默认）或 v1（自由定位，兼容读） */
+  content: AnyBdTemplate
   isDefault: boolean
 }
 
-/** GET /api/bizdoc/docs/{id}/print 响应（渲染在前端，契约 §3.2） */
+/** GET /api/bizdoc/docs/{id}/print 响应（渲染在前端，契约 §3.2 + §9.3 _approvals） */
 export interface PrintData {
   tpl: BizDocPrintTpl
-  /** form_data + 系统字段（docNo/title/creator/dept/date） */
+  /** form_data + 系统字段（docNo/title/creatorName/deptName/createdAt/status）+ _approvals（§9.3，磐石在补） */
   data: Record<string, unknown>
   /** 字段 key → label 映射 */
   fields: Record<string, string>
@@ -110,8 +112,80 @@ const VEHICLE_SCHEMA: FormWidget[] = [
   { id: "v5", type: "textarea", label: "事由", key: "reason", width: "full" },
 ]
 
-/** 演示打印模板（批A 支持的 label/field/sysfield/line 元素） */
-const EXPENSE_TPL: BdTemplate = {
+/** 演示打印模板 v2（§9 文档流：标题/单据信息/智能表格/标签字段/明细/审批区/分栏签章+二维码） */
+const EXPENSE_TPL_V2: BdTemplateV2 = {
+  schemaVersion: 2,
+  page: {
+    size: "A4",
+    landscape: false,
+    margin: [18, 18, 18, 18],
+    fontFamily: "宋体",
+    pageNumber: { show: true, position: "footer", align: "center", format: "第 {page} 页 / 共 {total} 页", fontSize: 9 },
+  },
+  blocks: [
+    { id: "b1", type: "title", text: "费用报销单", style: { fontSize: 18, bold: true, align: "center" } },
+    {
+      id: "b2",
+      type: "docInfo",
+      items: [
+        { label: "单据编号", value: "{{docNo}}" },
+        { label: "日期", value: "{{createdAt}}" },
+      ],
+      style: { fontSize: 10 },
+    },
+    {
+      id: "b3",
+      type: "infoTable",
+      columnsPerRow: 2,
+      cells: [
+        { label: "报销人", value: "{{creatorName}}" },
+        { label: "所属部门", value: "{{deptName}}" },
+        { label: "报销类型", value: "{{expenseType}}" },
+        { label: "报销金额（元）", value: "{{amount}}" },
+        { label: "发生日期", value: "{{expenseDate}}" },
+        { label: "费用归属项目", value: "{{project}}" },
+      ],
+      style: { fontSize: 10.5, labelWidth: 30 },
+    },
+    { id: "b4", type: "labelField", label: "费用说明", value: "{{memo}}", style: { fontSize: 10.5, labelWidth: 30 } },
+    {
+      id: "b5",
+      type: "detailTable",
+      field: "items",
+      columns: [
+        { field: "name", label: "费用明细", w: 70 },
+        { field: "amount", label: "金额（元）", w: 35 },
+        { field: "remark", label: "备注" },
+      ],
+      showIndex: true,
+      style: { fontSize: 10.5 },
+    },
+    { id: "b6", type: "spacer", h: 4 },
+    {
+      id: "b7",
+      type: "approvalTable",
+      steps: [
+        { label: "部门审批", value: "{{_approvals.0.assigneeName}}\n{{_approvals.0.opinion}}\n{{_approvals.0.time}}" },
+        { label: "财务复核", value: "{{_approvals.1.assigneeName}}\n{{_approvals.1.opinion}}\n{{_approvals.1.time}}" },
+      ],
+      style: { fontSize: 10 },
+    },
+    { id: "b8", type: "spacer", h: 6 },
+    {
+      id: "b9",
+      type: "row",
+      children: [
+        [{ id: "b9a", type: "signature", label: "财务签章", align: "left" }],
+        [{ id: "b9b", type: "qrcode", value: "{{docNo}}", size: 20, align: "right" }],
+      ],
+    },
+    { id: "b10", type: "divider" },
+    { id: "b11", type: "text", content: "说明：本单据由星辰 OA 生成，编号 {{docNo}}，验真请扫描右上二维码。", style: { fontSize: 9 } },
+  ],
+}
+
+/** 旧版演示模板（批A v1 自由定位，保留验证兼容读取） */
+const EXPENSE_TPL_V1: BdTemplate = {
   schemaVersion: 1,
   paper: "A4",
   landscape: false,
@@ -158,7 +232,7 @@ const DEFS: BizDocDef[] = [
         { field: "project", label: "项目", type: "text" },
       ],
     },
-    defaultPrintTplId: 11,
+    defaultPrintTplId: 12,
     status: "PUBLISHED",
     remark: "绑审批流 + 自动编号 + 打印模板的完整示例",
     updatedAt: "2026-07-10T15:00:00",
@@ -210,19 +284,34 @@ const DEF_SCHEMAS: Record<string, FormWidget[]> = {
 }
 
 const TPLS: BizDocPrintTpl[] = [
-  { id: 11, defId: 1, name: "标准报销单（A4）", paper: "A4", landscape: false, content: EXPENSE_TPL, isDefault: true },
+  { id: 12, defId: 1, name: "标准报销单（A4）", paper: "A4", landscape: false, content: EXPENSE_TPL_V2, isDefault: true },
+  { id: 11, defId: 1, name: "旧版套打（v1 兼容）", paper: "A4", landscape: false, content: EXPENSE_TPL_V1, isDefault: false },
 ]
+let tplSeq = 20
 
 let docSeq = 100
 const DOCS: BizDoc[] = [
   {
     id: 91, defId: 1, defCode: "expense", docNo: "BX〔2026〕0012", title: "费用报销单-王经理",
-    formData: { expenseType: "差旅费", amount: 2380.5, expenseDate: "2026-07-05", project: "华东巡检", memo: "7月华东区客户巡检差旅：高铁往返+住宿 2 晚。" },
+    formData: {
+      expenseType: "差旅费", amount: 2380.5, expenseDate: "2026-07-05", project: "华东巡检", memo: "7月华东区客户巡检差旅：高铁往返+住宿 2 晚。",
+      items: [
+        { name: "高铁票（沪杭往返）", amount: 620.5, remark: "二等座" },
+        { name: "酒店住宿 2 晚", amount: 1560, remark: "含早" },
+        { name: "市内交通", amount: 200, remark: "" },
+      ],
+    },
     status: "EFFECTIVE", processInstanceId: "pi-9001", creatorName: "王经理", deptName: "市场部", createdAt: "2026-07-06T10:00:00",
   },
   {
     id: 92, defId: 1, defCode: "expense", docNo: "BX〔2026〕0013", title: "费用报销单-李文",
-    formData: { expenseType: "办公用品", amount: 468, expenseDate: "2026-07-08", project: "", memo: "打印纸与硒鼓补充。" },
+    formData: {
+      expenseType: "办公用品", amount: 468, expenseDate: "2026-07-08", project: "", memo: "打印纸与硒鼓补充。",
+      items: [
+        { name: "A4 打印纸 10 箱", amount: 280, remark: "" },
+        { name: "硒鼓 2 只", amount: 188, remark: "HP 88A" },
+      ],
+    },
     status: "APPROVING", processInstanceId: "pi-9002", creatorName: "李文", deptName: "综合办公室", createdAt: "2026-07-08T14:30:00",
   },
   {
@@ -521,19 +610,32 @@ export function fetchPrintData(docId: number, tplId?: number): Promise<BdResult<
       const def = DEFS.find((d) => d.id === doc.defId)
       const tpl =
         TPLS.find((t) => (tplId != null ? t.id === tplId : t.defId === doc.defId && t.isDefault)) ??
-        ({ id: 0, defId: doc.defId, name: "临时模板", paper: "A4", landscape: false, content: emptyTemplate(), isDefault: false } satisfies BizDocPrintTpl)
+        ({ id: 0, defId: doc.defId, name: "临时模板", paper: "A4", landscape: false, content: emptyTemplateV2(), isDefault: false } satisfies BizDocPrintTpl)
       const fields: Record<string, string> = {}
       for (const w of DEF_SCHEMAS[def?.formCode ?? ""] ?? []) fields[w.key ?? w.id] = w.label
+      // §9.3：绑流程单据带 _approvals（按办理顺序）；mock 按状态推演，真实由磐石从流程实例取
+      const approvals: Record<string, unknown>[] = []
+      if (doc.processInstanceId && (doc.status === "APPROVING" || doc.status === "EFFECTIVE" || doc.status === "REJECTED")) {
+        approvals.push({ nodeName: "部门审批", assigneeName: "王经理", opinion: doc.status === "REJECTED" ? doc.rejectReason ?? "退回修改" : "同意。", time: `${doc.createdAt.slice(0, 10)} 14:00` })
+        if (doc.status === "EFFECTIVE") {
+          approvals.push({ nodeName: "财务复核", assigneeName: "李会计", opinion: "已复核，金额无误。", time: `${doc.createdAt.slice(0, 10)} 16:30` })
+        }
+      }
       return {
         tpl,
         data: {
           ...doc.formData,
           docNo: doc.docNo ?? "",
           title: doc.title,
+          // v2 系统字段（§9.1）+ v1 旧键（兼容旧模板）
+          creatorName: doc.creatorName,
+          deptName: doc.deptName ?? "",
+          createdAt: doc.createdAt.slice(0, 10),
           creator: doc.creatorName,
           dept: doc.deptName ?? "",
           date: doc.createdAt.slice(0, 10),
           status: doc.status,
+          _approvals: approvals,
         },
         fields,
       }
@@ -541,10 +643,81 @@ export function fetchPrintData(docId: number, tplId?: number): Promise<BdResult<
   )
 }
 
-/** 定义下的打印模板列表（批A：定义抽屉展示 + 打印选模板） */
+/** 定义下的打印模板列表（定义抽屉展示 + 打印选模板） */
 export function fetchPrintTpls(defId: number): Promise<BdResult<BizDocPrintTpl[]>> {
   return withMock(
     () => api<BizDocPrintTpl[]>(`/api/bizdoc/defs/${defId}/print-tpls`),
     () => TPLS.filter((t) => t.defId === defId),
+  )
+}
+
+/** 单个模板（设计器载入） */
+export function fetchPrintTpl(tplId: number): Promise<BdResult<BizDocPrintTpl | null>> {
+  return withMock(
+    () => api<BizDocPrintTpl>(`/api/bizdoc/print-tpls/${tplId}`),
+    () => TPLS.find((t) => t.id === tplId) ?? null,
+  )
+}
+
+export interface SavePrintTplPayload {
+  id?: number | null
+  defId: number
+  name: string
+  paper: BizDocPrintTpl["paper"]
+  landscape: boolean
+  content: AnyBdTemplate
+  isDefault?: boolean
+}
+
+/** 保存模板（设计器）：新建 POST / 更新 PUT */
+export function savePrintTpl(payload: SavePrintTplPayload): Promise<BdResult<BizDocPrintTpl>> {
+  return withMock(
+    () =>
+      payload.id
+        ? api<BizDocPrintTpl>(`/api/bizdoc/print-tpls/${payload.id}`, { method: "PUT", body: JSON.stringify(payload) })
+        : api<BizDocPrintTpl>("/api/bizdoc/print-tpls", { method: "POST", body: JSON.stringify(payload) }),
+    () => {
+      const existing = TPLS.find((t) => t.id === payload.id)
+      if (existing) {
+        Object.assign(existing, { name: payload.name, paper: payload.paper, landscape: payload.landscape, content: payload.content })
+        return { ...existing }
+      }
+      const tpl: BizDocPrintTpl = {
+        id: ++tplSeq,
+        defId: payload.defId,
+        name: payload.name,
+        paper: payload.paper,
+        landscape: payload.landscape,
+        content: payload.content,
+        isDefault: payload.isDefault ?? TPLS.every((t) => t.defId !== payload.defId),
+      }
+      TPLS.push(tpl)
+      return { ...tpl }
+    },
+  )
+}
+
+export function setDefaultPrintTpl(tplId: number): Promise<BdResult<void>> {
+  return withMock(
+    () => api<void>(`/api/bizdoc/print-tpls/${tplId}/default`, { method: "POST" }),
+    () => {
+      const tpl = TPLS.find((t) => t.id === tplId)
+      if (!tpl) return
+      for (const t of TPLS) {
+        if (t.defId === tpl.defId) t.isDefault = t.id === tplId
+      }
+      const def = DEFS.find((d) => d.id === tpl.defId)
+      if (def) def.defaultPrintTplId = tplId
+    },
+  )
+}
+
+export function deletePrintTpl(tplId: number): Promise<BdResult<void>> {
+  return withMock(
+    () => api<void>(`/api/bizdoc/print-tpls/${tplId}`, { method: "DELETE" }),
+    () => {
+      const i = TPLS.findIndex((t) => t.id === tplId)
+      if (i >= 0) TPLS.splice(i, 1)
+    },
   )
 }

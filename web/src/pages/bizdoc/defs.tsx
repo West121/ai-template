@@ -5,8 +5,9 @@
  * 发布/停用/删除（仅 DRAFT）；bizdoc:def:write 门控。
  */
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import type { ColumnDef } from "@tanstack/react-table"
-import { FileSpreadsheet, Plus, Printer, ShieldAlert, Star, Trash2 } from "lucide-react"
+import { FileSpreadsheet, PenLine, Plus, Printer, ShieldAlert, Star, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/page-header"
 import { DataTable } from "@/components/data-table/data-table"
@@ -43,6 +44,7 @@ import { useAuthStore, useHasPerm } from "@/stores/auth-store"
 import { DemoBanner } from "@/pages/document/gongwen/shared"
 import {
   deleteDef,
+  deletePrintTpl,
   disableDef,
   fetchDefs,
   fetchNumberRules,
@@ -50,6 +52,7 @@ import {
   fetchPublishedWfDefs,
   publishDef,
   saveDef,
+  setDefaultPrintTpl,
   type BizDocDef,
   type BizDocDefStatus,
   type BizDocPrintTpl,
@@ -104,6 +107,7 @@ function emptyEditor(): EditorState {
 export default function BizdocDefsPage() {
   const offline = useAuthStore((s) => s.offline)
   const canWrite = useHasPerm("bizdoc:def:write")
+  const navigate = useNavigate()
 
   const [rows, setRows] = useState<BizDocDef[]>([])
   const [loading, setLoading] = useState(true)
@@ -650,28 +654,83 @@ export default function BizdocDefsPage() {
             </section>
             <Separator />
 
-            {/* ⑥ 打印模板（批A 占位：列表展示；套打设计器批B 提供） */}
+            {/* ⑥ 打印模板（文档流式设计器 §9；v1 旧模板只读兼容） */}
             <section className="space-y-3">
-              <h3 className="text-sm font-semibold">⑥ 打印模板</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold">⑥ 打印模板</h3>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1 text-xs"
+                  disabled={editor.id == null}
+                  title={editor.id == null ? "先保存定义再建模板" : undefined}
+                  onClick={() => navigate(`/bizdoc/tpl/${editor.code}/new`)}
+                >
+                  <Plus className="size-3.5" /> 新建模板
+                </Button>
+              </div>
               {tpls.length === 0 ? (
-                <p className="text-xs text-muted-foreground">暂无模板。</p>
+                <p className="text-xs text-muted-foreground">暂无模板{editor.id == null ? "（先保存定义）" : "，点右上「新建模板」进设计器"}。</p>
               ) : (
                 <div className="divide-y rounded-md border">
-                  {tpls.map((t) => (
-                    <div key={t.id} className="flex items-center gap-2 px-3 py-2 text-sm">
-                      <Printer className="size-4 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate">{t.name}</span>
-                      <Badge variant="outline" className="text-[10px] text-muted-foreground">
-                        {t.paper}
-                        {t.landscape ? "·横" : ""}
-                      </Badge>
-                      {t.isDefault && <Star className="size-3.5 text-amber-500" />}
-                    </div>
-                  ))}
+                  {tpls.map((t) => {
+                    const v1 = t.content.schemaVersion !== 2
+                    return (
+                      <div key={t.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                        <Printer className="size-4 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 truncate">{t.name}</span>
+                        {v1 && (
+                          <Badge variant="outline" className="text-[10px] text-amber-600">
+                            v1 只读
+                          </Badge>
+                        )}
+                        <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                          {t.paper}
+                          {t.landscape ? "·横" : ""}
+                        </Badge>
+                        {t.isDefault ? (
+                          <Star className="size-3.5 shrink-0 text-amber-500" />
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-6 shrink-0 text-muted-foreground hover:text-amber-500"
+                            title="设为默认"
+                            onClick={() =>
+                              void setDefaultPrintTpl(t.id).then(() => editor.id != null && void fetchPrintTpls(editor.id).then((r) => setTpls(r.data)))
+                            }
+                          >
+                            <Star className="size-3.5" />
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-6 shrink-0 text-primary"
+                          title={v1 ? "v1 模板只读，不能进设计器" : "设计"}
+                          disabled={v1}
+                          onClick={() => navigate(`/bizdoc/tpl/${editor.code}/${t.id}`)}
+                        >
+                          <PenLine className="size-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-6 shrink-0 text-muted-foreground hover:text-rose-600"
+                          title="删除模板"
+                          onClick={() =>
+                            void deletePrintTpl(t.id).then(() => editor.id != null && void fetchPrintTpls(editor.id).then((r) => setTpls(r.data)))
+                          }
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
               <p className="rounded-md border border-dashed bg-muted/30 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
-                可视化套打设计器（拖拽排版 / mm 标尺 / 明细表 / 二维码）将于下一批提供；当前打印按已有模板渲染。
+                文档流式模板设计器：块级堆叠排版、字段 token 绑定、明细/审批区/二维码、打印自动分页；旧 v1 自由定位模板仅保留打印兼容。
               </p>
             </section>
           </div>

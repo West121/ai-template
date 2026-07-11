@@ -54,6 +54,215 @@
   transform-origin: 0 0;
 }
 
+/* ============ v2 文档流（§9 范式变更） ============ */
+
+/* 流式纸面：margin 即内边距（屏幕），打印改走 @page margin */
+.bd-paper--flow {
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  line-height: 1.5;
+}
+
+/* 块列表：统一块间距（设计器画布同款，保证 WYSIWYG） */
+.bd-flow-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2mm;
+  min-width: 0;
+}
+
+/* 智能表格 / 明细 / 审批区：黑边框合并表格 */
+.bd-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.bd-tbl th,
+.bd-tbl td {
+  border: 0.3mm solid #000;
+  padding: 1.2mm 2mm;
+  vertical-align: top;
+  word-break: break-all;
+  white-space: pre-wrap;
+  text-align: left;
+  font-weight: inherit;
+}
+.bd-tbl-label {
+  background: #f2f2f2;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+th.bd-tbl-label {
+  font-weight: 700;
+  text-align: center;
+}
+/* 审批签字格：留出手写高度 */
+.bd-tbl-sign {
+  height: 16mm;
+}
+
+.bd-blk-docinfo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8mm;
+}
+.bd-blk-text {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.bd-blk-row {
+  display: flex;
+  gap: 4mm;
+  align-items: flex-start;
+}
+.bd-blk-col {
+  flex: 1;
+  min-width: 0;
+}
+.bd-blk-sign {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2mm;
+}
+.bd-blk-sign-box {
+  display: inline-block;
+  width: 40mm;
+  height: 16mm;
+  border: 0.3mm solid #000;
+}
+.bd-blk-divider {
+  border: none;
+  border-top: 0.3mm solid #000;
+  margin: 0;
+}
+.bd-blk-spacer--design {
+  outline: 1px dashed #cbd5e1;
+  outline-offset: -1px;
+}
+
+/* 页码（屏幕预览按 1/1 呈现；打印隐藏，走 @page margin box） */
+.bd-pageno {
+  margin-top: auto;
+  padding-top: 2mm;
+  color: #000;
+}
+
+/* 字段 token 蓝 chip（设计态专属；打印/最终态不会渲染 chip） */
+.bd-chip {
+  display: inline-block;
+  margin: 0 0.5mm;
+  padding: 0 1.5mm;
+  border-radius: 1mm;
+  background: #dbeafe;
+  border: 1px solid #93c5fd;
+  color: #1d4ed8;
+  font-size: 0.85em;
+  line-height: 1.6;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+
+/* 占位框（barcode/image 未设置等，仅编辑/预览态） */
+.bd-placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed #d1d5db;
+  color: #9ca3af;
+  font-size: 8pt;
+}
+
+/* ============ 设计器画布 chrome（不进打印；纸面语境内用写死色值） ============ */
+
+.bd-shell {
+  border: 1px dashed transparent;
+  border-radius: 2px;
+  transition: border-color 0.1s;
+}
+.bd-shell:hover {
+  border-color: #93c5fd;
+}
+.bd-shell--selected,
+.bd-shell--selected:hover {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px #3b82f6;
+}
+
+/* hover 工具条：悬于块右上 */
+.bd-shell-tools {
+  position: absolute;
+  top: -18px;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: #1e40af;
+  color: #fff;
+  pointer-events: auto;
+}
+.bd-shell--selected .bd-shell-tools {
+  opacity: 1;
+}
+.bd-shell-name {
+  padding: 0 3px;
+  font-size: 10px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.bd-shell-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+  color: #dbeafe;
+}
+.bd-shell-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+/* 拖放落点指示线 */
+.bd-drop-line {
+  position: absolute;
+  top: -1.5mm;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #3b82f6;
+  border-radius: 1px;
+  z-index: 9;
+}
+
+/* 行容器空栏放置区 */
+.bd-droplist--nested {
+  border: 1px dashed #e5e7eb;
+  border-radius: 2px;
+  padding: 1mm;
+}
+
+.bd-empty-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9ca3af;
+  font-size: 8.5pt;
+  text-align: center;
+  min-height: 8mm;
+}
+
+/* 页边距参考线（仅设计画布） */
+.bd-margin-guide {
+  position: absolute;
+  border: 1px dashed #e2e8f0;
+  pointer-events: none;
+}
+
 /* ============ 打印隔离（照 gongwen.css） ============ */
 @media print {
   body * {
@@ -76,7 +285,17 @@
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
+  /* v2 流式纸面：宽高/边距交给 @page（print-preview 动态生成），内容自然分页 */
+  .bd-print-root .bd-paper--flow {
+    width: auto !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+  }
   .bd-editing-only {
     display: none !important;
+  }
+  /* 作废水印逐页重复（fixed 元素打印时每页绘制） */
+  .bd-void-mark {
+    position: fixed !important;
   }
 }

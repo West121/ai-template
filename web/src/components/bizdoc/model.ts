@@ -164,9 +164,20 @@ export function formatValue(v: unknown): string {
   return String(v)
 }
 
-/** `{{key}}` 插值（qrcode value 等）：上下文缺键输出空串 */
+/** 点路径取值（`_approvals.0.assigneeName` 等）；平键优先，缺失回 undefined */
+export function getByPath(data: Record<string, unknown>, path: string): unknown {
+  if (path in data) return data[path]
+  let cur: unknown = data
+  for (const seg of path.split(".")) {
+    if (cur == null || typeof cur !== "object") return undefined
+    cur = (cur as Record<string, unknown>)[seg]
+  }
+  return cur
+}
+
+/** `{{expr}}` 插值（qrcode value / 智能文本等）：支持点路径（§9.1 审批数据），缺键输出空串 */
 export function interpolate(tpl: string, data: Record<string, unknown>): string {
-  return tpl.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, key: string) => formatValue(data[key]))
+  return tpl.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, key: string) => formatValue(getByPath(data, key)))
 }
 
 /**

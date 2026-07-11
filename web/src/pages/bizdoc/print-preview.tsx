@@ -19,9 +19,12 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { PaperRenderer } from "@/components/bizdoc/paper-renderer"
 import { paperSize, staleElementIds } from "@/components/bizdoc/model"
+import { buildPrintPageCss, isV2, pageSizeMm, staleTokensV2, type AnyBdTemplate } from "@/components/bizdoc/model-v2"
 import { fetchPrintData, fetchPrintTpls, type BizDoc, type BizDocPrintTpl, type PrintData } from "./mock"
 
 const MM_TO_PX = 96 / 25.4
+
+const sizeOf = (tpl: AnyBdTemplate) => (isV2(tpl) ? pageSizeMm(tpl.page) : paperSize(tpl.paper, tpl.landscape))
 
 export function PrintPreview({ doc, open, onClose }: { doc: BizDoc | null; open: boolean; onClose: () => void }) {
   const [tpls, setTpls] = useState<BizDocPrintTpl[]>([])
@@ -58,13 +61,16 @@ export function PrintPreview({ doc, open, onClose }: { doc: BizDoc | null; open:
   // 适应宽度缩放
   useLayoutEffect(() => {
     if (!printData || !deskRef.current) return
-    const size = paperSize(printData.tpl.content.paper, printData.tpl.content.landscape)
-    const paperPx = size.w * MM_TO_PX
+    const paperPx = sizeOf(printData.tpl.content).w * MM_TO_PX
     const avail = deskRef.current.clientWidth - 48
     setScale(avail >= paperPx ? 1 : Math.max(0.3, Math.round((avail / paperPx) * 20) / 20))
   }, [printData])
 
-  const stale = printData ? staleElementIds(printData.tpl.content, { data: printData.data, fields: printData.fields }) : []
+  const stale = printData
+    ? isV2(printData.tpl.content)
+      ? staleTokensV2(printData.tpl.content, { data: printData.data, fields: printData.fields })
+      : staleElementIds(printData.tpl.content, { data: printData.data, fields: printData.fields })
+    : []
 
   const doPrint = () => {
     setPrinting(true)
@@ -75,7 +81,7 @@ export function PrintPreview({ doc, open, onClose }: { doc: BizDoc | null; open:
     }, 60)
   }
 
-  const size = printData ? paperSize(printData.tpl.content.paper, printData.tpl.content.landscape) : null
+  const size = printData ? sizeOf(printData.tpl.content) : null
 
   return (
     <>
@@ -131,7 +137,7 @@ export function PrintPreview({ doc, open, onClose }: { doc: BizDoc | null; open:
               className="mx-auto"
               style={
                 size
-                  ? { width: `${size.w * MM_TO_PX * scale}px`, height: `${size.h * MM_TO_PX * scale}px` }
+                  ? { width: `${size.w * MM_TO_PX * scale}px`, minHeight: `${size.h * MM_TO_PX * scale}px` }
                   : undefined
               }
             >
@@ -151,7 +157,7 @@ export function PrintPreview({ doc, open, onClose }: { doc: BizDoc | null; open:
         printData &&
         createPortal(
           <div className="bd-print-root fixed left-[-200vw] top-0" aria-hidden>
-            <style>{`@page { size: ${printData.tpl.content.paper} ${printData.tpl.content.landscape ? "landscape" : "portrait"}; margin: 0; }`}</style>
+            <style>{buildPrintPageCss(printData.tpl.content)}</style>
             <PaperRenderer
               tpl={printData.tpl.content}
               ctx={{ data: printData.data, fields: printData.fields }}
