@@ -2461,7 +2461,8 @@ async function hlCompleted(token, iid) {
           res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: `用户是${JSON.parse(toolContent).name}` } }] }))
         }
       } else if (req.url === "/ai/v1/chat/completions") {
-        // AI 助手假端点：按用户消息脚本化回复（识别关键词→调工具→final）；§11 捕获请求（model/多模态形状断言）
+        // AI 助手假端点：按用户消息脚本化回复（识别关键词→调工具→final）；§11 捕获请求（model/多模态形状断言）。
+        // 批B 起主链路走 Spring AI(官方 openai-java SDK)——响应必须是完整 chat.completion 形状（strict 反序列化）。
         const reqBody = JSON.parse(body || "{}")
         aiReqs.push(reqBody)
         const msgs = reqBody.messages ?? []
@@ -2470,15 +2471,26 @@ async function hlCompleted(token, iid) {
           ? rawUser.filter((p) => p.type === "text").map((p) => p.text).join("\n")
           : rawUser
         const hasTool = msgs.some((m) => m.role === "tool")
+        const completion = (message, finish = "stop") => JSON.stringify({
+          id: "chatcmpl-mock", object: "chat.completion", created: 1720000000, model: reqBody.model ?? "fake-ai",
+          choices: [{ index: 0, message, finish_reason: finish, logprobs: null }],
+          usage: { prompt_tokens: 12, completion_tokens: 7, total_tokens: 19 },
+        })
         res.writeHead(200, { "Content-Type": "application/json" })
+        // 批B 亮点①：执行计划生成（Structured Output）——返回纯 JSON 计划
+        if (lastUser.includes("生成执行计划")) {
+          res.end(completion({ role: "assistant", content: '{"steps":[{"title":"查询我的待办"},{"title":"汇总分析结果"}]}' }))
+          return
+        }
         // V2 批A：慢响应脚本（会话串行化 409 测试用——首条消息占住会话时插队）
         if (lastUser.includes("慢")) {
-          setTimeout(() => res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "慢回复完成。" } }] })), 1500)
+          setTimeout(() => res.end(completion({ role: "assistant", content: "慢回复完成。" })), 1500)
           return
         }
         if (!hasTool) {
           let tool = null
-          if (lastUser.includes("待办")) tool = { name: "query_todo", arguments: "{}" }
+          if (lastUser.includes("伪造")) tool = { name: "hack_everything", arguments: "{}" }
+          else if (lastUser.includes("待办")) tool = { name: "query_todo", arguments: "{}" }
           else if (lastUser.includes("请假") && lastUser.includes("发起")) tool = { name: "start_approval", arguments: '{"defCode":"leave_approval"}' }
           else if (lastUser.includes("统计") || lastUser.includes("报表")) tool = { name: "stats_report", arguments: '{"module":"approval","dimension":"status"}' }
           else if (lastUser.includes("急")) tool = { name: "query_urgent", arguments: "{}" }
@@ -2487,12 +2499,12 @@ async function hlCompleted(token, iid) {
           else if (lastUser.includes("日程")) tool = { name: "create_schedule", arguments: JSON.stringify({ title: `AI冒烟日程${TS}`, date: "2026-08-01", type: "OTHER" }) }
           else if (lastUser.includes("公文")) tool = { name: "query_documents", arguments: "{}" }
           if (tool) {
-            res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: tool }] } }] }))
+            res.end(completion({ role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: tool }] }, "tool_calls"))
             return
           }
-          res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "你好，我是星辰 OA 智能助手，可以帮你查待办、发起审批、出报表。" } }] }))
+          res.end(completion({ role: "assistant", content: "你好，我是星辰 OA 智能助手，可以帮你查待办、发起审批、出报表。" }))
         } else {
-          res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "已为你处理，见下方卡片。" } }] }))
+          res.end(completion({ role: "assistant", content: "已为你处理，见下方卡片。" }))
         }
       } else if (req.url.startsWith("/dingtalk") || req.url.startsWith("/feishu")) {
         botReqs.push({ url: req.url, body: JSON.parse(body || "{}") })
@@ -3339,6 +3351,80 @@ async function hlCompleted(token, iid) {
   // 10) ai_tool_call 审计落库（本会话工具调用 ≥1 行，risk 占位 READ_ONLY）
   const auditCount = psql(`SELECT count(*) FROM ai_tool_call WHERE session_id = ${Number(v2SessionId)} AND risk_level = 'READ_ONLY'`)
   check("aiV2 ai_tool_call 审计落库(≥1)", Number(auditCount) >= 1, auditCount)
+
+  /* ---- AI 助手 V2 批B（V34）：Spring AI ChatClient/Advisor 链/模型档案/工具风险 Gateway/计划卡/权限解释 ---- */
+
+  // 1) model-profiles：种子 FAST/STANDARD；凭据细节（apiKey/baseUrl/credentialId）永不出 API
+  const profs = await call(admin.token, "GET", "/api/ai/model-profiles")
+  check("aiV2B model-profiles(FAST/STANDARD 种子,凭据不出 API)",
+    profs.body?.code === 0 && ["FAST", "STANDARD"].every((c) => (profs.body?.data ?? []).some((p) => p.code === c)) &&
+      !/apiKey|baseUrl|credentialId/i.test(JSON.stringify(profs.body?.data ?? [])),
+    JSON.stringify(profs.body?.data ?? []).slice(0, 160))
+
+  // 2) 按 profile 切换 + Advisor 链跑通：psql 造 SMOKE_PROF(model_override) → chat modelProfileId → 假端点收到该 model
+  psql(`INSERT INTO ai_model_profile (code, name, credential_id, model_override, sort_no) VALUES ('SMOKE_PROF', '冒烟档案', ${Number(aiCred.body?.data?.id)}, 'fake-profile-model', 99)`)
+  const iProf = aiReqs.length
+  const profChat = await call(admin.token, "POST", "/api/ai/chat", { message: "你好", modelProfileId: "SMOKE_PROF" })
+  check("aiV2B 按 profile 切换(Advisor 链跑通,假端点收到 model_override)",
+    profChat.body?.code === 0 && aiReqs[aiReqs.length - 1]?.model === "fake-profile-model",
+    JSON.stringify(aiReqs[aiReqs.length - 1]?.model))
+  const adminTools = (aiReqs[iProf]?.tools ?? []).map((t) => t.function?.name ?? t.name)
+  check("aiV2B 工具名对齐 §6.4(admin 暴露 report_execute/task_query_my_tasks 规范名)",
+    adminTools.includes("report_execute") && adminTools.includes("task_query_my_tasks") && !adminTools.includes("stats_report"),
+    JSON.stringify(adminTools))
+
+  // 3) 无权工具不暴露（模型收到的 tools 列表断言）+ 403 权限解释器（亮点②）
+  const iZs = aiReqs.length
+  const zsStat = await call(zhangsan.token, "POST", "/api/ai/chat", { message: "帮我统计审批量" })
+  const zsTools = (aiReqs[iZs]?.tools ?? []).map((t) => t.function?.name ?? t.name)
+  check("aiV2B 无权工具不暴露(zhangsan tools 无 report_execute)",
+    zsTools.length > 0 && !zsTools.includes("report_execute") && zsTools.includes("task_query_my_tasks"),
+    JSON.stringify(zsTools))
+  const zsErr = (zsStat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "error")
+  check("aiV2B 403 权限解释(missingAuthority+holderRoles+adminHint)",
+    zsStat.body?.code === 0 && zsErr?.missingAuthority === "office:approval:approve" &&
+      (zsErr?.holderRoles ?? []).length > 0 && !!zsErr?.adminHint,
+    JSON.stringify(zsErr))
+
+  // 4) 伪造工具名 → Gateway 拒（error 卡 AI_TOOL_NOT_ALLOWED，不中断对话）
+  const fakeChat = await call(admin.token, "POST", "/api/ai/chat", { message: "伪造工具试试" })
+  const fakeErr = (fakeChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "error")
+  check("aiV2B 伪造工具名 Gateway 拒(AI_TOOL_NOT_ALLOWED,对话不中断)",
+    fakeChat.body?.code === 0 && fakeErr?.code === "AI_TOOL_NOT_ALLOWED",
+    JSON.stringify(fakeErr))
+
+  // 5) 亮点① 计划卡（SSE）：复杂请求（含"然后"）→ plan part（pending）→ 工具事件逐步置✓ → 最终全 done
+  const sseP = await sse(admin.token, { clientMessageId: `smoke_v2b_${TS}_plan`, message: "帮我查下待办然后汇总分析", credentialId: aiCred.body?.data?.id })
+  const planEvents = sseP.events.filter((e) => e.type === "message.part.created" && e.payload?.part?.partType === "plan")
+  const planFirst = planEvents[0]?.payload?.part
+  const planLast = planEvents[planEvents.length - 1]?.payload?.part
+  check("aiV2B 计划卡 part 出现(≥2 步,初始 pending)",
+    planEvents.length >= 2 && (planFirst?.payload?.steps ?? []).length >= 2 &&
+      (planFirst?.payload?.steps ?? []).every((s) => s.status === "pending"),
+    JSON.stringify(planFirst?.payload))
+  check("aiV2B 计划卡随工具事件逐步置✓(同 partId,最终全 done)",
+    planFirst?.partId === planLast?.partId &&
+      (planLast?.payload?.steps ?? []).length >= 2 && (planLast?.payload?.steps ?? []).every((s) => s.status === "done"),
+    JSON.stringify(planLast?.payload))
+
+  // 6) 健壮性：凭据解密失败 → 503 AI_MODEL_UNAVAILABLE（明确错误，不再 500 空 body）
+  const badKeyCred = await call(admin.token, "POST", "/api/orch/credentials", {
+    name: "冒烟坏钥LLM", type: "LLM", baseUrl: `${SINK}/ai/v1`, apiKey: "sk-will-break", model: "fake-bad",
+  })
+  psql(`UPDATE orch_credential SET api_key_enc = 'broken-cipher-text' WHERE id = ${Number(badKeyCred.body?.data?.id)}`)
+  const badKeyChat = await call(admin.token, "POST", "/api/ai/chat", { message: "你好", credentialId: badKeyCred.body?.data?.id })
+  check("aiV2B 凭据解密失败 → 503 AI_MODEL_UNAVAILABLE",
+    badKeyChat.body?.code === 503 && (badKeyChat.body?.message ?? "").includes("AI_MODEL_UNAVAILABLE"),
+    JSON.stringify({ c: badKeyChat.body?.code, m: badKeyChat.body?.message }))
+
+  // 7) smoke 治理：本 run 造的冒烟凭据/档案清理——KEEP=1 亦执行（KEEP 语义=保用户数据，不保测试垃圾）；
+  //    FAST/STANDARD 种子若指向被清凭据则自愈回最新真实凭据
+  psql("DELETE FROM ai_model_profile WHERE code LIKE 'SMOKE%'; "
+    + "DELETE FROM orch_credential WHERE name LIKE '冒烟%' OR name LIKE 'probe%'; "
+    + "UPDATE ai_model_profile SET credential_id = (SELECT id FROM orch_credential WHERE type='LLM' AND enabled AND base_url IS NOT NULL ORDER BY id DESC LIMIT 1) "
+    + "WHERE code IN ('FAST','STANDARD') AND (credential_id IS NULL OR credential_id NOT IN (SELECT id FROM orch_credential))")
+  const leftCreds = psql("SELECT count(*) FROM orch_credential WHERE name LIKE '冒烟%' OR name LIKE 'probe%'")
+  check("aiV2B smoke 治理:冒烟凭据清零(KEEP=1 亦清理)", Number(leftCreds) === 0, leftCreds)
 
   sink.close()
 }

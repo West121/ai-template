@@ -82,7 +82,7 @@ public class ChangeTools {
                 turn != null ? turn.messageId() : null, toolName, actionType, params, target);
     }
 
-    @AiTool(name = "start_approval",
+    @AiToolDefinition(name = "workflow_prepare_start", aliases = {"start_approval"},
             description = "发起一个审批流程：返回对话内表单卡（在线表单内嵌填写 / 代码表单跳转）。参数 defCode=流程编码（如 leave_approval）。",
             paramsSchema = "{\"defCode\":{\"type\":\"string\",\"description\":\"流程定义编码，如 leave_approval\"}}",
             required = {"defCode"})
@@ -109,7 +109,8 @@ public class ChangeTools {
                 "formType", formType, "hint", "已在对话中展示表单卡，请填写后提交")), card);
     }
 
-    @AiTool(name = "approve_task",
+    @AiToolDefinition(name = "task_prepare_approve", aliases = {"approve_task"},
+            authorities = {"office:approval:approve"}, risk = AiToolRisk.CONFIRM_REQUIRED,
             description = "办理一个待办审批任务（同意/驳回）。产出确认卡，用户确认后才真正办理。"
                     + "参数 taskId、decision(APPROVE|REJECT)、comment 可选。",
             paramsSchema = "{\"taskId\":{\"type\":\"string\",\"description\":\"待办任务 id（可先用 query_todo 获取）\"},"
@@ -132,7 +133,8 @@ public class ChangeTools {
                 "note", "已生成确认卡，用户确认后才会办理")), card);
     }
 
-    @AiTool(name = "create_schedule",
+    @AiToolDefinition(name = "schedule_prepare_create", aliases = {"create_schedule"},
+            risk = AiToolRisk.CONFIRM_REQUIRED,
             description = "创建个人日程。产出确认卡。参数 title、date(yyyy-MM-dd)、type(MEETING|REVIEW|TRIP|TRAINING|OTHER)、startTime?、endTime?、place?。",
             paramsSchema = "{\"title\":{\"type\":\"string\"},\"date\":{\"type\":\"string\",\"description\":\"yyyy-MM-dd\"},"
                     + "\"type\":{\"type\":\"string\"},\"startTime\":{\"type\":\"string\",\"description\":\"HH:mm\"},"
@@ -146,7 +148,8 @@ public class ChangeTools {
         return ToolResult.of(support.toJson(Map.of("staged", true, "actionId", actionId)), card);
     }
 
-    @AiTool(name = "create_meeting",
+    @AiToolDefinition(name = "meeting_prepare_create", aliases = {"create_meeting"},
+            risk = AiToolRisk.CONFIRM_REQUIRED,
             description = "预订会议。产出确认卡。参数 roomId、subject、date(yyyy-MM-dd)、startHour、endHour（整点小时数）。",
             paramsSchema = "{\"roomId\":{\"type\":\"number\"},\"subject\":{\"type\":\"string\"},"
                     + "\"date\":{\"type\":\"string\",\"description\":\"yyyy-MM-dd\"},"

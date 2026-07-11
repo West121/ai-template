@@ -40,7 +40,8 @@ public class QueryTools {
     private final AiUrgentService urgentService;
     private final AiStatsService statsService;
 
-    @AiTool(name = "query_todo", description = "查询我的待办任务（审批/公文办理）。参数 keyword 可选（标题/流程名过滤）。",
+    @AiToolDefinition(name = "task_query_my_tasks", aliases = {"query_todo"},
+            description = "查询我的待办任务（审批/公文办理）。参数 keyword 可选（标题/流程名过滤）。",
             paramsSchema = "{\"keyword\":{\"type\":\"string\",\"description\":\"可选，标题或流程名关键词\"}}")
     public ToolResult queryTodo(Map<String, Object> args) {
         String keyword = str(args, "keyword");
@@ -64,7 +65,8 @@ public class QueryTools {
         return ToolResult.of(support.toJson(Map.of("total", page.getTotal(), "items", rows)), card);
     }
 
-    @AiTool(name = "query_my_instances", description = "查询我发起的流程实例。参数 status 可选、keyword 可选。",
+    @AiToolDefinition(name = "workflow_query_my_instances", aliases = {"query_my_instances"},
+            description = "查询我发起的流程实例。参数 status 可选、keyword 可选。",
             paramsSchema = "{\"status\":{\"type\":\"string\",\"description\":\"可选，如 RUNNING/APPROVED/REJECTED\"},"
                     + "\"keyword\":{\"type\":\"string\",\"description\":\"可选，标题关键词\"}}")
     public ToolResult queryMyInstances(Map<String, Object> args) {
@@ -83,7 +85,8 @@ public class QueryTools {
         return ToolResult.of(support.toJson(Map.of("items", rows)), card);
     }
 
-    @AiTool(name = "query_documents", description = "查询公文列表（收文/发文）。参数 direction(RECEIVE|SEND) / status / keyword 均可选。",
+    @AiToolDefinition(name = "document_query_mine", aliases = {"query_documents"},
+            description = "查询公文列表（收文/发文）。参数 direction(RECEIVE|SEND) / status / keyword 均可选。",
             paramsSchema = "{\"direction\":{\"type\":\"string\",\"description\":\"RECEIVE 收文 / SEND 发文\"},"
                     + "\"keyword\":{\"type\":\"string\",\"description\":\"标题或文号关键词\"}}")
     public ToolResult queryDocuments(Map<String, Object> args) {
@@ -102,7 +105,8 @@ public class QueryTools {
         return ToolResult.of(support.toJson(Map.of("total", page.getTotal(), "items", rows)), card);
     }
 
-    @AiTool(name = "query_meetings", description = "查询我的会议（我组织或参与的）。无参数。")
+    @AiToolDefinition(name = "meeting_query", aliases = {"query_meetings"},
+            description = "查询我的会议（我组织或参与的）。无参数。")
     public ToolResult queryMeetings(Map<String, Object> args) {
         PageResult<MeetingResponse> page = meetingService.my(1, 10);
         List<Map<String, Object>> rows = new ArrayList<>();
@@ -118,7 +122,8 @@ public class QueryTools {
         return ToolResult.of(support.toJson(Map.of("items", rows)), card);
     }
 
-    @AiTool(name = "query_leave_balance", description = "查询我的假期额度（各类型总额/已用/剩余）。无参数。")
+    @AiToolDefinition(name = "leave_query_balance", aliases = {"query_leave_balance"},
+            description = "查询我的假期额度（各类型总额/已用/剩余）。无参数。")
     public ToolResult queryLeaveBalance(Map<String, Object> args) {
         List<LeaveQuotaResponse> quotas = leaveService.quotas();
         List<Map<String, Object>> rows = new ArrayList<>();
@@ -133,7 +138,8 @@ public class QueryTools {
         return ToolResult.of(support.toJson(Map.of("quotas", rows)), card);
     }
 
-    @AiTool(name = "query_attendance", description = "查询我的月度考勤汇总。参数 month 可选（yyyy-MM，缺省本月）。",
+    @AiToolDefinition(name = "attendance_query_month", aliases = {"query_attendance"},
+            description = "查询我的月度考勤汇总。参数 month 可选（yyyy-MM，缺省本月）。",
             paramsSchema = "{\"month\":{\"type\":\"string\",\"description\":\"yyyy-MM，缺省本月\"}}")
     public ToolResult queryAttendance(Map<String, Object> args) {
         var resp = attendanceService.records(str(args, "month"));
@@ -147,7 +153,7 @@ public class QueryTools {
         return ToolResult.of(support.toJson(summary), card);
     }
 
-    @AiTool(name = "query_urgent",
+    @AiToolDefinition(name = "urgent_query_mine", aliases = {"query_urgent"},
             description = "筛选我当前最该处理的急事（服务端按超时/加急/催办/待阅/今日会议打分排序）。无参数。")
     public ToolResult queryUrgent(Map<String, Object> args) {
         List<Map<String, Object>> items = urgentService.urgentItems();
@@ -167,7 +173,9 @@ public class QueryTools {
         return ToolResult.of(support.toJson(Map.of("count", rows.size(), "items", items)), card);
     }
 
-    @AiTool(name = "stats_report",
+    // 批B：管理侧统计报表以 office:approval:approve 门控（批C 报表目录 report_catalog 细化到按 reportCode 授权）
+    @AiToolDefinition(name = "report_execute", aliases = {"stats_report"},
+            authorities = {"office:approval:approve"},
             description = "统计报表（服务端预置聚合，带数据权限）。module=approval|document|attendance；"
                     + "dimension 按 module：approval→status|type，document→docType。返回图表数据。",
             paramsSchema = "{\"module\":{\"type\":\"string\",\"description\":\"approval|document|attendance\"},"

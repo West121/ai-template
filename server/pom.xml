@@ -39,6 +39,9 @@
         <!-- LiteFlow：Tier 2 多语言脚本执行器（N-B-00 spike 已验证 SB4/Java21；
              SB4 必须用专门坐标 liteflow-spring-boot4-starter，普通 starter 仅 SB2/3） -->
         <liteflow.version>2.16.0</liteflow.version>
+        <!-- Spring AI 2（GA，SB4 基线）：AI 助手主链路 ChatClient+Advisor+ToolCallback（附1 批B/附2 裁定）。
+             只引库模块（client-chat/openai），不引 starter 自动装配——凭据动态来自 orch_credential。 -->
+        <spring-ai.version>2.0.0</spring-ai.version>
     </properties>
 
     <dependencyManagement>
@@ -74,6 +77,14 @@
                 <groupId>org.flowable</groupId>
                 <artifactId>flowable-spring-boot-starter-process</artifactId>
                 <version>${flowable.version}</version>
+            </dependency>
+            <!-- Spring AI 2 BOM（模块版本统一管理） -->
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
             <!-- Aviator（Tier 1 公式引擎） -->
             <dependency>

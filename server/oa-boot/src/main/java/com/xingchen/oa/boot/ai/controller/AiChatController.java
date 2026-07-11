@@ -4,7 +4,8 @@ import com.xingchen.oa.boot.ai.entity.AiChatMessage;
 import com.xingchen.oa.boot.ai.entity.AiChatMessagePart;
 import com.xingchen.oa.boot.ai.service.AiActionService;
 import com.xingchen.oa.boot.ai.service.AiChatService;
-import com.xingchen.oa.boot.ai.service.AiChatService.ChatResponse;
+import com.xingchen.oa.boot.ai.service.AiChatService.ChatResult;
+import com.xingchen.oa.boot.ai.service.AiModelService;
 import com.xingchen.oa.boot.ai.support.AiExecutionContext;
 import com.xingchen.oa.boot.ai.support.AiSseChannel;
 import com.xingchen.oa.common.core.PageResult;
@@ -47,13 +48,14 @@ public class AiChatController {
 
     private final AiChatService chatService;
     private final AiActionService actionService;
+    private final AiModelService modelService;
     private final ObjectMapper objectMapper;
     /** AiAsyncConfig 虚拟线程执行器（按参数名匹配 bean aiExecutor）。 */
     private final ExecutorService aiExecutor;
 
-    /** §11：credentialId/model 覆盖默认凭据；attachments=[{fileId|dataUrl, kind:IMAGE|TEXT, name}]。 */
+    /** §11：credentialId/model 覆盖默认凭据（V1 兼容并存）；批B 增 modelProfileId（§4.3）。 */
     public record ChatRequest(Long sessionId, String clientMessageId, String message, Long credentialId,
-                              String model, List<AiChatService.Attachment> attachments) {
+                              String modelProfileId, String model, List<AiChatService.Attachment> attachments) {
     }
 
     /** §9.1 发送消息（SSE）：modelProfileId 批B 落真值；pageContext 批C。 */
@@ -75,9 +77,9 @@ public class AiChatController {
      */
     @PostMapping("/chat/messages")
     public SseEmitter chatMessages(@RequestBody ChatMessageRequest req) {
-        // prepare 在请求线程执行：校验/幂等/会话锁/消息落库（失败 → GlobalExceptionHandler JSON 信封）
+        // prepare 在请求线程执行：校验/幂等/模型档案解析/会话锁/消息落库（失败 → JSON 信封）
         AiChatService.Prepared prep = chatService.prepareTurn(req.sessionId(), req.clientMessageId(),
-                req.message(), req.credentialId(), req.model(), req.attachments());
+                req.message(), req.credentialId(), req.modelProfileId(), req.model(), req.attachments());
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         AiSseChannel ch = new AiSseChannel(emitter, objectMapper);
 
@@ -162,15 +164,21 @@ public class AiChatController {
 
     /** 对话（阻塞，前端 SSE 回退用）：sessionId 空=新会话。返回 {sessionId, messages:[{role,content,cards?,parts?}]}。 */
     @PostMapping("/chat")
-    public R<ChatResponse> chat(@RequestBody ChatRequest req) {
+    public R<ChatResult> chat(@RequestBody ChatRequest req) {
         return R.ok(chatService.chat(req.sessionId(), req.clientMessageId(), req.message(),
-                req.credentialId(), req.model(), req.attachments()));
+                req.credentialId(), req.modelProfileId(), req.model(), req.attachments()));
     }
 
     /** §11 模型切换：启用的 LLM 凭据列表 [{id,name,model,supportsVision}]（前端模型选择器）。 */
     @GetMapping("/models")
     public R<List<Map<String, Object>>> models() {
         return R.ok(chatService.models());
+    }
+
+    /** §4.3 模型档案（批B）：[{id,code,name,description,available,supportsVision}]——凭据/密钥永不出 API。 */
+    @GetMapping("/model-profiles")
+    public R<List<Map<String, Object>>> modelProfiles() {
+        return R.ok(modelService.profiles());
     }
 
     // ==================== §7.3 动作草稿确认/取消 ====================

@@ -84,6 +84,17 @@
             <artifactId>xxl-job-core</artifactId>
             <version>3.1.0</version>
         </dependency>
+        <!-- Spring AI 2（V2 批B）：助手主链路 ChatClient+Advisor+ToolCallback。
+             刻意不引 starter/autoconfigure——ChatModel 按模型档案(orch_credential 动态凭据)编程式构造缓存
+             （AiChatModelFactory），凭据 AES-GCM 解密后仅存于进程内。 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-client-chat</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-openai</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

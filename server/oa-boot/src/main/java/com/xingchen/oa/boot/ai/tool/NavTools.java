@@ -20,7 +20,7 @@ public class NavTools {
                 .toList();
     }
 
-    @AiTool(name = "list_functions",
+    @AiToolDefinition(name = "feature_get_user_capabilities", aliases = {"list_functions"},
             description = "列出当前用户可见的系统功能菜单及说明，用于介绍系统能力或推荐入口。无参数。")
     public ToolResult listFunctions(Map<String, Object> args) {
         List<NavCatalog.Item> items = visible();
@@ -34,7 +34,7 @@ public class NavTools {
                 support.linkCard(links));
     }
 
-    @AiTool(name = "open_function",
+    @AiToolDefinition(name = "navigation_open", aliases = {"open_function"},
             description = "按名称或用户意图匹配一个功能菜单并给出打开入口。参数 query=功能名或意图关键词。",
             paramsSchema = "{\"query\":{\"type\":\"string\",\"description\":\"功能名或意图，如 请假、发文、我的待办\"}}",
             required = {"query"})
