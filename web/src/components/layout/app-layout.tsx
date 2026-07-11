@@ -18,6 +18,7 @@ import { HorizontalMenu } from "./horizontal-menu"
 import { Logo } from "./logo"
 import { SettingsDrawer } from "./settings-drawer"
 import { SidebarMenu } from "./sidebar-menu"
+import { AiAssistant } from "@/components/ai-chat/assistant"
 import { TabsBar } from "./tabs-bar"
 
 /** 找到菜单项下第一个叶子节点 */
@@ -184,6 +185,8 @@ export function AppLayout() {
 
       <SettingsDrawer />
       <GlobalSearch />
+      {/* AI 智能助手：全局悬浮球 + 非模态侧边对话面板（登录后所有页可用） */}
+      <AiAssistant />
     </div>
   )
 }
