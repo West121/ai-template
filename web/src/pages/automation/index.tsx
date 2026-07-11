@@ -44,6 +44,7 @@ import {
   fetchExecs,
   fetchFlows,
   rerunExec,
+  resumeFromFailure,
   runFlow,
   saveCredential,
   toggleFlow,
@@ -53,7 +54,7 @@ import {
   type OrchExecStatus,
   type OrchFlow,
 } from "./mock"
-import { ExecNodeTimeline, ExecStatusBadge } from "./exec-view"
+import { ExecNodeTimeline, ExecStatusBadge, WaitingResumeBar } from "./exec-view"
 
 const TRIGGER_LABEL: Record<string, string> = { MANUAL: "手动", CRON: "定时", EVENT: "事件", WEBHOOK: "Webhook" }
 const CRED_TYPE_LABEL: Record<CredentialType, string> = {
@@ -61,6 +62,7 @@ const CRED_TYPE_LABEL: Record<CredentialType, string> = {
   HTTP_BEARER: "HTTP Bearer",
   HTTP_BASIC: "HTTP Basic",
   HTTP_HEADER: "HTTP 自定义头",
+  JDBC: "JDBC 数据源（只读）",
 }
 
 function fmtTime(iso?: string) {
@@ -108,6 +110,23 @@ function ExecsDrawer({ flow, open, onClose }: { flow: OrchFlow | null; open: boo
     }
   }
 
+  // §9.3 失败续跑：复用父 exec 已成功节点快照，从失败节点继续
+  const resumeFailure = async (exec: OrchExec) => {
+    try {
+      const res = await resumeFromFailure(exec.id)
+      toast.success(`已从失败节点续跑（新流水 #${res.data.execId}）`)
+      setDetail(null)
+      void load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "续跑失败（接口可能未就绪）")
+    }
+  }
+
+  const openDetailById = async (id: number) => {
+    const res = await fetchExecDetail(id)
+    if (res.data) setDetail(res.data)
+  }
+
   return (
     <Drawer open={open} onOpenChange={(o) => !o && onClose()} title={`执行记录 · ${flow?.name ?? ""}`} width={560}>
       {detail ? (
@@ -120,9 +139,31 @@ function ExecsDrawer({ flow, open, onClose }: { flow: OrchFlow | null; open: boo
             <ExecStatusBadge status={detail.status} />
             <span>{fmtTime(detail.startedAt)}</span>
             <span>触发：{detail.triggerKind}</span>
+            {detail.parentExecId != null && (
+              <button
+                type="button"
+                className="text-primary hover:underline"
+                onClick={() => void openDetailById(detail.parentExecId!)}
+              >
+                续跑自 #{detail.parentExecId}
+              </button>
+            )}
           </div>
+          {/* WAITING 挂起：恢复回调地址可复制（§9.2） */}
+          {detail.status === "WAITING" && <WaitingResumeBar resumeToken={detail.resumeToken} />}
           {detail.error && (
             <div className="rounded-md border border-rose-500/30 bg-rose-500/5 px-2.5 py-1.5 text-xs text-rose-600 dark:text-rose-400">{detail.error}</div>
+          )}
+          {/* FAILED：整流重跑 与 失败节点续跑 并列（§9.3） */}
+          {detail.status === "FAILED" && (
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => void rerun(detail)}>
+                <RotateCcw className="size-3" /> 整流重跑
+              </Button>
+              <Button size="sm" className="h-7 gap-1 text-xs" onClick={() => void resumeFailure(detail)}>
+                <Play className="size-3" /> 从失败节点续跑
+              </Button>
+            </div>
           )}
           {detail.payload && (
             <div>
@@ -143,6 +184,7 @@ function ExecsDrawer({ flow, open, onClose }: { flow: OrchFlow | null; open: boo
               <SelectItem value="SUCCESS">成功</SelectItem>
               <SelectItem value="FAILED">失败</SelectItem>
               <SelectItem value="RUNNING">执行中</SelectItem>
+              <SelectItem value="WAITING">挂起等待</SelectItem>
               <SelectItem value="CANCELED">已取消</SelectItem>
             </SelectContent>
           </Select>

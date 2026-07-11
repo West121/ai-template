@@ -13,8 +13,11 @@ export interface OrchNodeData extends Record<string, unknown> {
   config: OrchNodeConfig
   /** 瞬态（校验高亮/执行态），不序列化 */
   validation?: "error" | "warning"
-  execStatus?: "RUNNING" | "SUCCESS" | "FAILED" | "SKIPPED"
+  execStatus?: OrchExecNodeStatus
 }
+
+/** 节点执行态（测试运行回放 / 执行详情共用） */
+export type OrchExecNodeStatus = "RUNNING" | "WAITING" | "SUCCESS" | "FAILED" | "SKIPPED"
 
 export interface OrchEdgeData extends Record<string, unknown> {
   condition?: BranchCondition

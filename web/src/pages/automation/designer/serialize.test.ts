@@ -96,8 +96,9 @@ describe("OrchModel 序列化往返", () => {
 
   it("defaultConfig 覆盖全部节点类型（palette 新增可用）", () => {
     const types = [
-      "trigger", "http", "script", "condition", "parallel", "loop", "delay",
-      "notify", "startApproval", "dataMap", "subFlow", "llm", "end",
+      "trigger", "http", "script", "condition", "parallel", "loop", "delay", "wait",
+      "notify", "startApproval", "dataMap", "subFlow", "respond",
+      "dingtalkBot", "feishuBot", "dbQuery", "llm", "agent", "end",
     ] as const
     for (const t of types) expect(defaultConfig(t)).toBeDefined()
   })
@@ -150,6 +151,109 @@ describe("OrchModel 序列化往返", () => {
     }
     expect(roundTrip(model)).toEqual(model)
     expect(validateOrchModel(model).filter((i) => i.level === "error")).toEqual([])
+  })
+
+  it("批3/批4 新节点（agent/wait/respond/bots/dbQuery）往返字节一致", () => {
+    const model: OrchModel = {
+      schemaVersion: 1,
+      key: "batch34",
+      name: "批3批4节点",
+      nodes: [
+        { id: "t", type: "trigger", name: "Webhook", position: { x: 0, y: 0 }, config: { triggerType: "WEBHOOK" } },
+        {
+          id: "ag",
+          type: "agent",
+          name: "AI Agent",
+          position: { x: 0, y: 100 },
+          config: {
+            credentialId: 1,
+            model: "deepseek-chat",
+            systemPrompt: "你是助手",
+            userPrompt: "处理 {{payload.docId}}",
+            tools: [
+              {
+                name: "query_doc",
+                description: "查公文",
+                params: [{ name: "docId", type: "number", description: "公文 id", required: true }],
+                impl: { kind: "HTTP", method: "GET", url: "https://oa/api/doc/{{args.docId}}" },
+              },
+              {
+                name: "calc",
+                description: "算一算",
+                params: [],
+                impl: { kind: "SCRIPT", script: { lang: "groovy", code: "return args" } },
+              },
+            ],
+            maxSteps: 6,
+            timeoutMs: 120000,
+            outputMode: "JSON",
+            saveAs: "agentOut",
+            retry: { times: 2, intervalMs: 500 },
+            onError: "ABORT",
+          },
+        },
+        { id: "w", type: "wait", name: "等确认", position: { x: 0, y: 200 }, config: { timeoutMs: 3600000, saveAs: "cb", onError: "CONTINUE" } },
+        { id: "r", type: "respond", name: "同步响应", position: { x: 0, y: 300 }, config: { status: 200, body: '{"ok":true}', contentType: "application/json" } },
+        { id: "dt", type: "dingtalkBot", name: "钉钉通知", position: { x: 0, y: 400 }, config: { url: "https://oapi.dingtalk.com/robot/send?access_token=x", secret: "SEC1", msgType: "markdown", title: "标题", content: "**{{vars.cb}}**" } },
+        { id: "fs", type: "feishuBot", name: "飞书通知", position: { x: 0, y: 500 }, config: { url: "https://open.feishu.cn/open-apis/bot/v2/hook/x", msgType: "text", content: "{{vars.cb}}" } },
+        { id: "db", type: "dbQuery", name: "查报表", position: { x: 0, y: 600 }, config: { credentialId: 3, sql: "select * from t where id = {{payload.id}}", maxRows: 100, timeoutMs: 5000, saveAs: "rows" } },
+        { id: "e", type: "end", name: "结束", position: { x: 0, y: 700 }, config: {} },
+      ],
+      edges: [
+        { id: "e1", source: "t", target: "ag" },
+        { id: "e2", source: "ag", target: "w" },
+        { id: "e3", source: "w", target: "r" },
+        { id: "e4", source: "r", target: "dt" },
+        { id: "e5", source: "dt", target: "fs" },
+        { id: "e6", source: "fs", target: "db" },
+        { id: "e7", source: "db", target: "e" },
+      ],
+    }
+    expect(roundTrip(model)).toEqual(model)
+    expect(validateOrchModel(model).filter((i) => i.level === "error")).toEqual([])
+  })
+
+  it("validateOrchModel：wait 位置限制 + agent/dbQuery 约束", () => {
+    // wait 在 loop 体内 → error
+    const waitInLoop: OrchModel = {
+      schemaVersion: 1,
+      key: "wait_in_loop",
+      name: "违规挂起",
+      nodes: [
+        { id: "t", type: "trigger", name: "手动", position: { x: 0, y: 0 }, config: { triggerType: "MANUAL" } },
+        { id: "lp", type: "loop", name: "遍历", position: { x: 0, y: 100 }, config: { collection: "{{payload.list}}", itemVar: "i" } },
+        { id: "w", type: "wait", name: "等回调", position: { x: -100, y: 200 }, config: {} },
+        { id: "e", type: "end", name: "结束", position: { x: 100, y: 200 }, config: {} },
+      ],
+      edges: [
+        { id: "e0", source: "t", target: "lp" },
+        { id: "e1", source: "lp", target: "w", loopBody: true },
+        { id: "e2", source: "lp", target: "e" },
+      ],
+    }
+    expect(validateOrchModel(waitInLoop).some((i) => i.level === "error" && i.message.includes("循环体"))).toBe(true)
+
+    // agent 缺提示词 / maxSteps 超限；dbQuery 非 select
+    const bad: OrchModel = {
+      schemaVersion: 1,
+      key: "bad34",
+      name: "违规",
+      nodes: [
+        { id: "t", type: "trigger", name: "手动", position: { x: 0, y: 0 }, config: { triggerType: "MANUAL" } },
+        { id: "ag", type: "agent", name: "Agent", position: { x: 0, y: 100 }, config: { userPrompt: "", tools: [], maxSteps: 20, outputMode: "TEXT" } },
+        { id: "db", type: "dbQuery", name: "查库", position: { x: 0, y: 200 }, config: { sql: "delete from t" } },
+        { id: "e", type: "end", name: "结束", position: { x: 0, y: 300 }, config: {} },
+      ],
+      edges: [
+        { id: "e0", source: "t", target: "ag" },
+        { id: "e1", source: "ag", target: "db" },
+        { id: "e2", source: "db", target: "e" },
+      ],
+    }
+    const issues = validateOrchModel(bad)
+    expect(issues.some((i) => i.level === "error" && i.message.includes("用户提示词"))).toBe(true)
+    expect(issues.some((i) => i.level === "error" && i.message.includes("maxSteps"))).toBe(true)
+    expect(issues.some((i) => i.level === "error" && i.message.includes("SELECT"))).toBe(true)
   })
 
   it("validateOrchModel：loop / BRANCH 出边契约违规报 error", () => {

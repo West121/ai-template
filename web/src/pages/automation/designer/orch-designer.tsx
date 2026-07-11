@@ -40,6 +40,7 @@ import {
   fromOrchModel,
   ORCH_EDGE_TYPE,
   toOrchModel,
+  type OrchExecNodeStatus,
   type OrchRfEdge,
   type OrchRfNode,
 } from "./serialize"
@@ -174,7 +175,7 @@ export interface OrchDesignerHandle {
   validate: () => OrchIssue[]
   autoLayout: () => void
   /** 测试运行回放：把 exec 节点状态映射到画布（null 清除） */
-  applyExecStatus: (statusById: Record<string, "RUNNING" | "SUCCESS" | "FAILED" | "SKIPPED"> | null) => void
+  applyExecStatus: (statusById: Record<string, OrchExecNodeStatus> | null) => void
 }
 
 export interface OrchDesignerProps {
@@ -285,7 +286,7 @@ function OrchDesignerInner({ initialModel, meta, credentials, flows, onDirty, re
   }, [edges, setNodes, fitView, markDirty])
 
   const applyExecStatus = useCallback(
-    (statusById: Record<string, "RUNNING" | "SUCCESS" | "FAILED" | "SKIPPED"> | null) => {
+    (statusById: Record<string, OrchExecNodeStatus> | null) => {
       setNodes((ns) =>
         ns.map((n) => ({ ...n, data: { ...n.data, execStatus: statusById?.[n.id] } })),
       )

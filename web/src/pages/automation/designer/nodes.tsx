@@ -8,17 +8,23 @@ import { Handle, Position, type NodeProps, type NodeTypes } from "@xyflow/react"
 import {
   Bell,
   Bot,
+  BrainCircuit,
   CheckCircle2,
   CircleDot,
   Clock,
   Code2,
   Columns2,
+  Database,
   FileInput,
   Flag,
   GitFork,
   Globe,
+  Hourglass,
   Loader2,
+  MessageCircle,
+  MessageSquare,
   Repeat2,
+  Reply,
   Shuffle,
   Workflow,
   XCircle,
@@ -27,7 +33,10 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type {
+  AgentConfig,
+  BotConfig,
   DataMapConfig,
+  DbQueryConfig,
   DelayConfig,
   HttpConfig,
   LlmConfig,
@@ -35,10 +44,12 @@ import type {
   NotifyConfig,
   OrchNodeType,
   ParallelConfig,
+  RespondConfig,
   ScriptNodeConfig,
   StartApprovalConfig,
   SubFlowConfig,
   TriggerConfig,
+  WaitConfig,
 } from "./model"
 import type { OrchNodeData, OrchRfNode } from "./serialize"
 
@@ -66,16 +77,23 @@ export const NODE_META: Record<OrchNodeType, OrchNodeMeta> = {
   notify: { type: "notify", label: "站内通知", description: "给指定人发通知", icon: Bell, headerClass: "bg-teal-600", handleColor: "!bg-teal-600" },
   startApproval: { type: "startApproval", label: "发起审批", description: "起一条审批流实例", icon: FileInput, headerClass: "bg-orange-600", handleColor: "!bg-orange-600" },
   subFlow: { type: "subFlow", label: "子编排", description: "调用另一条编排（≤5 层）", icon: Workflow, headerClass: "bg-indigo-600", handleColor: "!bg-indigo-600" },
+  wait: { type: "wait", label: "等待回调", description: "执行到此挂起，等 Webhook 回调恢复（§9.2）", icon: Hourglass, headerClass: "bg-amber-600", handleColor: "!bg-amber-600" },
+  respond: { type: "respond", label: "同步响应", description: "Webhook 触发时的同步 HTTP 响应（§9.4）", icon: Reply, headerClass: "bg-teal-600", handleColor: "!bg-teal-600" },
+  dingtalkBot: { type: "dingtalkBot", label: "钉钉机器人", description: "群机器人 webhook 消息（支持加签）", icon: MessageSquare, headerClass: "bg-sky-600", handleColor: "!bg-sky-600" },
+  feishuBot: { type: "feishuBot", label: "飞书机器人", description: "群机器人 webhook 消息", icon: MessageCircle, headerClass: "bg-sky-600", handleColor: "!bg-sky-600" },
+  dbQuery: { type: "dbQuery", label: "数据库查询", description: "JDBC 只读 SELECT（≤1000 行，受信）", icon: Database, headerClass: "bg-cyan-700", handleColor: "!bg-cyan-700" },
   llm: { type: "llm", label: "AI（LLM）", description: "OpenAI 兼容端点，TEXT/JSON 输出", icon: Bot, headerClass: "bg-violet-600", handleColor: "!bg-violet-600" },
+  agent: { type: "agent", label: "AI Agent", description: "function-calling 循环：LLM 决策 → 调工具 → 迭代（§9.1）", icon: BrainCircuit, headerClass: "bg-violet-700", handleColor: "!bg-violet-700" },
   end: { type: "end", label: "结束", description: "可选输出表达式", icon: Flag, headerClass: "bg-slate-500", handleColor: "!bg-slate-500" },
 }
 
-/** palette 分组（契约 §5.1） */
+/** palette 分组（契约 §5.1 + §9/§9.5） */
 export const PALETTE_GROUPS: { label: string; types: OrchNodeType[] }[] = [
   { label: "触发", types: ["trigger"] },
-  { label: "逻辑", types: ["condition", "parallel", "loop", "delay"] },
-  { label: "动作", types: ["http", "script", "dataMap", "notify", "startApproval", "subFlow", "end"] },
-  { label: "AI", types: ["llm"] },
+  { label: "逻辑", types: ["condition", "parallel", "loop", "delay", "wait"] },
+  { label: "动作", types: ["http", "script", "dataMap", "notify", "startApproval", "subFlow", "respond", "end"] },
+  { label: "连接器", types: ["dingtalkBot", "feishuBot", "dbQuery"] },
+  { label: "AI", types: ["llm", "agent"] },
 ]
 
 export const ORCH_DND_MIME = "application/x-orch-node"
@@ -136,6 +154,28 @@ export function summarizeNode(type: OrchNodeType, data: OrchNodeData): string {
       const cfg = c as LlmConfig
       return cfg.userPrompt ? `${cfg.outputMode} · ${cfg.model || "默认模型"}` : "未配置提示词"
     }
+    case "agent": {
+      const cfg = c as AgentConfig
+      if (!cfg.userPrompt) return "未配置提示词"
+      return `${cfg.tools.length} 个工具 · ≤${cfg.maxSteps ?? 8} 步 · ${cfg.outputMode}`
+    }
+    case "wait": {
+      const ms = (c as WaitConfig).timeoutMs
+      return `挂起等回调${ms ? `（超时 ${Math.round(ms / 3_600_000)}h）` : ""}`
+    }
+    case "respond": {
+      const cfg = c as RespondConfig
+      return `HTTP ${cfg.status ?? 200} · ${cfg.contentType ?? "application/json"}`
+    }
+    case "dingtalkBot":
+    case "feishuBot": {
+      const cfg = c as BotConfig
+      return cfg.url ? `${cfg.msgType === "markdown" ? "Markdown" : "文本"} 消息` : "未配置 webhook"
+    }
+    case "dbQuery": {
+      const cfg = c as DbQueryConfig
+      return cfg.sql ? `${cfg.credentialId != null ? "外部库" : "本应用库"} · ≤${cfg.maxRows ?? 1000} 行` : "未配置 SQL"
+    }
     case "end":
       return "结束"
   }
@@ -145,6 +185,7 @@ export function summarizeNode(type: OrchNodeType, data: OrchNodeData): string {
 
 const EXEC_BADGE: Record<NonNullable<OrchNodeData["execStatus"]>, { icon: ComponentType<LucideProps>; cls: string }> = {
   RUNNING: { icon: Loader2, cls: "text-blue-500 animate-spin" },
+  WAITING: { icon: Hourglass, cls: "text-amber-500" },
   SUCCESS: { icon: CheckCircle2, cls: "text-emerald-500" },
   FAILED: { icon: XCircle, cls: "text-rose-500" },
   SKIPPED: { icon: CircleDot, cls: "text-muted-foreground/50" },

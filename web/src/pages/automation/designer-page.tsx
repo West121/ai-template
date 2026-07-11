@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
-import { ArrowLeft, CircleCheck, FlaskConical, LayoutDashboard, Loader2, Save, Send, Zap } from "lucide-react"
+import { ArrowLeft, ChevronDown, ChevronRight, CircleCheck, FlaskConical, History, LayoutDashboard, Loader2, Save, Send, Undo2, Zap } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
@@ -29,18 +29,135 @@ import {
   fetchExecDetail,
   fetchFlow,
   fetchFlows,
+  fetchFlowVersion,
+  fetchFlowVersions,
   publishFlow,
+  rollbackFlowVersion,
   runFlow,
   saveFlow,
   toggleFlow,
   type OrchCredential,
   type OrchExec,
   type OrchFlow,
+  type OrchFlowVersion,
 } from "./mock"
 import type { OrchModel, TriggerConfig, TriggerType } from "./designer/model"
-import { parseOrchModel } from "./designer/serialize"
+import { parseOrchModel, type OrchExecNodeStatus } from "./designer/serialize"
 import { OrchDesigner, type OrchDesignerHandle } from "./designer/orch-designer"
-import { ExecNodeTimeline } from "./exec-view"
+import { ExecNodeTimeline, WaitingResumeBar } from "./exec-view"
+
+/* ---------------- 版本历史抽屉（§9.5） ---------------- */
+
+function VersionsDrawer({
+  flow,
+  open,
+  onClose,
+  onRolledBack,
+}: {
+  flow: OrchFlow | null
+  open: boolean
+  onClose: () => void
+  /** 回滚成功：外层重载模型 */
+  onRolledBack: (flow: OrchFlow) => void
+}) {
+  const [versions, setVersions] = useState<OrchFlowVersion[]>([])
+  const [loading, setLoading] = useState(false)
+  const [openVersion, setOpenVersion] = useState<number | null>(null)
+  const [snapshot, setSnapshot] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!open || !flow) return
+    let cancelled = false
+    setLoading(true)
+    setOpenVersion(null)
+    fetchFlowVersions(flow.id)
+      .then((res) => {
+        if (!cancelled) setVersions(res.data)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, flow])
+
+  const view = async (v: OrchFlowVersion) => {
+    if (openVersion === v.version) {
+      setOpenVersion(null)
+      return
+    }
+    setOpenVersion(v.version)
+    setSnapshot(null)
+    const res = await fetchFlowVersion(flow!.id, v.version)
+    const model = parseOrchModel(res.data?.designerJson)
+    setSnapshot(
+      model
+        ? `节点 ${model.nodes.length} 个 · 连线 ${model.edges.length} 条\n\n${JSON.stringify(model, null, 2)}`
+        : "（快照缺失或解析失败）",
+    )
+  }
+
+  const rollback = async (v: OrchFlowVersion) => {
+    if (!flow) return
+    if (!window.confirm(`确定回滚到 v${v.version}？当前设计将被该版本快照覆盖（会发布为新版本）。`)) return
+    setBusy(true)
+    try {
+      const res = await rollbackFlowVersion(flow.id, v.version)
+      toast.success(`已回滚到 v${v.version}（新版本 v${res.data.version}）`)
+      onRolledBack(res.data)
+      onClose()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "回滚失败")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Drawer open={open} onOpenChange={(o) => !o && onClose()} title={`版本历史 · ${flow?.name ?? ""}`} description="每次发布留存快照；回滚 = 以该版本覆盖当前设计并发布新版本" width={520}>
+      {loading ? (
+        <div className="py-10 text-center text-sm text-muted-foreground">加载中…</div>
+      ) : versions.length === 0 ? (
+        <div className="py-10 text-center text-sm text-muted-foreground">暂无发布版本（保存并发布后生成）</div>
+      ) : (
+        <div className="space-y-1.5">
+          {versions.map((v) => (
+            <div key={v.id} className="rounded-md border">
+              <div className="flex items-center gap-2 px-2.5 py-2">
+                <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => void view(v)}>
+                  {openVersion === v.version ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />}
+                  <Badge variant="outline" className="shrink-0 font-mono text-[11px]">
+                    v{v.version}
+                  </Badge>
+                  <span className="shrink-0 text-xs text-muted-foreground">{v.publishedAt.slice(5, 16).replace("T", " ")}</span>
+                  {v.publishedBy && <span className="shrink-0 text-xs text-muted-foreground">{v.publishedBy}</span>}
+                  {v.remark && <span className="truncate text-xs text-muted-foreground">· {v.remark}</span>}
+                </button>
+                {v.version !== flow?.version && (
+                  <Button variant="outline" size="sm" className="h-7 shrink-0 gap-1 text-xs" disabled={busy} onClick={() => void rollback(v)}>
+                    <Undo2 className="size-3" /> 回滚
+                  </Button>
+                )}
+                {v.version === flow?.version && (
+                  <Badge variant="outline" className="shrink-0 border-emerald-500/30 bg-emerald-500/10 text-[11px] text-emerald-600">
+                    当前
+                  </Badge>
+                )}
+              </div>
+              {openVersion === v.version && (
+                <pre className="max-h-64 overflow-auto border-t bg-muted/30 p-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all">
+                  {snapshot ?? "加载快照…"}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Drawer>
+  )
+}
 
 const TRIGGER_BADGE: Record<TriggerType, string> = {
   MANUAL: "手动",
@@ -87,6 +204,8 @@ export default function AutomationDesignerPage() {
   const [running, setRunning] = useState(false)
   const [testExec, setTestExec] = useState<OrchExec | null>(null)
   const pollRef = useRef<number | null>(null)
+  // 版本历史（§9.5）
+  const [versionsOpen, setVersionsOpen] = useState(false)
 
   const designerRef = useRef<OrchDesignerHandle>(null)
 
@@ -227,7 +346,7 @@ export default function AutomationDesignerPage() {
         const detail = await fetchExecDetail(execId)
         if (!detail.data) return
         setTestExec(detail.data)
-        const statusById: Record<string, "RUNNING" | "SUCCESS" | "FAILED" | "SKIPPED"> = {}
+        const statusById: Record<string, OrchExecNodeStatus> = {}
         for (const n of detail.data.nodes ?? []) statusById[n.nodeId] = n.status
         designerRef.current?.applyExecStatus(statusById)
         if (detail.data.status !== "RUNNING") {
@@ -344,6 +463,12 @@ export default function AutomationDesignerPage() {
             <LayoutDashboard className="size-3.5" />
             整理
           </Button>
+          {flow && (
+            <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setVersionsOpen(true)}>
+              <History className="size-3.5" />
+              版本
+            </Button>
+          )}
           <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setTestOpen(true)}>
             <FlaskConical className="size-3.5" />
             测试运行
@@ -366,9 +491,9 @@ export default function AutomationDesignerPage() {
         </div>
       )}
 
-      {/* 设计器 */}
+      {/* 设计器（key 含 version：版本回滚后强制以快照重挂画布） */}
       <OrchDesigner
-        key={flow?.id ?? "new"}
+        key={`${flow?.id ?? "new"}-${flow?.version ?? 0}`}
         ref={designerRef}
         initialModel={model}
         meta={{ key: flowCode, name }}
@@ -394,11 +519,26 @@ export default function AutomationDesignerPage() {
                 流水 #{testExec.id} · {testExec.status}
                 {testExec.error && <span className="ml-2 text-rose-500">{testExec.error}</span>}
               </div>
+              {/* WAITING 挂起：展示恢复回调地址（§9.2） */}
+              {testExec.status === "WAITING" && <WaitingResumeBar resumeToken={testExec.resumeToken} />}
               <ExecNodeTimeline nodes={testExec.nodes ?? []} />
             </div>
           )}
         </div>
       </Drawer>
+
+      {/* 版本历史抽屉（§9.5）：查看快照 / 回滚 */}
+      <VersionsDrawer
+        flow={flow}
+        open={versionsOpen}
+        onClose={() => setVersionsOpen(false)}
+        onRolledBack={(next) => {
+          // 回滚后以快照重载画布（key 变化强制重挂设计器）
+          setFlow(next)
+          setModel(parseOrchModel(next.designerJson) ?? model)
+          setDirty(false)
+        }}
+      />
     </div>
   )
 }

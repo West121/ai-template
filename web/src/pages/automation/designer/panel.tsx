@@ -40,7 +40,11 @@ import { OPERATOR_META, type BranchCondition, type ConditionOperator } from "@/p
 import type { ScriptConfig } from "@/pages/workflow/designer/flow/model"
 import type {
   ActionCommon,
+  AgentConfig,
+  AgentTool,
+  BotConfig,
   DataMapConfig,
+  DbQueryConfig,
   DelayConfig,
   EndConfig,
   HttpConfig,
@@ -50,10 +54,12 @@ import type {
   OrchNodeConfig,
   OrchNodeType,
   ParallelConfig,
+  RespondConfig,
   ScriptNodeConfig,
   StartApprovalConfig,
   SubFlowConfig,
   TriggerConfig,
+  WaitConfig,
 } from "./model"
 import type { OrchCredential, OrchFlow } from "../mock"
 import { NODE_META } from "./nodes"
@@ -367,14 +373,21 @@ export function OrchNodePanel(props: OrchNodePanelProps) {
         </Field>
       )}
       {type === "subFlow" && <SubFlowFields {...props} config={config as SubFlowConfig} patch={patch} />}
+      {type === "wait" && <WaitFields config={config as WaitConfig} patch={patch} />}
+      {type === "respond" && <RespondFields config={config as RespondConfig} patch={patch} upstream={upstream} />}
+      {(type === "dingtalkBot" || type === "feishuBot") && (
+        <BotFields platform={type === "dingtalkBot" ? "dingtalk" : "feishu"} config={config as BotConfig} patch={patch} upstream={upstream} />
+      )}
+      {type === "dbQuery" && <DbQueryFields {...props} config={config as DbQueryConfig} patch={patch} />}
       {type === "llm" && <LlmFields {...props} config={config as LlmConfig} patch={patch} />}
+      {type === "agent" && <AgentFields {...props} config={config as AgentConfig} patch={patch} />}
       {type === "end" && (
         <Field label="流水结果（可选表达式）">
           <TplInput value={(config as EndConfig).output ?? ""} onChange={(v) => patch({ output: v || undefined })} upstream={upstream} placeholder="如 {{vars.summary}}" />
         </Field>
       )}
 
-      {["http", "script", "notify", "startApproval", "dataMap", "subFlow", "llm"].includes(type) && (
+      {["http", "script", "notify", "startApproval", "dataMap", "subFlow", "dingtalkBot", "feishuBot", "dbQuery", "llm", "agent"].includes(type) && (
         <ActionCommonFields value={config as ActionCommon} onChange={(p) => patch(p)} />
       )}
     </div>
@@ -713,6 +726,307 @@ function LlmFields({ config, patch, upstream, credentials }: OrchNodePanelProps 
           JSON 模式：提示词会被强约束输出 JSON；解析失败按节点失败处理（走上方重试 / 失败策略）。
         </p>
       )}
+    </div>
+  )
+}
+
+/* ---- 批3：wait / respond / agent ---- */
+
+function WaitFields({ config, patch }: { config: WaitConfig; patch: (p: Partial<WaitConfig>) => void }) {
+  return (
+    <div className="space-y-3">
+      <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-xs leading-relaxed text-amber-600 dark:text-amber-400">
+        执行到此节点流水挂起（WAITING），等待回调恢复：
+        <code className="font-mono">POST /api/orch/resume/{"{resumeToken}"}</code>（token 在执行详情可复制）。
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="挂起超时 ms" hint="默认 24 小时；超时按下方策略处理">
+          <Input type="number" min={1000} value={config.timeoutMs ?? 86_400_000} onChange={(e) => patch({ timeoutMs: Number(e.target.value) || undefined })} className="h-8 text-xs" />
+        </Field>
+        <Field label="回调 body 存入（saveAs）">
+          <Input value={config.saveAs ?? ""} onChange={(e) => patch({ saveAs: e.target.value || undefined })} className="h-8 font-mono text-xs" placeholder="如 callback" />
+        </Field>
+      </div>
+      <Field label="超时策略">
+        <Select value={config.onError ?? "ABORT"} onValueChange={(v) => patch({ onError: v as WaitConfig["onError"] })}>
+          <SelectTrigger className="h-8 w-full text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ABORT">中止整流（默认）</SelectItem>
+            <SelectItem value="CONTINUE">忽略继续</SelectItem>
+            <SelectItem value="BRANCH">走错误分支</SelectItem>
+          </SelectContent>
+        </Select>
+      </Field>
+    </div>
+  )
+}
+
+function RespondFields({ config, patch, upstream }: { config: RespondConfig; patch: (p: Partial<RespondConfig>) => void; upstream: UpstreamNode[] }) {
+  return (
+    <div className="space-y-3">
+      <p className="rounded-md border border-dashed bg-muted/30 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
+        仅 <span className="font-medium text-foreground">Webhook 触发</span>时作为同步 HTTP 响应（调用方等到本节点执行完拿响应，
+        后续节点继续异步跑）；其它触发方式下等价于数据映射存 body。
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="HTTP 状态码">
+          <Input type="number" min={100} max={599} value={config.status ?? 200} onChange={(e) => patch({ status: Number(e.target.value) || undefined })} className="h-8 text-xs" />
+        </Field>
+        <Field label="Content-Type">
+          <Input value={config.contentType ?? "application/json"} onChange={(e) => patch({ contentType: e.target.value || undefined })} className="h-8 font-mono text-xs" />
+        </Field>
+      </div>
+      <Field label="响应体模板">
+        <TplTextarea value={config.body} onChange={(body) => patch({ body })} upstream={upstream} rows={4} placeholder='{"result": "{{vars.summary}}"}' />
+      </Field>
+    </div>
+  )
+}
+
+/** Agent 工具编辑器：声明（name/description/params）+ 实现（HTTP 模板可用 {{args.xxx}} / SCRIPT 绑定 args） */
+function AgentToolsEditor({ tools, onChange, upstream }: { tools: AgentTool[]; onChange: (tools: AgentTool[]) => void; upstream: UpstreamNode[] }) {
+  const setTool = (i: number, patch: Partial<AgentTool>) => onChange(tools.map((t, idx) => (idx === i ? { ...t, ...patch } : t)))
+
+  return (
+    <div className="space-y-2">
+      {tools.map((tool, i) => (
+        <div key={i} className="space-y-2 rounded-md border p-2">
+          <div className="flex items-center gap-1">
+            <Input value={tool.name} onChange={(e) => setTool(i, { name: e.target.value })} className="h-8 flex-1 font-mono text-xs" placeholder="工具名（如 query_user）" />
+            <Select
+              value={tool.impl.kind}
+              onValueChange={(v) =>
+                setTool(i, {
+                  impl:
+                    v === "HTTP"
+                      ? { kind: "HTTP", method: "GET", url: "" }
+                      : { kind: "SCRIPT", script: { lang: "groovy", code: "" } },
+                })
+              }
+            >
+              <SelectTrigger className="h-8 w-24 shrink-0 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="HTTP">HTTP</SelectItem>
+                <SelectItem value="SCRIPT">脚本</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button type="button" variant="ghost" size="icon" className="size-7 shrink-0 text-muted-foreground hover:text-rose-600" onClick={() => onChange(tools.filter((_, idx) => idx !== i))}>
+              <Trash2 className="size-3.5" />
+            </Button>
+          </div>
+          <Input value={tool.description} onChange={(e) => setTool(i, { description: e.target.value })} className="h-8 text-xs" placeholder="工具描述（LLM 依此决定何时调用）" />
+
+          {/* 参数声明表 */}
+          <div className="space-y-1">
+            <div className="text-[11px] font-medium text-muted-foreground">参数（LLM 实参 → {"{{args.名}}"}）</div>
+            {tool.params.map((p, pi) => (
+              <div key={pi} className="flex items-center gap-1">
+                <Input value={p.name} onChange={(e) => setTool(i, { params: tool.params.map((x, xi) => (xi === pi ? { ...x, name: e.target.value } : x)) })} className="h-7 w-24 shrink-0 font-mono text-[11px]" placeholder="名称" />
+                <Select value={p.type} onValueChange={(v) => setTool(i, { params: tool.params.map((x, xi) => (xi === pi ? { ...x, type: v } : x)) })}>
+                  <SelectTrigger className="h-7 w-20 shrink-0 text-[11px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {["string", "number", "boolean"].map((t) => (
+                      <SelectItem key={t} value={t}>
+                        {t}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input value={p.description ?? ""} onChange={(e) => setTool(i, { params: tool.params.map((x, xi) => (xi === pi ? { ...x, description: e.target.value || undefined } : x)) })} className="h-7 min-w-0 flex-1 text-[11px]" placeholder="说明" />
+                <label className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+                  必填
+                  <Switch checked={!!p.required} onCheckedChange={(v) => setTool(i, { params: tool.params.map((x, xi) => (xi === pi ? { ...x, required: v || undefined } : x)) })} />
+                </label>
+                <Button type="button" variant="ghost" size="icon" className="size-6 shrink-0 text-muted-foreground hover:text-rose-600" onClick={() => setTool(i, { params: tool.params.filter((_, xi) => xi !== pi) })}>
+                  <Trash2 className="size-3" />
+                </Button>
+              </div>
+            ))}
+            <Button type="button" variant="outline" size="sm" className="h-6 gap-1 text-[11px]" onClick={() => setTool(i, { params: [...tool.params, { name: "", type: "string" }] })}>
+              <Plus className="size-3" /> 加参数
+            </Button>
+          </div>
+
+          {/* 实现 */}
+          {tool.impl.kind === "HTTP" ? (
+            (() => {
+              // JSX 回调内 TS 不保留判别收窄，这里显式捕获 HTTP 变体
+              const impl = tool.impl
+              return (
+                <div className="space-y-1.5">
+                  <div className="flex gap-1">
+                    <Select value={impl.method} onValueChange={(v) => setTool(i, { impl: { ...impl, method: v as "GET" | "POST" | "PUT" | "DELETE" | "PATCH" } })}>
+                      <SelectTrigger className="h-8 w-20 shrink-0 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(["GET", "POST", "PUT", "DELETE", "PATCH"] as const).map((m) => (
+                          <SelectItem key={m} value={m}>
+                            {m}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <div className="min-w-0 flex-1">
+                      <TplInput value={impl.url} onChange={(url) => setTool(i, { impl: { ...impl, url } })} upstream={upstream} placeholder="https://…（可用 {{args.xxx}}）" />
+                    </div>
+                  </div>
+                  <JsonEditor value={impl.body ?? ""} onChange={(body) => setTool(i, { impl: { ...impl, body: body || undefined } })} placeholder='请求体（可用 {{args.xxx}}），如 {"id": "{{args.userId}}"}' height="60px" />
+                </div>
+              )
+            })()
+          ) : (
+            <ScriptEditor value={tool.impl.script} onChange={(script: ScriptConfig) => setTool(i, { impl: { kind: "SCRIPT", script } })} />
+          )}
+        </div>
+      ))}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-7 gap-1 text-xs"
+        onClick={() => onChange([...tools, { name: "", description: "", params: [], impl: { kind: "HTTP", method: "GET", url: "" } }])}
+      >
+        <Plus className="size-3.5" /> 添加工具
+      </Button>
+    </div>
+  )
+}
+
+function AgentFields({ config, patch, upstream, credentials }: OrchNodePanelProps & { config: AgentConfig; patch: (p: Partial<AgentConfig>) => void }) {
+  const llmCreds = credentials.filter((c) => c.type === "LLM")
+  return (
+    <div className="space-y-3">
+      <Field label="凭据（OpenAI 兼容，需支持 function-calling）">
+        <Select value={config.credentialId != null ? String(config.credentialId) : undefined} onValueChange={(v) => patch({ credentialId: Number(v) })}>
+          <SelectTrigger className="h-8 w-full text-xs">
+            <SelectValue placeholder={llmCreds.length ? "选择凭据" : "先到凭据管理添加"} />
+          </SelectTrigger>
+          <SelectContent>
+            {llmCreds.map((c) => (
+              <SelectItem key={c.id} value={String(c.id)}>
+                {c.name}（{c.model ?? "默认模型"}）
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field label="模型（可覆盖凭据默认）">
+        <Input value={config.model ?? ""} onChange={(e) => patch({ model: e.target.value || undefined })} className="h-8 font-mono text-xs" />
+      </Field>
+      <Field label="系统提示词（可选）">
+        <TplTextarea value={config.systemPrompt ?? ""} onChange={(v) => patch({ systemPrompt: v || undefined })} upstream={upstream} rows={3} />
+      </Field>
+      <Field label="用户提示词">
+        <TplTextarea value={config.userPrompt} onChange={(userPrompt) => patch({ userPrompt })} upstream={upstream} rows={3} placeholder="任务目标；LLM 会按需调用下方工具" />
+      </Field>
+      <Field label={`工具（${config.tools.length}）`} hint="LLM 决策 → 执行工具 → 结果回填 → 迭代，至无 tool_calls 或步数上限。">
+        <AgentToolsEditor tools={config.tools} onChange={(tools) => patch({ tools })} upstream={upstream} />
+      </Field>
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="最大步数（≤15）">
+          <Input type="number" min={1} max={15} value={config.maxSteps ?? 8} onChange={(e) => patch({ maxSteps: Number(e.target.value) || undefined })} className="h-8 text-xs" />
+        </Field>
+        <Field label="整体超时 ms">
+          <Input type="number" min={1000} value={config.timeoutMs ?? 120_000} onChange={(e) => patch({ timeoutMs: Number(e.target.value) || undefined })} className="h-8 text-xs" />
+        </Field>
+        <Field label="输出模式">
+          <Select value={config.outputMode} onValueChange={(v) => patch({ outputMode: v as AgentConfig["outputMode"] })}>
+            <SelectTrigger className="h-8 w-full text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="TEXT">TEXT 文本</SelectItem>
+              <SelectItem value="JSON">JSON 对象</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field label="另存变量名（saveAs）">
+          <Input value={config.saveAs ?? ""} onChange={(e) => patch({ saveAs: e.target.value || undefined })} className="h-8 font-mono text-xs" placeholder="可选" />
+        </Field>
+      </div>
+    </div>
+  )
+}
+
+/* ---- 批4：连接器 ---- */
+
+function BotFields({ platform, config, patch, upstream }: { platform: "dingtalk" | "feishu"; config: BotConfig; patch: (p: Partial<BotConfig>) => void; upstream: UpstreamNode[] }) {
+  return (
+    <div className="space-y-3">
+      <Field label="机器人 Webhook 地址">
+        <Input value={config.url} onChange={(e) => patch({ url: e.target.value })} className="h-8 font-mono text-xs" placeholder={platform === "dingtalk" ? "https://oapi.dingtalk.com/robot/send?access_token=…" : "https://open.feishu.cn/open-apis/bot/v2/hook/…"} />
+      </Field>
+      <Field label={platform === "dingtalk" ? "加签密钥（推荐）" : "签名密钥（可选）"} hint="服务端计算签名，密钥不落日志。">
+        <Input type="password" value={config.secret ?? ""} onChange={(e) => patch({ secret: e.target.value || undefined })} className="h-8 font-mono text-xs" placeholder="SEC…" />
+      </Field>
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="消息类型">
+          <Select value={config.msgType} onValueChange={(v) => patch({ msgType: v as BotConfig["msgType"] })}>
+            <SelectTrigger className="h-8 w-full text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="text">文本</SelectItem>
+              <SelectItem value="markdown">Markdown</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+        {config.msgType === "markdown" && (
+          <Field label={platform === "dingtalk" ? "标题（钉钉必填）" : "标题（可选）"}>
+            <Input value={config.title ?? ""} onChange={(e) => patch({ title: e.target.value || undefined })} className="h-8 text-xs" />
+          </Field>
+        )}
+      </div>
+      <Field label="消息内容模板">
+        <TplTextarea value={config.content} onChange={(content) => patch({ content })} upstream={upstream} rows={4} placeholder="支持 {{...}} 插值" />
+      </Field>
+    </div>
+  )
+}
+
+function DbQueryFields({ config, patch, credentials }: OrchNodePanelProps & { config: DbQueryConfig; patch: (p: Partial<DbQueryConfig>) => void }) {
+  const jdbcCreds = credentials.filter((c) => c.type === "JDBC")
+  return (
+    <div className="space-y-3">
+      <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+        只读查询（select-only 服务端硬校验）· 行数上限 1000 · 受信门槛同脚本节点。
+      </p>
+      <Field label="数据源">
+        <Select value={config.credentialId != null ? String(config.credentialId) : "app"} onValueChange={(v) => patch({ credentialId: v === "app" ? undefined : Number(v) })}>
+          <SelectTrigger className="h-8 w-full text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="app">本应用库（默认）</SelectItem>
+            {jdbcCreds.map((c) => (
+              <SelectItem key={c.id} value={String(c.id)}>
+                {c.name}（外部 JDBC）
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field label="SQL（SELECT，支持 {{...}} 插值）">
+        <Textarea value={config.sql} onChange={(e) => patch({ sql: e.target.value })} rows={4} className="font-mono text-xs" placeholder="select id, name from sys_user where dept_id = {{payload.deptId}}" />
+      </Field>
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="行数上限（≤1000）">
+          <Input type="number" min={1} max={1000} value={config.maxRows ?? 1000} onChange={(e) => patch({ maxRows: Number(e.target.value) || undefined })} className="h-8 text-xs" />
+        </Field>
+        <Field label="超时 ms">
+          <Input type="number" min={100} value={config.timeoutMs ?? 10_000} onChange={(e) => patch({ timeoutMs: Number(e.target.value) || undefined })} className="h-8 text-xs" />
+        </Field>
+      </div>
+      <Field label="另存变量名（saveAs）">
+        <Input value={config.saveAs ?? ""} onChange={(e) => patch({ saveAs: e.target.value || undefined })} className="h-8 font-mono text-xs" placeholder="可选" />
+      </Field>
     </div>
   )
 }

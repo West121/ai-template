@@ -28,7 +28,7 @@ export interface OrchFlow {
   lastExec?: { status: OrchExecStatus; startedAt: string }
 }
 
-export type OrchExecStatus = "RUNNING" | "SUCCESS" | "FAILED" | "CANCELED"
+export type OrchExecStatus = "RUNNING" | "WAITING" | "SUCCESS" | "FAILED" | "CANCELED"
 
 export interface OrchExec {
   id: number
@@ -40,6 +40,10 @@ export interface OrchExec {
   endedAt?: string
   error?: string
   result?: string
+  /** WAITING 挂起时的恢复 token（POST /api/orch/resume/{resumeToken}） */
+  resumeToken?: string
+  /** 由失败续跑产生时指向父 exec（§9.3） */
+  parentExecId?: number
   /** 详情才带 */
   payload?: string
   nodes?: OrchExecNode[]
@@ -48,7 +52,7 @@ export interface OrchExec {
 export interface OrchExecNode {
   nodeId: string
   nodeName: string
-  status: "RUNNING" | "SUCCESS" | "FAILED" | "SKIPPED"
+  status: "RUNNING" | "WAITING" | "SUCCESS" | "FAILED" | "SKIPPED"
   input?: string
   output?: string
   error?: string
@@ -56,7 +60,18 @@ export interface OrchExecNode {
   startedAt?: string
 }
 
-export type CredentialType = "LLM" | "HTTP_BEARER" | "HTTP_BASIC" | "HTTP_HEADER"
+export type CredentialType = "LLM" | "HTTP_BEARER" | "HTTP_BASIC" | "HTTP_HEADER" | "JDBC"
+
+/** 发布版本快照（orch_flow_version，§9.5） */
+export interface OrchFlowVersion {
+  id: number
+  flowId: number
+  version: number
+  designerJson?: string
+  publishedAt: string
+  publishedBy?: string
+  remark?: string
+}
 
 export interface OrchCredential {
   id: number
@@ -190,15 +205,60 @@ const EXECS: OrchExec[] = [
       { nodeId: "end1", nodeName: "结束", status: "SKIPPED" },
     ],
   },
+  // §9.1 演示：AI Agent 节点带 steps 明细（exec_node.output.steps）
+  {
+    id: 95, flowId: 1, flowName: "公文签发 AI 摘要通报", triggerKind: "MANUAL", status: "SUCCESS",
+    startedAt: "2026-07-11T10:02:00", endedAt: "2026-07-11T10:02:18",
+    payload: '{"docId": 8102}', result: '"已完成核对并通知相关人"',
+    nodes: [
+      { nodeId: "t1", nodeName: "Webhook 入站", status: "SUCCESS", input: '{"docId":8102}', output: '{"docId":8102}', costMs: 1, startedAt: "2026-07-11T10:02:00" },
+      {
+        nodeId: "ag1", nodeName: "AI Agent 核对通报", status: "SUCCESS", costMs: 16400, startedAt: "2026-07-11T10:02:00",
+        input: '{"model":"deepseek-chat","maxSteps":8}',
+        output: JSON.stringify({
+          content: "已核对公文《关于表彰2026年上半年优秀员工的通报》，主送为全体员工，并已推送摘要。",
+          steps: [
+            { tool: "query_doc", args: { docId: 8102 }, result: '{"title":"关于表彰2026年上半年优秀员工的通报","secret":"PUBLIC"}' },
+            { tool: "query_user", args: { role: "hr_manager" }, result: '[{"id":21,"name":"周敏"}]' },
+            { tool: "send_summary", args: { to: 21, text: "表彰通报已签发…" }, result: '{"ok":true}' },
+          ],
+        }),
+      },
+      { nodeId: "end1", nodeName: "结束", status: "SUCCESS", costMs: 1, startedAt: "2026-07-11T10:02:18" },
+    ],
+  },
+  // §9.2 演示：wait 挂起中的流水（WAITING + resumeToken）
+  {
+    id: 96, flowId: 1, flowName: "公文签发 AI 摘要通报", triggerKind: "WEBHOOK", status: "WAITING",
+    startedAt: "2026-07-11T11:20:00", resumeToken: "rsm-7f21c9",
+    payload: '{"docId": 8103}',
+    nodes: [
+      { nodeId: "t1", nodeName: "Webhook 入站", status: "SUCCESS", input: '{"docId":8103}', costMs: 1, startedAt: "2026-07-11T11:20:00" },
+      { nodeId: "h1", nodeName: "取公文详情", status: "SUCCESS", output: '{"status":200,"body":{"title":"…"}}', costMs: 180, startedAt: "2026-07-11T11:20:00" },
+      { nodeId: "w1", nodeName: "等外部确认", status: "WAITING", input: '{"timeoutMs":86400000}', startedAt: "2026-07-11T11:20:00" },
+      { nodeId: "n1", nodeName: "通报相关人", status: "SKIPPED" },
+      { nodeId: "end1", nodeName: "结束", status: "SKIPPED" },
+    ],
+  },
 ]
 
 const CREDENTIALS: OrchCredential[] = [
   { id: 1, name: "DeepSeek 生产", type: "LLM", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", hasKey: true },
   { id: 2, name: "内部网关 Bearer", type: "HTTP_BEARER", baseUrl: "https://oa.internal", hasKey: true },
+  { id: 3, name: "报表库（只读）", type: "JDBC", baseUrl: "jdbc:postgresql://report-db:5432/report", hasKey: true },
+]
+
+/** 发布版本快照（§9.5 mock：flow 1 三个版本） */
+const FLOW_VERSIONS: OrchFlowVersion[] = [
+  { id: 31, flowId: 1, version: 3, designerJson: FLOWS[0]?.designerJson, publishedAt: "2026-07-10T16:40:00", publishedBy: "admin", remark: "加 AI 摘要与默认支" },
+  { id: 22, flowId: 1, version: 2, designerJson: FLOWS[0]?.designerJson, publishedAt: "2026-07-08T10:12:00", publishedBy: "admin", remark: "接通知节点" },
+  { id: 11, flowId: 1, version: 1, designerJson: FLOWS[0]?.designerJson, publishedAt: "2026-07-05T09:00:00", publishedBy: "admin" },
+  { id: 12, flowId: 2, version: 1, designerJson: FLOWS[1]?.designerJson, publishedAt: "2026-07-09T11:20:00", publishedBy: "admin" },
 ]
 
 let flowSeq = 10
 let credSeq = 10
+let versionSeq = 100
 
 /* ============================ demo 包装 ============================ */
 
@@ -380,6 +440,80 @@ export function rerunExec(id: number): Promise<OrchResult<{ execId: number }>> {
       }
       EXECS.unshift(copy)
       return { execId: copy.id }
+    },
+  )
+}
+
+/**
+ * 从失败节点续跑（§9.3）：仅 FAILED；新建 exec（parentExecId 指向父），复用已 SUCCESS
+ * 节点的 outputs/vars 快照，从失败节点（含）开始执行后续段。
+ */
+export function resumeFromFailure(id: number): Promise<OrchResult<{ execId: number }>> {
+  return withMock(
+    () => api<{ execId: number }>(`/api/orch/execs/${id}/resume-from-failure`, { method: "POST" }),
+    () => {
+      const src = EXECS.find((e) => e.id === id)
+      const now = new Date().toISOString().slice(0, 19)
+      const copy: OrchExec = {
+        ...(src as OrchExec),
+        id: ++execSeq,
+        parentExecId: id,
+        triggerKind: "RESUME",
+        status: "SUCCESS",
+        startedAt: now,
+        endedAt: now,
+        error: undefined,
+        // 已成功节点复用快照（原耗时保留），失败/跳过节点重新执行为 SUCCESS
+        nodes: src?.nodes?.map((n) =>
+          n.status === "SUCCESS"
+            ? { ...n, output: n.output, input: n.input }
+            : { ...n, status: "SUCCESS" as const, error: undefined, costMs: n.costMs ?? 30, startedAt: now },
+        ),
+      }
+      EXECS.unshift(copy)
+      return { execId: copy.id }
+    },
+  )
+}
+
+/* ============================ 版本历史（§9.5） ============================ */
+
+export function fetchFlowVersions(flowId: number): Promise<OrchResult<OrchFlowVersion[]>> {
+  return withMock(
+    () => api<OrchFlowVersion[]>(`/api/orch/flows/${flowId}/versions`),
+    () => FLOW_VERSIONS.filter((v) => v.flowId === flowId).map(({ designerJson: _dj, ...rest }) => rest as OrchFlowVersion),
+  )
+}
+
+export function fetchFlowVersion(flowId: number, version: number): Promise<OrchResult<OrchFlowVersion | null>> {
+  return withMock(
+    () => api<OrchFlowVersion>(`/api/orch/flows/${flowId}/versions/${version}`),
+    () => FLOW_VERSIONS.find((v) => v.flowId === flowId && v.version === version) ?? null,
+  )
+}
+
+/** 回滚到指定版本：designer_json 覆盖为该版本快照并发布新版本 */
+export function rollbackFlowVersion(flowId: number, version: number): Promise<OrchResult<OrchFlow>> {
+  return withMock(
+    () => api<OrchFlow>(`/api/orch/flows/${flowId}/versions/${version}/rollback`, { method: "POST" }),
+    () => {
+      const flow = FLOWS.find((f) => f.id === flowId)
+      const snap = FLOW_VERSIONS.find((v) => v.flowId === flowId && v.version === version)
+      if (flow && snap?.designerJson) {
+        flow.designerJson = snap.designerJson
+        flow.version = (flow.version ?? 0) + 1
+        flow.updatedAt = new Date().toISOString().slice(0, 19)
+        FLOW_VERSIONS.unshift({
+          id: ++versionSeq,
+          flowId,
+          version: flow.version,
+          designerJson: snap.designerJson,
+          publishedAt: flow.updatedAt,
+          publishedBy: "you",
+          remark: `回滚自 v${version}`,
+        })
+      }
+      return { ...(flow as OrchFlow) }
     },
   )
 }
