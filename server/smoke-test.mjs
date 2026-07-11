@@ -32,6 +32,9 @@ function cleanupTestData() {
     "DELETE FROM oa_document WHERE process_instance_id IS NOT NULL;",
     "TRUNCATE oa_doc_opinion,oa_doc_circulation RESTART IDENTITY;",
     "DELETE FROM oa_doc_number_ledger; DELETE FROM oa_doc_number_seq;",
+    // 编排（V25）冒烟数据
+    "DELETE FROM orch_exec_node; DELETE FROM orch_exec;",
+    "DELETE FROM orch_flow WHERE code LIKE 'smoke_orch%'; DELETE FROM orch_credential WHERE name LIKE '冒烟%';",
   ].join(" ")
   const pg = process.env.OA_PG_CONTAINER ?? "oa-postgres"
   try {
@@ -199,7 +202,7 @@ async function draftAndIssue(title) {
 }
 
 // gw_send/gw_recv 已注册为 wf 流程定义（GRAPH，可在设计器打开编辑）
-const pdefs = await call(admin.token, "GET", "/api/wf/process-defs?pageNum=1&pageSize=200")
+const pdefs = await call(admin.token, "GET", "/api/wf/process-defs?keyword=gw_&pageNum=1&pageSize=50")
 const pdCodes = new Set((pdefs.body?.data?.list ?? []).map((p) => p.defCode))
 check("公文流程进入流程定义列表(gw_send/gw_recv)", pdCodes.has("gw_send") && pdCodes.has("gw_recv"), [...pdCodes].join(","))
 
@@ -2414,6 +2417,187 @@ async function hlCompleted(token, iid) {
   check("N-B-06 不存在 formKey→404", ffMiss.body?.code === 404, JSON.stringify(ffMiss.body))
   const ffAnon = await call(null, "GET", "/api/wf/forms/leave/fields")
   check("N-B-06 未登录→401", ffAnon.status === 401, `status=${ffAnon.status}`)
+}
+
+/* ---------- 编排（V25 自动化逻辑编排：编译/手动触发/节点留痕/条件走支/脚本/LLM 假端点/重试/起审批流） ---------- */
+{
+  // 本地 HTTP sink：http 节点目标 + OpenAI-compatible 假端点（可控验证请求与解析）
+  const { createServer } = await import("node:http")
+  const llmReqs = []
+  const sink = createServer((req, res) => {
+    let body = ""
+    req.on("data", (d) => (body += d))
+    req.on("end", () => {
+      if (req.url === "/data") {
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ total: 42, list: [1, 2, 3] }))
+      } else if (req.url === "/small") {
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ total: 1, list: [] }))
+      } else if (req.url === "/fail") {
+        res.writeHead(500, { "Content-Type": "text/plain" })
+        res.end("boom")
+      } else if (req.url === "/v1/chat/completions") {
+        llmReqs.push(JSON.parse(body || "{}"))
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ choices: [{ message: { content: '{"level":"HIGH","score":42}' } }] }))
+      } else {
+        res.writeHead(404)
+        res.end()
+      }
+    })
+  })
+  await new Promise((r) => sink.listen(0, "127.0.0.1", r))
+  sink.unref()
+  const SINK = `http://127.0.0.1:${sink.address().port}`
+
+  const waitExec = async (execId, timeoutMs = 30000) => {
+    const until = Date.now() + timeoutMs
+    while (Date.now() < until) {
+      const d = await call(admin.token, "GET", `/api/orch/execs/${execId}`)
+      if (d.body?.data?.exec?.status && d.body.data.exec.status !== "RUNNING") return d.body.data
+      await new Promise((r) => setTimeout(r, 400))
+    }
+    return (await call(admin.token, "GET", `/api/orch/execs/${execId}`)).body?.data
+  }
+
+  // 凭据（LLM，key 加密只写）
+  const cred = await call(admin.token, "POST", "/api/orch/credentials", {
+    name: "冒烟LLM", type: "LLM", baseUrl: `${SINK}/v1`, apiKey: "sk-smoke-test", model: "fake-model",
+  })
+  check("orch 凭据创建(hasKey,不回显)", cred.body?.code === 0 && cred.body.data?.hasKey === true && cred.body.data?.apiKey === undefined, JSON.stringify(cred.body?.data))
+  const credId = cred.body?.data?.id
+
+  // 主流（对齐疾风演示形状）：trigger → http → condition → llm → notify → end；默认支 → end
+  const mainModel = {
+    schemaVersion: 1, key: `smoke_orch_main_${TS}`, name: "冒烟编排主流",
+    nodes: [
+      { id: "t1", type: "trigger", name: "触发", config: { triggerType: "MANUAL" } },
+      { id: "n1", type: "http", name: "拉取", config: { method: "GET", url: "{{payload.url}}", saveAs: "fetch" } },
+      { id: "c1", type: "condition", name: "量级判断", config: {} },
+      { id: "ai1", type: "llm", name: "AI评估", config: { credentialId: credId, outputMode: "JSON", userPrompt: "评估总量 {{outputs.n1.body.total}}，输出 level", saveAs: "ai" } },
+      { id: "nt1", type: "notify", name: "通知", config: { recipients: [{ kind: "USER", id: 1 }], title: "编排通知:{{vars.ai.level}}", content: "总量 {{outputs.n1.body.total}}" } },
+      { id: "e1", type: "end", name: "结束", config: { output: "vars.ai.level" } },
+      { id: "e2", type: "end", name: "小量结束", config: { output: "'SMALL'" } },
+    ],
+    edges: [
+      { id: "ed1", source: "t1", target: "n1" },
+      { id: "ed2", source: "n1", target: "c1" },
+      { id: "ed3", source: "c1", target: "ai1", condition: { expression: "outputs.n1.body.total > 10" } },
+      { id: "ed4", source: "c1", target: "e2", isDefault: true },
+      { id: "ed5", source: "ai1", target: "nt1" },
+      { id: "ed6", source: "nt1", target: "e1" },
+    ],
+  }
+  const flowCreate = await call(admin.token, "POST", "/api/orch/flows", { code: `smoke_orch_main_${TS}`, name: "冒烟编排主流", designerJson: JSON.stringify(mainModel) })
+  check("orch 建流(带 webhookToken)", flowCreate.body?.code === 0 && !!flowCreate.body.data?.webhookToken, JSON.stringify(flowCreate.body))
+  const flowId = flowCreate.body?.data?.id
+  const pub = await call(admin.token, "POST", `/api/orch/flows/${flowId}/publish`)
+  check("orch 发布(编译 EL, version=1)", pub.body?.code === 0 && pub.body.data?.version === 1, JSON.stringify({ v: pub.body?.data?.version, m: pub.body?.message }))
+  await call(admin.token, "POST", `/api/orch/flows/${flowId}/enable`, { enabled: true })
+  const byCode = await call(admin.token, "GET", `/api/orch/flows/smoke_orch_main_${TS}`)
+  check("orch 按 code 取详情(id+code+designerJson+token)", byCode.body?.code === 0 && byCode.body.data?.id === flowId && !!byCode.body.data?.designerJson && !!byCode.body.data?.webhookToken)
+
+  // 走 llm 分支（total=42 > 10）
+  const run1 = await call(admin.token, "POST", `/api/orch/flows/${flowId}/run`, { url: `${SINK}/data` })
+  check("orch 手动 run 返回 execId", run1.body?.code === 0 && !!run1.body.data?.execId, JSON.stringify(run1.body))
+  const exec1 = await waitExec(run1.body?.data?.execId)
+  check("orch 主流 exec SUCCESS + result=HIGH", exec1?.exec?.status === "SUCCESS" && exec1?.exec?.result === "HIGH", JSON.stringify({ s: exec1?.exec?.status, r: exec1?.exec?.result, e: exec1?.exec?.error }))
+  const nodeIds1 = (exec1?.nodes ?? []).map((n) => n.nodeId)
+  check("orch 节点留痕(http/condition/llm/notify/end 全 SUCCESS)",
+    ["n1", "c1", "ai1", "nt1", "e1"].every((k) => nodeIds1.includes(k)) && (exec1?.nodes ?? []).every((n) => n.status === "SUCCESS"),
+    JSON.stringify((exec1?.nodes ?? []).map((n) => `${n.nodeId}:${n.status}`)))
+  check("orch LLM 假端点收到 OpenAI 形请求(model+messages)", llmReqs.length === 1 && llmReqs[0].model === "fake-model" && Array.isArray(llmReqs[0].messages), JSON.stringify(llmReqs[0]?.model))
+  const llmNode = (exec1?.nodes ?? []).find((n) => n.nodeId === "ai1")
+  check("orch LLM JSON 输出解析入 outputs", (llmNode?.output ?? "").includes('"level"'), llmNode?.output)
+
+  // 默认支（total=1）：不走 llm
+  const run2 = await call(admin.token, "POST", `/api/orch/flows/${flowId}/run`, { url: `${SINK}/small` })
+  const exec2 = await waitExec(run2.body?.data?.execId)
+  const nodeIds2 = (exec2?.nodes ?? []).map((n) => n.nodeId)
+  check("orch 条件默认支(不走 llm, result=SMALL)", exec2?.exec?.status === "SUCCESS" && exec2?.exec?.result === "SMALL" && !nodeIds2.includes("ai1"), JSON.stringify({ r: exec2?.exec?.result, nodes: nodeIds2 }))
+
+  // 脚本 + dataMap 流
+  const scriptModel = {
+    schemaVersion: 1, key: `smoke_orch_script_${TS}`, name: "冒烟编排脚本",
+    nodes: [
+      { id: "t1", type: "trigger", name: "触发", config: { triggerType: "MANUAL" } },
+      { id: "s1", type: "script", name: "脚本", config: { lang: "groovy", code: "vars.x = 41 + 1; return vars.x" } },
+      { id: "d1", type: "dataMap", name: "映射", config: { assignments: [{ target: "y", expr: "vars.x * 2" }] } },
+      { id: "e1", type: "end", name: "结束", config: { output: "vars.y" } },
+    ],
+    edges: [
+      { id: "ed1", source: "t1", target: "s1" },
+      { id: "ed2", source: "s1", target: "d1" },
+      { id: "ed3", source: "d1", target: "e1" },
+    ],
+  }
+  const sf = await call(admin.token, "POST", "/api/orch/flows", { code: `smoke_orch_script_${TS}`, name: "冒烟编排脚本", designerJson: JSON.stringify(scriptModel) })
+  await call(admin.token, "POST", `/api/orch/flows/${sf.body?.data?.id}/publish`)
+  await call(admin.token, "POST", `/api/orch/flows/${sf.body?.data?.id}/enable`, { enabled: true })
+  const run3 = await call(admin.token, "POST", `/api/orch/flows/${sf.body?.data?.id}/run`, {})
+  const exec3 = await waitExec(run3.body?.data?.execId)
+  check("orch 脚本+dataMap 流 SUCCESS(result=84)", exec3?.exec?.status === "SUCCESS" && String(exec3?.exec?.result) === "84", JSON.stringify({ s: exec3?.exec?.status, r: exec3?.exec?.result, e: exec3?.exec?.error }))
+
+  // 失败重试 + onError=CONTINUE
+  const retryModel = {
+    schemaVersion: 1, key: `smoke_orch_retry_${TS}`, name: "冒烟编排重试",
+    nodes: [
+      { id: "t1", type: "trigger", name: "触发", config: { triggerType: "MANUAL" } },
+      { id: "h1", type: "http", name: "必败", config: { method: "GET", url: `${SINK}/fail`, retry: { times: 1, intervalMs: 50 }, onError: "CONTINUE" } },
+      { id: "e1", type: "end", name: "结束", config: { output: "'done'" } },
+    ],
+    edges: [
+      { id: "ed1", source: "t1", target: "h1" },
+      { id: "ed2", source: "h1", target: "e1" },
+    ],
+  }
+  const rf = await call(admin.token, "POST", "/api/orch/flows", { code: `smoke_orch_retry_${TS}`, name: "冒烟编排重试", designerJson: JSON.stringify(retryModel) })
+  await call(admin.token, "POST", `/api/orch/flows/${rf.body?.data?.id}/publish`)
+  await call(admin.token, "POST", `/api/orch/flows/${rf.body?.data?.id}/enable`, { enabled: true })
+  const run4 = await call(admin.token, "POST", `/api/orch/flows/${rf.body?.data?.id}/run`, {})
+  const exec4 = await waitExec(run4.body?.data?.execId)
+  const failNode = (exec4?.nodes ?? []).find((n) => n.nodeId === "h1")
+  check("orch 重试(attempts=2)+onError=CONTINUE(整流 SUCCESS)", exec4?.exec?.status === "SUCCESS" && failNode?.status === "FAILED" && failNode?.attempts === 2, JSON.stringify({ s: exec4?.exec?.status, n: failNode?.status, a: failNode?.attempts }))
+
+  // 起审批流节点：真实起 wf 实例（__wfRegister → wf_instance_ext 一等可见）
+  const approvalModel = {
+    schemaVersion: 1, key: `smoke_orch_approval_${TS}`, name: "冒烟编排起审批",
+    nodes: [
+      { id: "t1", type: "trigger", name: "触发", config: { triggerType: "MANUAL" } },
+      { id: "a1", type: "startApproval", name: "起审批", config: { defCode: "leave_approval", title: "编排请假-{{payload.days}}天", formData: { leaveType: "ANNUAL", days: "{{payload.days}}", reason: "编排自动发起" }, initiatorId: 3 } },
+      { id: "e1", type: "end", name: "结束", config: { output: "outputs.a1.procInstId" } },
+    ],
+    edges: [
+      { id: "ed1", source: "t1", target: "a1" },
+      { id: "ed2", source: "a1", target: "e1" },
+    ],
+  }
+  const af = await call(admin.token, "POST", "/api/orch/flows", { code: `smoke_orch_approval_${TS}`, name: "冒烟编排起审批", designerJson: JSON.stringify(approvalModel) })
+  await call(admin.token, "POST", `/api/orch/flows/${af.body?.data?.id}/publish`)
+  await call(admin.token, "POST", `/api/orch/flows/${af.body?.data?.id}/enable`, { enabled: true })
+  const run5 = await call(admin.token, "POST", `/api/orch/flows/${af.body?.data?.id}/run`, { days: 2 })
+  const exec5 = await waitExec(run5.body?.data?.execId)
+  check("orch 起审批流 SUCCESS(返回 procInstId)", exec5?.exec?.status === "SUCCESS" && (exec5?.exec?.result ?? "").length > 10, JSON.stringify({ s: exec5?.exec?.status, e: exec5?.exec?.error }))
+  const zsMy = await call(zhangsan.token, "GET", "/api/wf/instances/my?pageNum=1&pageSize=20")
+  check("orch 起的审批实例注册为一等 wf 实例(张三我发起可见)", (zsMy.body?.data?.list ?? []).some((r) => r.title === "编排请假-2天"), JSON.stringify((zsMy.body?.data?.list ?? []).map((r) => r.title).slice(0, 5)))
+
+  // 校验拦截：无默认支的 condition 发布报错
+  const badModel = { ...mainModel, key: `smoke_orch_bad_${TS}`, edges: mainModel.edges.map((e) => (e.id === "ed4" ? { ...e, isDefault: false } : e)) }
+  const bf = await call(admin.token, "POST", "/api/orch/flows", { code: `smoke_orch_bad_${TS}`, name: "坏流", designerJson: JSON.stringify(badModel) })
+  const badPub = await call(admin.token, "POST", `/api/orch/flows/${bf.body?.data?.id}/publish`)
+  check("orch 校验:condition 无默认支发布 400", badPub.body?.code === 400 && (badPub.body?.message ?? "").includes("默认支"), JSON.stringify(badPub.body?.message))
+
+  // 重跑 + 权限 + 分页
+  const rerun = await call(admin.token, "POST", `/api/orch/execs/${run1.body?.data?.execId}/rerun`)
+  const execR = await waitExec(rerun.body?.data?.execId)
+  check("orch 重跑(同 payload 新流水 SUCCESS)", execR?.exec?.status === "SUCCESS", JSON.stringify(execR?.exec?.status))
+  const denyRun = await call(zhangsan.token, "POST", `/api/orch/flows/${flowId}/run`, {})
+  check("orch zhangsan run → 403", denyRun.status === 403, `status=${denyRun.status}`)
+  const execPage = await call(admin.token, "GET", `/api/orch/execs?flowId=${flowId}&pageNum=1&pageSize=10`)
+  check("orch exec 分页(标准 PageResult)", execPage.body?.code === 0 && (execPage.body?.data?.total ?? 0) >= 3 && Array.isArray(execPage.body?.data?.list))
+
+  sink.close()
 }
 
 /* ---------- 汇总 ---------- */

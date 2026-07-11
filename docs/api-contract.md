@@ -383,3 +383,21 @@ NotifyItem = {id,type,title,content,procInstId,readFlag,createdAt}
 - 权限点：workflow(MENU)、wf:def:edit(BUTTON)、wf:instance:admin(BUTTON，跳转/终止/交接/管理员列表) 授予 ADMIN
 - P2 业务表：wf_delegate_rule(委托规则)、wf_task_read(已阅,V10)、wf_vote(票签权重,V11)、wf_add_sign(加签串行链,V12)；测试用户 lisi(李四)/wangwu(王五) 主任职人事行政部(V9)
 - P3(V13)：wf_instance_ext 增 biz_time(穿越时空)/resurrect_from(唤醒来源)、wf_operation 增 biz_time；电子章沿用 V7 的 wf_seal；子流程/定时/触发/AI 为纯 BPMN 转换无新表。AI 配置 oa.ai.*(application.yml，默认 enabled=false)
+
+## 自动化逻辑编排（oa-module-workflow orch 域，V25，前缀 `/api/orch`）
+> 契约 `docs/design/orchestration-design.md`。引擎=LiteFlow 2.16（**编程式 FlowExecutor**，`liteflow.enable` 保持 false 不影响脚本 SPI）；OrchModel(designer_json) 发布时经 `OrchToElCompiler` 编译缓存 el_expr（校验：单 trigger/无环/条件默认支/动作单出边）。模板插值 `{{Aviator表达式}}`（上下文 payload/vars/outputs，`OrchTemplate` 唯一真源）；内置函数 now()/today()/uuid()/dateFormat()/jsonGet()（@FormulaFunction 注册，全域可用）。
+>
+> 节点（本批）：trigger/http(credentialId 认证注入+retry.backoff+responseType)/script(复用 ScriptService，绑定 vars 可写+form.payload/form.outputs 只读)/condition(SWITCH，出边 expression 或结构化条件+isDefault)/dataMap(assignments:[{target,expr}]，兼容旧 assigns)/llm(§4 OpenAI-compatible，凭据只存 credentialId，TEXT|JSON)/notify/delay(≤5min)/startApproval(引擎直起+__wfRegister 一等实例)/subFlow(深度≤5,waitResult)/end(output 表达式=流水结果)。parallel/loop 下一批。
+> 通用节点字段：`retry{times≤10,intervalMs,backoff}`、`onError ABORT|CONTINUE`、`saveAs`。执行：异步线程池+整流 10min 护栏；节点留痕 input/output 截 8KB/attempts/costMs；整流失败触发 error_flow_id（错误流失败不级联）。
+
+- GET `/flows?keyword=&pageNum=`【P:orch:flow:read】列表（含 id/code/triggerType/enabled/version/webhookToken/lastExecStatus/lastExecAt，不含 designerJson）
+- GET `/flows/{key}`【read】详情（key 纯数字=id 否则=code；含 designerJson+webhookToken）
+- POST `/flows` {code*,name,designerJson?,remark?,errorFlowId?}【P:orch:flow:write】；PUT `/flows/{id}`；DELETE `/flows/{id}`
+- POST `/flows/{id}/publish`【write】编译校验→el_expr+version+1（编译错误 400 带原因）；POST `/flows/{id}/enable` {enabled}【write】（空 body 按 enabled=true；未发布不可启用）
+- POST `/flows/{id}/hook-token/reset`【write】重置 webhook token
+- POST `/flows/{id}/run` body=payload(任意 JSON)【P:orch:flow:run】→ {execId}（异步执行）
+- GET `/execs?flowId=&status=&pageNum=&pageSize=`【read】流水分页；GET `/execs/{id}`【read】→ {exec, nodes[{nodeId,nodeName,status,attempts,input,output,error,costMs,startedAt}]}
+- POST `/execs/{id}/rerun`【run】同 payload 新流水 → {execId}
+- 凭据【write】：GET/POST `/credentials`、PUT/DELETE `/credentials/{id}`；type=LLM|HTTP_BEARER|HTTP_BASIC|HTTP_HEADER，{name,type,baseUrl?,apiKey?(只写不回显),model?,headerName?,enabled}→ 响应含 hasKey
+- 权限码：orch:flow:read / orch:flow:write（受信，同 wf:script:write 级）/ orch:flow:run（V25 授 ADMIN）
+- 下一批：CRON 调度（OrchCronScheduler）/ EVENT 事件桥 / Webhook 入站 POST `/api/orch/hooks/{token}` / parallel/loop 节点
