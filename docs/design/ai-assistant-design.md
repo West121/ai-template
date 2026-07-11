@@ -125,3 +125,10 @@ Service(UserContext 生效)。**只读工具直接执行;变更工具一律产�
 - **磐石**(编排批4后接):V{next} 迁移+AiChatService/LlmToolLoop/ToolRegistry/Confirm+首批工具+smoke。
 - **疾风**(编排批4后接):全局悬浮+对话面板+卡片组件库+会话管理(mock 先行)。
 - 主控:集成对账+§8 验收+提交。P1:SSE 流式、⌘K 集成、用户画像记忆、删除类工具白名单。
+
+## 10. 契约补充(丹青 UI 规范 §7 对账,磐石实现时一并落)
+
+- list 卡行支持 `link?`(行级跳转 path);form 卡补 `submitPath?`(CODE 表单)与提交成功返回 `instId`;
+  confirm 卡补 `danger?: boolean`(危险操作红色语义);chart pie series 数据项支持 `percent` 展示。
+- 前端 UI 规范见 `docs/design/ai-assistant-ui-spec.md`(桌面非模态抽屉/移动全屏、z 层、md 仅助手消息、
+  卡片平铺不进气泡、纯 SVG 图表 --chart-1..5、confirm 状态机、.ai-form 单列覆盖)。
