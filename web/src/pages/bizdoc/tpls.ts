@@ -336,10 +336,31 @@ export function deleteTpl(id: number): Promise<TplResult<void>> {
   )
 }
 
+/**
+ * 真实 /tpls/{id}/fields 响应形状归一：后端返回 `{bindType,bindCode,fields:[...],groups:[{label,fields}]}`
+ * 对象（groups=FLOW 的 _approvals 伪字段组），mock 是裸数组——曾因把对象当数组 `.map` 崩掉
+ * 模板设计器整页白屏。两种形状都收敛为 DefField[]，非法形状回 []。
+ */
+export function normalizeTplFields(raw: unknown): DefField[] {
+  if (Array.isArray(raw)) return raw as DefField[]
+  if (raw && typeof raw === "object") {
+    const r = raw as { fields?: unknown; groups?: unknown }
+    const base = Array.isArray(r.fields) ? (r.fields as DefField[]) : []
+    const groups = Array.isArray(r.groups) ? r.groups : []
+    const grouped = groups.flatMap((g) =>
+      g && typeof g === "object" && Array.isArray((g as { fields?: unknown }).fields)
+        ? ((g as { fields: DefField[] }).fields)
+        : [],
+    )
+    return [...base, ...grouped]
+  }
+  return []
+}
+
 /** 编辑器字段树（§11.2 聚合端点：FLOW→绑定表单统一清单+_approvals；FORM→统一清单） */
 export function fetchTplFields(tpl: Pick<BizDocTpl, "id" | "bindCode">): Promise<TplResult<DefField[]>> {
   return withMock(
-    () => api<DefField[]>(`/api/bizdoc/tpls/${tpl.id}/fields`),
+    () => api<unknown>(`/api/bizdoc/tpls/${tpl.id}/fields`).then(normalizeTplFields),
     () => BIND_FIELDS[tpl.bindCode ?? ""] ?? [],
   )
 }
