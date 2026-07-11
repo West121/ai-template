@@ -13,6 +13,8 @@ import com.xingchen.oa.office.entity.BizDocPrintTpl;
 import com.xingchen.oa.office.repository.BizDocRepository;
 import com.xingchen.oa.office.support.DeptNameResolver;
 import com.xingchen.oa.office.support.SecuritySupport;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
 import org.flowable.engine.RuntimeService;
@@ -53,6 +55,9 @@ public class BizDocService {
     private final DeptNameResolver deptNameResolver;
     private final RuntimeService runtimeService;
     private final ObjectMapper objectMapper;
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     // ==================== 台账 ====================
 
@@ -224,8 +229,49 @@ public class BizDocService {
         data.put("status", doc.getStatus()); // VOID → 前端渲染 45°作废水印（§8 裁定）
         data.put("createdAt", doc.getCreatedAt() == null ? null
                 : doc.getCreatedAt().format(DateTimeFormatter.ofPattern("yyyy-MM-dd")));
+        // §9.3 审批记录区：绑流程单据从流程实例取办理记录（与已办/时间线同源=wf_operation，按办理顺序）
+        data.put("_approvals", approvals(doc.getProcessInstanceId()));
         List<Map<String, String>> fields = defService.formFields(def);
         return new PrintData(defService.toTplResponse(tpl), data, fields);
+    }
+
+    /** 办理记录 [{nodeName, assigneeName, opinion, time}]：wf_operation 原生查询（无流程/未办=[]）。 */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> approvals(String processInstanceId) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (!StringUtils.hasText(processInstanceId)) {
+            return out;
+        }
+        try {
+            List<Object[]> rows = entityManager.createNativeQuery(
+                            "SELECT node_name, actor_name, comment, created_at FROM wf_operation "
+                                    + "WHERE proc_inst_id = :pid AND action IN ('APPROVE','REJECT') "
+                                    + "ORDER BY created_at ASC")
+                    .setParameter("pid", processInstanceId)
+                    .getResultList();
+            DateTimeFormatter fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+            for (Object[] r : rows) {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("nodeName", r[0]);
+                item.put("assigneeName", r[1]);
+                item.put("opinion", r[2]);
+                String time = null;
+                if (r[3] instanceof java.time.OffsetDateTime odt) {
+                    time = odt.format(fmt);
+                } else if (r[3] instanceof java.sql.Timestamp ts) {
+                    time = ts.toLocalDateTime().format(fmt);
+                } else if (r[3] instanceof java.time.Instant ins) {
+                    time = java.time.LocalDateTime.ofInstant(ins, java.time.ZoneId.systemDefault()).format(fmt);
+                } else if (r[3] != null) {
+                    time = String.valueOf(r[3]);
+                }
+                item.put("time", time);
+                out.add(item);
+            }
+        } catch (Exception ignored) {
+            // 审批记录尽力而为，失败不阻断打印
+        }
+        return out;
     }
 
     // ==================== 内部 ====================

@@ -3195,6 +3195,15 @@ async function hlCompleted(token, iid) {
   if (bdTaskB) await call(manager.token, "POST", `/api/wf/tasks/${bdTaskB.taskId}/approve`, { comment: "过" })
   const docBDone = await bdWait(docB.body?.data?.id, "EFFECTIVE")
   check("bizdoc 审批通过→EFFECTIVE(事件回写)", docBDone?.status === "EFFECTIVE", JSON.stringify(docBDone?.status))
+  // §9.3 打印数据审批记录区：绑流程单据 print data 含 _approvals（办理记录，与时间线同源）
+  await call(admin.token, "POST", `/api/bizdoc/defs/${defB.body?.data?.id}/print-tpls`, {
+    name: "审批单模板", paper: "A4", content: { schemaVersion: 2, paper: "A4", elements: [] },
+  })
+  const printB = await call(admin.token, "GET", `/api/bizdoc/docs/${docB.body?.data?.id}/print`)
+  const approvalsB = printB.body?.data?.data?._approvals ?? []
+  check("bizdoc print data 含 _approvals(办理记录,assigneeName 非空)",
+    approvalsB.length >= 1 && !!approvalsB[0].assigneeName && !!approvalsB[0].nodeName && !!approvalsB[0].time,
+    JSON.stringify(approvalsB))
 
   // 3. 驳回→REJECTED 可改再提
   const docC = await call(zhangsan.token, "POST", "/api/bizdoc/docs", {
