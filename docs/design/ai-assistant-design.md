@@ -132,3 +132,22 @@ Service(UserContext 生效)。**只读工具直接执行;变更工具一律产�
   confirm 卡补 `danger?: boolean`(危险操作红色语义);chart pie series 数据项支持 `percent` 展示。
 - 前端 UI 规范见 `docs/design/ai-assistant-ui-spec.md`(桌面非模态抽屉/移动全屏、z 层、md 仅助手消息、
   卡片平铺不进气泡、纯 SVG 图表 --chart-1..5、confirm 状态机、.ai-form 单列覆盖)。
+
+## 11. 增强批(用户裁定):多模态上传 + 模型切换 + 面板高级抽屉
+
+- **面板高级抽屉**(已由主控落地 assistant-panel):左缘拖拽调宽(360~min(960,92vw),localStorage
+  持久)+ 全屏切换;全链路 min-w-0 无横滚。
+- **模型切换**:
+  - 前端:输入区上方模型选择器(列启用的 LLM 凭据:名称+model;可再覆盖 model 名),会话级记忆
+    (随消息发送 credentialId/model,存 session)。
+  - 后端:`POST /api/ai/chat` 增可选 `credentialId?/model?`(校验凭据存在且 LLM 型);
+    `GET /api/ai/models` 返回可选凭据列表(id/name/model/**supportsVision**)。
+- **多模态(图片/文件上传)**:
+  - 前端:输入区加附件按钮(图片 png/jpg/webp ≤5MB;文件 txt/md/csv/json/log ≤1MB 文本类,
+    pdf/docx 本批不支持给提示);缩略图/文件 chip 预览,随消息发送。
+  - 后端:req.attachments[{fileId|dataUrl, kind:IMAGE|TEXT, name}];IMAGE → OpenAI content parts
+    (image_url base64);TEXT → 读文本截断(≤16k 字符)以引用块注入 user content。上传复用
+    /api/infra/files(或小图直接 dataURL,磐石定)。消息表 cards 旁存 attachments(回显)。
+  - **能力检测**:orch_credential 加 `supports_vision`(bool,凭据表单勾选,默认 false);
+    带图片但所选凭据不支持 → 后端 400 明确文案,前端在附上图片时就地提示"当前模型不支持图片,
+    请切换支持视觉的模型"(选择器标注 👁 视觉徽标);调用端点若仍报多模态错误 → 友好转译。
