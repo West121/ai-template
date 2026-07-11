@@ -180,3 +180,36 @@
   FieldDescriptor 清单;bizdoc 定义发布时该 key 即可用,流程定义绑定该 key 或直接在编排/流程中
   引用。发布校验相应改(INLINE 校验 schema 非空且字段 key 唯一)。
 - 打印数据/状态机/占号/事件回写不变(form_data JSON 与表单来源无关)。
+
+## 11. 单据模板独立化(用户三图裁定:对齐参考平台,与业务单据两套并存)
+
+参考平台「单据管理」= 独立文档模板模块:模板绑定到流程/表单,负责把一条数据渲染成可打印文档;
+不管台账/状态机。**新增此能力,已建业务单据(§1-§10)保留为另一入口,两套并存。**
+
+### 11.1 数据(迁移 V{next})
+`oa_bizdoc_print_tpl` 改造:`def_id` 可空;加 `bind_type`(BIZDOC|FLOW|FORM,存量回填 BIZDOC)、
+`bind_code`(wf defCode / formCode;BIZDOC 时空,用 def_id)、`code`(模板编码,唯一,存量回填 tpl_{id})、
+`category`、`description`、`status`(DRAFT|PUBLISHED,存量回填 PUBLISHED)、`version`(发布自增)。
+
+### 11.2 后端(磐石)
+- 独立模板 API `/api/bizdoc/tpls`:分页(keyword/category/bindType)+CRUD+publish(version+1)+
+  detail;新建校验 bind_code 存在(FLOW→wf_process_ext 已发布;FORM→wf_form_def)。
+- **字段清单**:FLOW→该流程绑定表单的统一清单 + `_approvals` 伪字段组;FORM→统一清单;
+  (BIZDOC 原路径)。给一个聚合端点 `GET /api/bizdoc/tpls/{id}/fields` 供编辑器字段树。
+- **渲染数据** `GET /api/bizdoc/tpls/{id}/render-data?instanceId=`(FLOW/FORM 绑定:数据=该 wf 实例
+  formData + `_approvals` + 系统字段(title/发起人/时间/单号无);BIZDOC 绑定沿用 docs/{id}/print)。
+  校验实例的 defCode/formCode 与模板绑定匹配;权限=实例可见性(复用实例详情鉴权口径)。
+- **实例可打印模板列表** `GET /api/bizdoc/tpls/for-instance/{instanceId}`:按实例 defCode/formCode
+  匹配已发布模板。smoke(KEEP=1):建 FLOW 绑定模板→发布→for-instance 命中→render-data 含
+  formData+_approvals;FORM 绑定;绑定不匹配 400;存量 BIZDOC 模板零回归。
+
+### 11.3 前端(疾风)
+- **单据管理页 `/bizdoc/tpls`**(菜单与"单据中心/单据定义"并列,对齐参考图):模板卡片列表
+  (名称/编码/分类徽标/已发布/vN/时间;搜索+分类筛选)+「新建模板」弹窗(名称/编码/绑定类型
+  流程|表单 双选+对应编码下拉/描述)→ 进文档编辑器。
+- **编辑器接入**:tpl-designer 支持独立模板(路由 /bizdoc/tpl/t/:tplId 之类);字段树按绑定来源
+  (fields 聚合端点/mock);_approvals 组常驻(FLOW)。
+- **打印入口**:流程实例详情(instance-detail)与公文办文单加「打印单据」按钮——拉 for-instance
+  模板列表→选模板→render-data→paper-renderer 渲染→print(复用 print-preview)。无匹配模板时
+  按钮隐藏或提示。
+- mock 先行;四门+用例。业务单据(§5)入口不动。
