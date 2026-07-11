@@ -140,3 +140,28 @@
 - **AI Agent 节点**(带工具调用循环:LLM 决策→调 http/script 工具→回填→迭代,上限步数护栏)。
 - n8n 式**多 item 流转模型**(节点对 items 数组逐项执行;现 loop 节点已覆盖主场景,评估收益再做)。
 - 邮件触发/邮件节点(依赖邮件基建,项目暂无)。
+
+## 9. 批3契约:AI Agent / Wait 挂起 / 失败续跑 / Webhook 同步响应(主控裁定)
+
+### 9.1 `agent` 节点(AI Agent,OpenAI function-calling 循环)
+config:`credentialId`、`model?`、`systemPrompt`(模板)、`userPrompt`(模板)、`tools:[{name,description,params:[{name,type,description,required}],impl:{kind:"HTTP",method,url,headers?,body?}|{kind:"SCRIPT",script:{lang,code}}}]`、`maxSteps`(默认 8,上限 15)、`timeoutMs`(整体,默认 120s)、`outputMode:"TEXT"|"JSON"`、`saveAs`。
+执行:messages 累积;LLM 返回 tool_calls → 逐个执行工具(HTTP 模板可用 `{{args.xxx}}` 引用 LLM 实参;SCRIPT 绑定 args)→ role:tool 回填 → 循环至无 tool_calls 或 maxSteps(超限记 warning,取最后 assistant 内容)。工具执行经节点留痕明细(exec_node.output 里带 steps 数组:每步 tool 名/args/结果摘要)。凭据/协议同 llm 节点。
+
+### 9.2 Wait for Webhook(`wait` 节点)+ exec 挂起
+config:`timeoutMs?`(默认 24h,内存定时器+启动恢复扫描)、`saveAs`(回调 body 存入)。
+执行到 wait:exec 置 **WAITING**,生成 `resume_token`(orch_exec 加列),线程释放(编译期把流按 wait 切段:wait 前段执行完挂起,恢复时执行后段——LiteFlow 无原生挂起,实现为**分段链**:compile 产出 seg0/seg1…,exec 记 current_segment)。
+恢复:`POST /api/orch/resume/{resumeToken}`(免登录,同 hooks 安全口径),body 存 saveAs → 续执行后段。超时 → exec FAILED(error=wait timeout)或走该节点 onError。
+校验:wait 不得在 parallel/loop 体内(本期限制,报 400)。
+
+### 9.3 失败节点续跑
+`POST /api/orch/execs/{id}/resume-from-failure`:仅 FAILED 且失败点可定位;新建 exec(parent_exec_id 加列),**复用父 exec 已 SUCCESS 节点的 outputs/vars 快照**(orch_exec 存 context_snapshot 或从 exec_node output 重建,磐石定,注意 8KB 截断的完整性——建议 exec 级 context_snapshot 列存完整上下文 JSON,截断仅用于展示列),从失败节点(含)开始执行后续段。
+前端:执行详情失败态给「从失败节点续跑」按钮(区别于整流重跑)。
+
+### 9.4 Webhook 同步响应(`respond` 节点)
+config:`status?`(默认 200)、`body`(模板)、`contentType?`(默认 application/json)。
+webhook 触发且流含 respond:hooks 端点**同步等待**至 respond 节点执行(latch,超时 `syncTimeoutMs` 默认 10s → 回退 202+execId);respond 之后的节点继续异步执行。非 webhook 触发时 respond 等价 dataMap 存 body(不报错)。
+
+### 9.5 批4预告(连接器 + 版本历史)
+- `dingtalkBot`/`feishuBot` 节点:机器人 webhook 消息(url/secret 加签(钉钉)/text 或 markdown 模板)。
+- `dbQuery` 节点:JDBC 只读查询(select-only 硬校验+行数上限 1000+超时;数据源=本应用库或凭据化外部 JDBC——批4裁定),受信门槛同脚本。
+- 版本历史:orch_flow_version(发布快照),列表/查看/回滚 API + 前端版本抽屉。
