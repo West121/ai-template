@@ -50,5 +50,14 @@
             <groupId>org.flowable</groupId>
             <artifactId>flowable-spring-boot-starter-process</artifactId>
         </dependency>
+        <!--
+          Aviator：单据模板「计算配置」(bizdoc-design.md §12) 的 computed 公式安全求值。
+          共享基础设施（表达式引擎库，非 oa-module-workflow 业务模块）——同 Flowable 引擎口径，
+          不违反「业务模块互不依赖」；office 自持一个沙箱化 AviatorEvaluatorInstance（BizDocCalcService）。
+        -->
+        <dependency>
+            <groupId>com.googlecode.aviator</groupId>
+            <artifactId>aviator</artifactId>
+        </dependency>
     </dependencies>
 </project>

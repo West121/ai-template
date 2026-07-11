@@ -3411,6 +3411,47 @@ async function hlCompleted(token, iid) {
   // 存量 CODE 定义不回归：CODE 定义可发布（gw_send 为已登记 CODE 表单）
   const codePub = await call(admin.token, "POST", `/api/bizdoc/defs/${codeDef.body?.data?.id}/publish`)
   check("bizdoc CODE 定义发布不回归", codePub.body?.code === 0, JSON.stringify(codePub.body?.message))
+
+  // 8. §12 计算配置：模板 calc 段（子表聚合 + computed Aviator 公式）在 print 路径求值并入 data
+  const calcDef = await call(admin.token, "POST", "/api/bizdoc/defs", {
+    code: `smoke_bd_calc_${TS}`, name: "冒烟计算单", formType: "INLINE",
+    formSchema: { widgets: [
+      { key: "amount", label: "金额", type: "number" },
+      { key: "discount_rate", label: "折扣率", type: "number" },
+    ] },
+    listConfig: { columns: [{ field: "amount", label: "金额" }] },
+  })
+  await call(admin.token, "POST", `/api/bizdoc/defs/${calcDef.body?.data?.id}/publish`)
+  const calcTpl = await call(admin.token, "POST", `/api/bizdoc/defs/${calcDef.body?.data?.id}/print-tpls`, {
+    name: "计算模板", paper: "A4", content: {
+      schemaVersion: 2, paper: "A4", elements: [],
+      calc: {
+        aggregates: [
+          { name: "total_amount", label: "合计金额", source: "items", field: "amount", fn: "SUM", format: "number", scale: 2 },
+          { name: "total_cn", label: "合计大写", source: "items", field: "amount", fn: "SUM", format: "chinese" },
+          { name: "row_count", label: "明细行数", source: "items", field: "amount", fn: "COUNT", format: "number", scale: 0 },
+        ],
+        computed: [
+          { name: "final_amount", label: "折后金额", expr: "round(total_amount * (1 - discount_rate), 2)", format: "number", scale: 2 },
+          { name: "amount", label: "占位覆盖", expr: "999", format: "number", scale: 2 }, // 与表单字段重名 → calc 不覆盖
+          { name: "bad_var", label: "坏公式", expr: "no_such_fn(1) +", format: "number", scale: 2 },
+        ],
+      },
+    },
+  })
+  const calcDoc = await call(admin.token, "POST", "/api/bizdoc/docs", {
+    defCode: `smoke_bd_calc_${TS}`,
+    formData: { amount: 1, discount_rate: 0.1, items: [{ amount: 1200 }, { amount: 34.52 }] },
+  })
+  await call(admin.token, "POST", `/api/bizdoc/docs/${calcDoc.body?.data?.id}/submit`)
+  const calcPrint = await call(admin.token, "GET", `/api/bizdoc/docs/${calcDoc.body?.data?.id}/print?tplId=${calcTpl.body?.data?.id}`)
+  const cd = calcPrint.body?.data?.data ?? {}
+  check("bizdoc §12 聚合 SUM+scale 格式(1234.52)", cd.total_amount === "1234.52", JSON.stringify(cd.total_amount))
+  check("bizdoc §12 聚合 chinese 人民币大写", cd.total_cn === "壹仟贰佰叁拾肆元伍角贰分", JSON.stringify(cd.total_cn))
+  check("bizdoc §12 聚合 COUNT(明细行数=2)", cd.row_count === "2", JSON.stringify(cd.row_count))
+  check("bizdoc §12 computed 引聚合(折后 round=1111.07)", cd.final_amount === "1111.07", JSON.stringify(cd.final_amount))
+  check("bizdoc §12 坏公式置 \"-\" 不阻断打印", cd.bad_var === "-", JSON.stringify(cd.bad_var))
+  check("bizdoc §12 计算变量与表单字段重名不覆盖(amount=1)", cd.amount === "1", JSON.stringify(cd.amount))
 }
 
 /* ---------- 汇总 ---------- */

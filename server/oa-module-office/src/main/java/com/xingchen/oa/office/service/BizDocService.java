@@ -56,6 +56,7 @@ public class BizDocService {
     private final DeptNameResolver deptNameResolver;
     private final SysUserRepository userRepository;
     private final RuntimeService runtimeService;
+    private final BizDocCalcService calcService;
     private final ObjectMapper objectMapper;
 
     @PersistenceContext
@@ -228,6 +229,8 @@ public class BizDocService {
                 : doc.getCreatedAt().format(DateTimeFormatter.ofPattern("yyyy-MM-dd")));
         // §9.3 审批记录区：绑流程单据从流程实例取办理记录（与已办/时间线同源=wf_operation，按办理顺序）
         data.put("_approvals", approvalRecords(doc.getProcessInstanceId()));
+        // §12 计算配置：模板 calc 段（聚合+公式）在此求值，格式化后并入 data（优先级最低，不踩表单/系统字段）
+        calcService.apply(tpl.getContent(), doc.getFormData(), data);
         List<Map<String, String>> fields = defService.formFields(def);
         return new PrintData(defService.toTplResponse(tpl), data, fields);
     }

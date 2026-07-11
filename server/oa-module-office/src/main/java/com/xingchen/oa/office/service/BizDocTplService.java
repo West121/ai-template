@@ -56,6 +56,7 @@ public class BizDocTplService {
     private final BizDocPrintTplRepository tplRepository;
     private final BizDocDefService defService;
     private final BizDocService docService;
+    private final BizDocCalcService calcService;
     private final DeptNameResolver deptNameResolver;
     private final HistoryService historyService;
     private final ObjectMapper objectMapper;
@@ -204,6 +205,8 @@ public class BizDocTplService {
         data.put("status", inst.bizStatus());
         data.put("createdAt", inst.createdAt() != null ? inst.createdAt().format(DATE_FMT) : null);
         data.put("_approvals", docService.approvalRecords(inst.procInstId()));
+        // §12 计算配置：模板 calc 段（聚合+公式）求值并入 data（优先级最低，不踩表单/系统字段）
+        calcService.apply(tpl.getContent(), formDataJson, data);
         String formCode = StringUtils.hasText(inst.formCode()) ? inst.formCode()
                 : (BizDocPrintTpl.BIND_FORM.equals(tpl.getBindType()) ? tpl.getBindCode()
                 : processFormCode(tpl.getBindCode()));
