@@ -112,3 +112,54 @@
 - table 跨页表头重复:P1。编号样例:前端本地拼(也可调 number/preview)。
 - **VOID 单据打印带 45°「作废」水印:确认要**(合规,防作废件流通)。
 - UI 规范全文见 docs/design/bizdoc-ui-spec.md(渲染器三态同源=硬指标)。
+
+## 9. 范式变更(用户以参考截图裁定):套打设计器改为文档流式模板设计器 v2
+
+用户参考智擎单据设计器实图,**主范式从自由 mm 坐标画布改为文档流式(块级堆叠)**——像 Word 模板:
+块从上到下排列、自动高度、天然分页;字段以 `{{字段名}}` token 蓝色 chip 内联绑定。自由定位画布降为 P1 不做。
+
+### 9.1 模板 JSON v2(块级契约,替代 §4)
+```jsonc
+{ "schemaVersion": 2,
+  "page": { "size": "A4|A5|Letter", "landscape": false, "margin": [20,20,20,20],   // mm
+            "fontFamily": "宋体|黑体|仿宋|楷体",
+            "pageNumber": { "show": true, "position": "footer", "align": "center",
+                            "format": "第 {page} 页 / 共 {total} 页", "fontSize": 10 } },
+  "blocks": [
+    { "id":"b1", "type":"title",      "text":"车辆申请", "style":{"fontSize":18,"bold":true,"align":"center"} },
+    { "id":"b2", "type":"docInfo",    "items":[{"label":"单据编号","value":"{{docNo}}"},
+                                               {"label":"日期","value":"{{createdAt}}"}] },  // 右对齐信息行
+    { "id":"b3", "type":"infoTable",  "columnsPerRow":2, "cells":[                            // 智能表格:label/value 网格
+        {"label":"申请单号","value":"{{docNo}}"},{"label":"申请类型","value":"{{type}}"},
+        {"label":"用车人","value":"{{applicant}}"},{"label":"用车部门","value":"{{dept}}"} ],
+      "style":{"fontSize":10.5,"labelWidth":28} },                                            // labelWidth mm
+    { "id":"b4", "type":"labelField", "label":"用车事由", "value":"{{reason}}" },             // 单行标签字段
+    { "id":"b5", "type":"text",       "content":"经办说明:{{note}}" },                        // 智能文本(插值)
+    { "id":"b6", "type":"detailTable","field":"items",                                        // 明细表格(子表循环)
+      "columns":[{"field":"name","label":"事项","w":40},{"field":"amount","label":"金额","w":25}] },
+    { "id":"b7", "type":"approvalTable", "steps":[                                            // 审批区(见 9.3)
+        {"label":"审批人","value":"{{_approvals.0.assigneeName}}"},
+        {"label":"办理人","value":"{{_approvals.1.assigneeName}}"} ] },
+    { "id":"b8", "type":"row", "children":[ /* 分栏:各栏是 blocks 子数组 */ ] },
+    { "id":"b9", "type":"signature", "label":"签章", "align":"right" },                       // 签章占位框
+    { "id":"b10","type":"qrcode",  "value":"{{docNo}}", "size":20, "align":"right" },         // size mm
+    { "id":"b11","type":"barcode", "value":"{{docNo}}", "align":"left" },                     // P1 可后补
+    { "id":"b12","type":"image",   "src":"(dataURL|fileId)", "w":30, "align":"left" },
+    { "id":"b13","type":"divider" }, { "id":"b14","type":"spacer", "h":6 } ] }
+```
+插值统一 `{{expr}}`:表单字段 key / 系统字段(docNo/title/creatorName/deptName/createdAt/status)
+/ **审批数据 `_approvals[i].{nodeName,assigneeName,opinion,time}`**。批A的 v1(自由定位)渲染器保留
+兼容读取(schemaVersion 判别),新建默认 v2。
+
+### 9.2 设计器(对齐参考图)
+左=元素库(布局容器:行容器 / 表头区域:文档页眉·文档标题·单据信息 / 信息区域:信息行·标签字段·
+智能表格·智能文本 / 表格区域:明细表格 / 其他:签章·二维码·条形码(P1)·图片·分割线·空白间距),
+拖入画布按文档流插入;中=纸面画布(块 hover 出 拖拽排序/复制/删除,块内 label 行内编辑,字段绑定
+弹字段选择器插 `{{}}` token 蓝 chip);右=属性面板(未选中=页面设置:大小/方向/字体/页码;选中=
+该块属性)。顶部:撤销/重做/预览(样例+审批样例)/JSON 源码查看/导入导出/保存。
+打印:文档流渲染 + `@page`(size/方向/margin)+ 页码页脚;预览=打印同渲染器(三态同源红线不变)。
+
+### 9.3 后端增量(磐石)
+打印数据接口 `GET /docs/{id}/print` 的 `data` 增 **`_approvals` 数组**:绑流程单据从其流程实例取
+办理记录(nodeName/assigneeName/opinion/time,按办理顺序);无流程或未办为 []。其余接口不变
+(模板 content 存 v2 JSON 对后端透明)。
