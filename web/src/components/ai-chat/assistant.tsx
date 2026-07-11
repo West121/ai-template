@@ -6,12 +6,14 @@
  * 面板本体（含 FormRenderer/卡片/markdown）走 React.lazy 分片：主包只含 FAB 与会话状态，
  * 首次打开面板才加载重依赖。offline：面板内提示"助手需后端"，输入禁用（§1.4）。
  */
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Sparkles, X } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth-store"
 import type { ToolStatusItem } from "./api"
+import type { AiMessagePart } from "./protocol"
+import { AiChatActionsContext, type AiChatActions } from "./chat-actions"
 import type { AiAttachment, AiMessage, AiModelChoice, AiSession } from "./types"
 
 const AssistantPanel = lazy(() => import("./assistant-panel"))
@@ -65,7 +67,11 @@ export function AiAssistant() {
   /* ---- 发送（V2 流式：SSE 事件驱动 UI；重试复用同一 clientMessageId，不新增用户气泡） ---- */
   const doSend = useCallback(
     async (text: string, attachments: AiAttachment[], isRetry: boolean) => {
-      const [{ sendChatStream }, { friendlyAiError, mergePart, ulid }] = await Promise.all([loadApi(), loadProtocol()])
+      const [{ sendChatStream }, { friendlyAiError, mergePart, ulid }, { featureCodeFromPath }] = await Promise.all([
+        loadApi(),
+        loadProtocol(),
+        import("./route-registry"),
+      ])
       const clientMessageId = (isRetry && lastSentRef.current?.clientMessageId) || ulid()
       setSending(true)
       setSendError(null)
@@ -118,6 +124,8 @@ export function AiAssistant() {
             credentialId: selected?.legacyCredentialId,
             model: selected?.legacyModel,
             attachments: attachments.length ? attachments : undefined,
+            // 批C pageContext：当前路由反查 Registry（拿不到发 null）
+            pageContext: { featureCode: featureCodeFromPath(window.location.pathname), entityType: null, entityId: null },
           },
           {
             onStarted: () => ensureStreamMsg(),
@@ -232,6 +240,16 @@ export function AiAssistant() {
 
   const headerTitle = sessionTitle ?? (messages.length > 0 ? messages[0]?.content.slice(0, 20) : null)
 
+  /* ---- 批C：消息流动作（图表下钻结果追加为新 list 卡） ---- */
+  const chatActions = useMemo<AiChatActions>(
+    () => ({
+      appendAssistantParts: (content: string, parts: AiMessagePart[]) => {
+        setMessages((prev) => [...prev, { role: "ASSISTANT", content, parts, createdAt: new Date().toISOString() }])
+      },
+    }),
+    [],
+  )
+
   return (
     <>
       {/* 悬浮球 FAB（面板打开时桌面变形为关闭键、移动端隐藏） */}
@@ -259,6 +277,7 @@ export function AiAssistant() {
       {/* 面板（懒加载分片；打开才挂载） */}
       {open && (
         <Suspense fallback={null}>
+          <AiChatActionsContext.Provider value={chatActions}>
           <AssistantPanel
             view={view}
             demo={demo}
@@ -283,6 +302,7 @@ export function AiAssistant() {
             onBackToChat={() => setView("chat")}
             onClose={closePanel}
           />
+          </AiChatActionsContext.Provider>
         </Suspense>
       )}
     </>

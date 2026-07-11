@@ -2,8 +2,15 @@
  * chart 卡（§3.5）：纯手写 SVG bar|line|pie(donut)，颜色严格 --chart-1..5 循环，零图表依赖。
  * viewBox 320×180 逻辑坐标随面板宽缩放；原生 <title> 做悬浮显值；图例文字兜底（色弱/灰度可读）。
  * 几何映射在 chart-math.ts（纯函数，可测）。
+ * V2 批C 下钻：payload 带 drill:{reportCode,paramName} 时 bar 类目/pie 扇区可点 →
+ * report_execute → 结果作为新 list 卡追加进消息流（AiChatActions 上下文）；无 drill 不可点（现状）。
  */
-import { BarChart3 } from "lucide-react"
+import { useState } from "react"
+import { BarChart3, Loader2 } from "lucide-react"
+import { toast } from "sonner"
+import { executeReport } from "../api"
+import { reportResultToListPart } from "../protocol"
+import { useAiChatActions } from "../chat-actions"
 import type { AiChartCard, AiChartSeries } from "../types"
 import {
   axisLayout,
@@ -76,15 +83,25 @@ function CategoryLabels({ categories }: { categories: string[] }) {
   )
 }
 
-function BarChart({ categories, series }: { categories: string[]; series: AiChartSeries[] }) {
+function BarChart({ categories, series, onPick }: { categories: string[]; series: AiChartSeries[]; onPick?: (category: string) => void }) {
   const { rects, max } = barLayout(categories, series)
   return (
     <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} preserveAspectRatio="xMidYMid meet" className="w-full" role="img">
       <Axis max={max} />
       <CategoryLabels categories={categories} />
       {rects.map((r, i) => (
-        <rect key={i} x={r.x} y={r.y} width={r.w} height={r.h} rx={2} fill={chartColor(r.seriesIndex)} className="transition-opacity hover:opacity-80">
-          <title>{`${r.category} · ${r.seriesName}：${r.value}`}</title>
+        <rect
+          key={i}
+          x={r.x}
+          y={r.y}
+          width={r.w}
+          height={r.h}
+          rx={2}
+          fill={chartColor(r.seriesIndex)}
+          className={`transition-opacity hover:opacity-80 ${onPick ? "cursor-pointer" : ""}`}
+          onClick={onPick ? () => onPick(r.category) : undefined}
+        >
+          <title>{`${r.category} · ${r.seriesName}：${r.value}${onPick ? "（点击下钻）" : ""}`}</title>
         </rect>
       ))}
     </svg>
@@ -122,7 +139,7 @@ function LineChart({ categories, series }: { categories: string[]; series: AiCha
   )
 }
 
-function DonutChart({ series }: { series: AiChartSeries[] }) {
+function DonutChart({ series, onPick }: { series: AiChartSeries[]; onPick?: (category: string) => void }) {
   const R = 62
   const strokeW = 24
   const r = R - strokeW / 2
@@ -147,9 +164,10 @@ function DonutChart({ series }: { series: AiChartSeries[] }) {
             strokeWidth={strokeW}
             strokeDasharray={`${seg.dash} ${circumference - seg.dash}`}
             strokeDashoffset={seg.offset}
-            className="transition-opacity hover:opacity-80"
+            className={`transition-opacity hover:opacity-80 ${onPick ? "cursor-pointer" : ""}`}
+            onClick={onPick ? () => onPick(seg.name) : undefined}
           >
-            <title>{`${seg.name}：${seg.value}（${seg.percent}%）`}</title>
+            <title>{`${seg.name}：${seg.value}（${seg.percent}%）${onPick ? "（点击下钻）" : ""}`}</title>
           </circle>
         ))}
       </g>
@@ -167,6 +185,31 @@ function DonutChart({ series }: { series: AiChartSeries[] }) {
 export function ChartCard({ card }: { card: AiChartCard }) {
   const empty = isChartEmpty(card.series)
   const typeLabel = card.chartType === "bar" ? "柱状图" : card.chartType === "line" ? "折线图" : "环形图"
+  const actions = useAiChatActions()
+  const [drilling, setDrilling] = useState<string | null>(null)
+
+  /** 批C 下钻：点击类目/扇区 → report_execute → 结果 list 卡追加进消息流 */
+  const drill = card.drill
+  const onPick =
+    drill && !drilling
+      ? (category: string) => {
+          void (async () => {
+            setDrilling(category)
+            try {
+              const res = await executeReport(drill.reportCode, { [drill.paramName]: category })
+              if (actions) {
+                actions.appendAssistantParts(`已按「${category}」下钻：`, [reportResultToListPart(res.data)])
+              } else {
+                toast.info("下钻结果无法追加（不在对话面板内）")
+              }
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : "下钻查询失败")
+            } finally {
+              setDrilling(null)
+            }
+          })()
+        }
+      : undefined
   const legendItems =
     card.chartType === "pie"
       ? card.series.map((s, i) => ({
@@ -185,13 +228,18 @@ export function ChartCard({ card }: { card: AiChartCard }) {
       {empty ? (
         <div className="flex h-32 items-center justify-center text-xs text-muted-foreground">暂无数据</div>
       ) : card.chartType === "bar" ? (
-        <BarChart categories={card.categories ?? []} series={card.series} />
+        <BarChart categories={card.categories ?? []} series={card.series} onPick={onPick} />
       ) : card.chartType === "line" ? (
         <LineChart categories={card.categories ?? []} series={card.series} />
       ) : (
-        <DonutChart series={card.series} />
+        <DonutChart series={card.series} onPick={onPick} />
       )}
       {!empty && <Legend items={legendItems} />}
+      {drilling && (
+        <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
+          <Loader2 className="size-3.5 animate-spin text-primary" /> 正在下钻「{drilling}」…
+        </p>
+      )}
     </div>
   )
 }

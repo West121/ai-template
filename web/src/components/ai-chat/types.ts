@@ -51,6 +51,11 @@ export interface AiListCard {
   columns: { key: string; label: string }[]
   rows: AiListRow[]
   moreLink?: string
+  /** V2 §10.4：受控导航"查看全部"（featureCode 走 Registry） */
+  moreFeatureCode?: string
+  /** V2 批C：数据集分页（有值时卡内分页，GET /api/ai/datasets/{id}?pageNum=） */
+  datasetId?: string
+  page?: { current: number; size: number; total: number }
 }
 
 export interface AiChartSeries {
@@ -66,6 +71,8 @@ export interface AiChartCard {
   title: string
   categories?: string[]
   series: AiChartSeries[]
+  /** V2 批C 下钻：点击 bar 类目 / pie 扇区 → report_execute({[paramName]: 类目}) → 追加 list 卡 */
+  drill?: { reportCode: string; paramName: string }
 }
 
 export interface AiLinkCard {
@@ -80,6 +87,14 @@ export type AiCard =
   | AiListCard
   | AiChartCard
   | AiLinkCard
+
+/** V2 批C 引用溯源（TextPart citations[]）：FEATURE 类可走 Registry 导航 */
+export interface AiCitation {
+  sourceType: "FEATURE" | "RAG_DOC" | (string & {})
+  sourceId: string
+  title: string
+  version?: string
+}
 
 /* ============================ 附件 / 模型（§11 增强批） ============================ */
 

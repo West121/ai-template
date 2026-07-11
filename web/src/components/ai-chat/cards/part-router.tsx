@@ -4,10 +4,14 @@
  * navigate/form/confirm/list/chart 经 partToCard 适配后复用现有卡片组件（渐进替换，行为兼容）；
  * status/error/approval 为 V2 新增轻量卡。
  */
-import { AlertTriangle, CheckCircle2, Circle, ExternalLink, Info, Loader2, PackageX, ShieldAlert, XCircle } from "lucide-react"
+import { useMemo } from "react"
+import { AlertTriangle, BookOpen, CheckCircle2, Circle, ExternalLink, Info, Loader2, PackageX, ShieldAlert, XCircle } from "lucide-react"
 import { useNavigate } from "react-router-dom"
+import { sanitizeHtml } from "@/lib/sanitize"
 import { Button } from "@/components/ui/button"
+import { mdToHtml } from "../markdown"
 import { partToCard, resolvePart, resolveFeaturePath, type AiMessagePart } from "../protocol"
+import type { AiCitation } from "../types"
 import { CardRouter } from "./card-router"
 
 /** 降级组件（§16.3：未知 schemaVersion / partType） */
@@ -19,6 +23,76 @@ function UnknownPart({ part, reason }: { part: AiMessagePart; reason: string }) 
         暂不支持的内容（{part.partType || "未知类型"}
         {typeof part.schemaVersion === "number" ? ` · v${part.schemaVersion}` : ""}，{reason}），请刷新或升级客户端后查看。
       </span>
+    </div>
+  )
+}
+
+/**
+ * text 卡（V2 批C 引用溯源）：markdown 正文 + 尾部角标 [1][2] + 底部引用行
+ * （标题 + version；FEATURE 类走 Registry 受控导航可点）。无 citations 时纯正文。
+ */
+function TextPartView({ part }: { part: AiMessagePart }) {
+  const navigate = useNavigate()
+  const p = part.payload
+  const text = typeof p.text === "string" ? p.text : ""
+  const citations = useMemo(
+    () =>
+      Array.isArray(p.citations)
+        ? (p.citations as Partial<AiCitation>[]).filter((c): c is AiCitation => typeof c?.title === "string" && typeof c?.sourceId === "string")
+        : [],
+    [p.citations],
+  )
+  const html = useMemo(() => sanitizeHtml(mdToHtml(text)), [text])
+  if (!text && citations.length === 0) return null
+  return (
+    <div className="w-full min-w-0">
+      {text && (
+        <div className="ai-md w-fit min-w-0 rounded-2xl rounded-bl-md bg-muted px-3.5 py-2.5">
+          {/* eslint-disable-next-line react/no-danger — mdToHtml 产物已 sanitizeHtml 净化 */}
+          <span dangerouslySetInnerHTML={{ __html: html }} />
+          {citations.length > 0 && (
+            <sup className="ml-0.5 space-x-0.5 text-[10px] text-primary">
+              {citations.map((_, i) => (
+                <span key={i}>[{i + 1}]</span>
+              ))}
+            </sup>
+          )}
+        </div>
+      )}
+      {citations.length > 0 && (
+        <ul className="mt-1.5 space-y-0.5 px-1">
+          {citations.map((c, i) => {
+            const path = c.sourceType === "FEATURE" ? resolveFeaturePath(c.sourceId) : null
+            const label = (
+              <>
+                <BookOpen className="size-3 shrink-0" />
+                <span className="shrink-0">[{i + 1}]</span>
+                <span className="min-w-0 truncate">{c.title}</span>
+                {c.version && <span className="shrink-0 text-muted-foreground/70">{c.version}</span>}
+              </>
+            )
+            return (
+              <li key={i} className="min-w-0">
+                {path ? (
+                  <button
+                    type="button"
+                    onClick={() => navigate(path)}
+                    className="flex max-w-full items-center gap-1 text-[11px] text-primary hover:underline"
+                    title={`打开 ${c.title}`}
+                  >
+                    {label}
+                    <ExternalLink className="size-3 shrink-0" />
+                  </button>
+                ) : (
+                  <span className="flex max-w-full items-center gap-1 text-[11px] text-muted-foreground" title={c.sourceId}>
+                    {label}
+                  </span>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
     </div>
   )
 }
@@ -154,8 +228,8 @@ export function PartRouter({ part }: { part: AiMessagePart }) {
   }
   switch (res.type) {
     case "text":
-      // text part 由消息层拼进正文（content），此处兜底为空
-      return null
+      // V2 批C：text part 自带正文与 citations（引用溯源）；content 流式路径不产 text part，无重复
+      return <TextPartView part={part} />
     case "status":
       return <StatusPart part={part} />
     case "error":

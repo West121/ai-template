@@ -27,6 +27,8 @@ export interface ChatMessageRequest {
   credentialId?: number
   model?: string
   attachments?: { kind: string; name: string; dataUrl?: string; fileId?: number }[]
+  /** V2 批C 页面上下文（§9.1 pageContext；拿不到发 null） */
+  pageContext?: { featureCode: string | null; entityType: string | null; entityId: string | null } | null
 }
 
 /**

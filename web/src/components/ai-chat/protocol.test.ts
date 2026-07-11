@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from "vitest"
 import { ApiError } from "@/lib/api"
+import { FEATURE_REGISTRY, featureCodeFromPath, featureCodeOf, resolveFeature } from "./route-registry"
 import {
   AI_ERROR_TEXT,
   cardsToParts,
@@ -13,6 +14,7 @@ import {
   mergePart,
   parseAiEvent,
   partToCard,
+  reportResultToListPart,
   resolveFeaturePath,
   resolvePart,
   ulid,
@@ -167,6 +169,61 @@ describe("resolveFeaturePath", () => {
     expect(resolveFeaturePath("EVIL")).toBeNull()
     expect(resolveFeaturePath("WF_INSTANCE_DETAIL", {})).toBeNull()
     expect(resolveFeaturePath(undefined)).toBeNull()
+  })
+})
+
+/* ============================ 批C：FeatureRouteRegistry / 下钻转换 ============================ */
+
+describe("FeatureRouteRegistry（menu.ts 生成全量 + 详情页 + 别名）", () => {
+  it("featureCodeOf：path → 段大写下划线（与后端种子同约定）", () => {
+    expect(featureCodeOf("/workflow/tasks")).toBe("WORKFLOW_TASKS")
+    expect(featureCodeOf("/workflow/form-defs")).toBe("WORKFLOW_FORM_DEFS")
+  })
+
+  it("菜单叶子全量入表（外链/分组不入）；resolveFeature 规范码与别名都通", () => {
+    expect(FEATURE_REGISTRY.WORKFLOW_TASKS?.path).toBe("/workflow/tasks")
+    expect(FEATURE_REGISTRY.BIZDOC_TPLS?.path).toBe("/bizdoc/tpls")
+    expect(FEATURE_REGISTRY.SYSTEM_ORG_DEPT?.path).toBe("/system/org/dept")
+    // 外链（xxl-job）不注册
+    expect(Object.values(FEATURE_REGISTRY).every((r) => r.path.startsWith("/"))).toBe(true)
+    expect(resolveFeature("WORKFLOW_TASKS")).toBe("/workflow/tasks")
+    expect(resolveFeature("WF_MY_TODO")).toBe("/workflow/tasks") // 批A 别名兼容
+    expect(resolveFeature("WORKFLOW_INSTANCE_DETAIL", { instanceId: 9 })).toBe("/workflow/instances/9")
+    expect(resolveFeature("WORKFLOW_INSTANCE_DETAIL", {})).toBeNull()
+    expect(resolveFeature("EVIL_CODE")).toBeNull()
+  })
+
+  it("featureCodeFromPath 反查（pageContext）：精确 / 参数模板 / 最长前缀 / 未知 null", () => {
+    expect(featureCodeFromPath("/workflow/tasks")).toBe("WORKFLOW_TASKS")
+    expect(featureCodeFromPath("/workflow/instances/pi-9001")).toBe("WORKFLOW_INSTANCE_DETAIL")
+    expect(featureCodeFromPath("/document/send/12")).toBe("DOCUMENT_SEND_DETAIL")
+    expect(featureCodeFromPath("/bizdoc/run/expense")).toBe("BIZDOC_RUN")
+    // 最长前缀回退：设计器子路由归属其列表页
+    expect(featureCodeFromPath("/workflow/defs/leave/design")).toBe("WORKFLOW_DEFS")
+    expect(featureCodeFromPath("/nowhere/at/all")).toBeNull()
+  })
+})
+
+describe("reportResultToListPart（下钻结果 → 新 list 卡）", () => {
+  it("字段透传（title/columns/rows/datasetId/page/moreFeatureCode），partType=list v1", () => {
+    const partOut = reportResultToListPart(
+      {
+        title: "「请假」审批明细",
+        columns: [{ key: "title", label: "标题" }],
+        rows: [{ title: "张三的申请" }],
+        datasetId: "ds_x",
+        page: { current: 1, size: 20, total: 42 },
+        moreFeatureCode: "WORKFLOW_MONITOR",
+      },
+      7,
+    )
+    expect(partOut.partType).toBe("list")
+    expect(partOut.schemaVersion).toBe(1)
+    expect(partOut.sequenceNo).toBe(7)
+    expect(partOut.payload.title).toBe("「请假」审批明细")
+    expect(partOut.payload.datasetId).toBe("ds_x")
+    expect((partOut.payload.page as { total: number }).total).toBe(42)
+    expect(resolvePart(partOut)).toEqual({ status: "ok", type: "list" })
   })
 })
 

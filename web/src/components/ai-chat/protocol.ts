@@ -179,36 +179,14 @@ export function resolvePart(part: Partial<AiMessagePart> | null | undefined): Pa
   return { status: "ok", type }
 }
 
-/* ============================ featureCode 受控导航（§10.2；批C 出全量 Registry，此处先落骨架） ============================ */
+/* ============================ featureCode 受控导航（§10.2） ============================ */
 
-/** featureCode → 路由模板（`{param}` 占位从 routeParams 取；全站 path 即唯一键约定不破坏） */
-export const FEATURE_ROUTES: Record<string, string> = {
-  WF_MY_TODO: "/workflow/tasks",
-  WF_START: "/workflow/start",
-  WF_MONITOR: "/workflow/monitor",
-  WF_INSTANCE_DETAIL: "/workflow/instances/{instanceId}",
-  WF_TASK_DETAIL: "/workflow/tasks",
-  DOC_SEND: "/document/send",
-  DOC_RECEIVE: "/document/receive",
-  MEETING_LIST: "/office/meeting",
-  BIZDOC_CENTER: "/bizdoc/center",
-}
+// 批C：全量 Registry 落地在 route-registry.ts（由 menu.ts 生成 + 详情页 + 别名）；此处转发保持纯层稳定出口
+import { resolveFeature } from "./route-registry"
 
 /** featureCode + routeParams → 站内路径；未知 code / 缺参 → null（渲染禁用态，不执行任意 URL） */
 export function resolveFeaturePath(featureCode: string | undefined, routeParams?: Record<string, unknown>): string | null {
-  if (!featureCode) return null
-  const tpl = FEATURE_ROUTES[featureCode]
-  if (!tpl) return null
-  let missing = false
-  const path = tpl.replace(/\{(\w+)\}/g, (_m, key: string) => {
-    const v = routeParams?.[key]
-    if (v == null || v === "") {
-      missing = true
-      return ""
-    }
-    return encodeURIComponent(String(v))
-  })
-  return missing ? null : path
+  return resolveFeature(featureCode, routeParams)
 }
 
 /* ============================ 新旧协议适配（兼容读旧 cards / mock 升级） ============================ */
@@ -314,6 +292,35 @@ export function legacyModelsToChoices(
     legacyCredentialId: m.credentialId,
     legacyModel: m.model,
   }))
+}
+
+/* ============================ 批C：报表结果 → list part（下钻追加用，纯函数） ============================ */
+
+export interface AiReportResult {
+  title: string
+  columns: { key: string; label: string }[]
+  rows: Record<string, unknown>[]
+  datasetId?: string
+  page?: { current: number; size: number; total: number }
+  moreFeatureCode?: string
+}
+
+/** report_execute 结果 → list part（下钻结果作为新卡追加进消息流） */
+export function reportResultToListPart(result: AiReportResult, sequenceNo = 1): AiMessagePart {
+  return {
+    partId: `pt_${ulid()}`,
+    partType: "list",
+    schemaVersion: 1,
+    sequenceNo,
+    payload: {
+      title: result.title,
+      columns: result.columns,
+      rows: result.rows,
+      datasetId: result.datasetId,
+      page: result.page,
+      moreFeatureCode: result.moreFeatureCode,
+    },
+  }
 }
 
 /* ============================ 错误码文案（§22，可修复/需重查/权限/系统） ============================ */
