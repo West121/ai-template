@@ -2,7 +2,7 @@
  * 运行时台账 /bizdoc/run/:defCode（丹青 §4.2-4.5）。
  *
  * 动态列（list_config.columns）+ serverPagination + 动态筛选（filters）+ 固定 状态/关键字；
- * 新建/编辑抽屉 = FormRenderer（ONLINE）| CODE 跳转；提交（无流程即生效/有流程起审批）、
+ * 新建/编辑抽屉 = FormRenderer（§10 INLINE 私有 formSchema）| CODE 跳 submitPath；提交（无流程即生效/有流程起审批）、
  * 作废（AlertDialog）、删除草稿；状态徽标按丹青 §4.4；APPROVING 行给流程实例链接；
  * 详情抽屉（只读 + 信息条 + 驳回原因条）；打印 → PrintPreview（VOID 水印）。
  */
@@ -401,7 +401,19 @@ export default function BizdocRunPage() {
         }
         actionSlot={
           canWrite && def ? (
-            <Button size="sm" className="h-8" onClick={() => setEditing({ doc: null, readOnly: false })}>
+            <Button
+              size="sm"
+              className="h-8"
+              onClick={() => {
+                // §10：CODE 形态录入走其业务页面（submitPath）
+                if (def.formType === "CODE") {
+                  if (def.submitPath) navigate(def.submitPath)
+                  else toast.info("该单据绑定 CODE 表单，请从对应业务页面发起")
+                  return
+                }
+                setEditing({ doc: null, readOnly: false })
+              }}
+            >
               <Plus className="size-4" />
               新建{def.name}
             </Button>
@@ -409,7 +421,7 @@ export default function BizdocRunPage() {
         }
       />
 
-      {/* 新建/编辑/详情抽屉（ONLINE 表单内嵌 FormRenderer） */}
+      {/* 新建/编辑/详情抽屉（INLINE 私有 schema 内嵌 FormRenderer） */}
       <Drawer
         open={editing !== null}
         onOpenChange={(o) => !o && !submitting && setEditing(null)}
@@ -444,7 +456,20 @@ export default function BizdocRunPage() {
             )}
 
             {schema.length === 0 ? (
-              <div className="py-10 text-center text-sm text-muted-foreground">该单据未完成配置（缺表单绑定）</div>
+              <div className="space-y-2 py-10 text-center text-sm text-muted-foreground">
+                {def?.formType === "CODE" ? (
+                  <>
+                    <p>该单据绑定 CODE 手写表单，录入在其业务页面完成。</p>
+                    {def.submitPath && (
+                      <Button variant="outline" size="sm" onClick={() => navigate(def.submitPath!)}>
+                        前往发起页
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  <p>该单据尚未设计字段（到「单据管理」打开字段设计器）</p>
+                )}
+              </div>
             ) : (
               <FormRenderer
                 key={editingDoc?.id ?? "new"}

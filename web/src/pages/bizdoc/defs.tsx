@@ -1,18 +1,22 @@
 /**
- * 单据管理 /bizdoc/defs（丹青 §3）：定义列表 + 编辑抽屉（纵向分区①-⑥）。
- * 绑表单（ONLINE=form-defs 下拉 / CODE=/api/wf/forms/code 下拉）、编号规则（复用公文规则）、
- * 绑流程（已发布 wf defs）、台账列与筛选配置（字段从表单清单选）、打印模板列表（批A 占位，批B 进设计器）。
- * 发布/停用/删除（仅 DRAFT）；bizdoc:def:write 门控。
+ * 单据管理 /bizdoc/defs（丹青 §3 + §10 范式修正二）：定义列表 + 编辑抽屉（纵向分区①-⑥）。
+ * ② 单据字段设计：INLINE 主路径（复用 FormDesignerCore 全屏 Modal，产物存 def.formSchema）；
+ * 高级保留 CODE 手写表单；存量 ONLINE 兼容读并可一键转内置。台账列/筛选字段从统一字段源派生。
+ * 发布/停用/删除（仅 DRAFT）；INLINE 发布校验 schema 非空且 key 唯一；bizdoc:def:write 门控。
  */
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import type { ColumnDef } from "@tanstack/react-table"
-import { FileSpreadsheet, PenLine, Plus, Printer, ShieldAlert, Star, Trash2 } from "lucide-react"
+import { FileSpreadsheet, LayoutPanelTop, PenLine, Plus, Printer, ShieldAlert, Star, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/page-header"
 import { DataTable } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { Drawer } from "@/components/drawer"
+import { Modal } from "@/components/modal"
+import { FormDesignerCore } from "@/pages/workflow/designer/form/designer-core"
+import { ensureWidgetIdSeq, type FormWidget as DesignerWidget } from "@/pages/workflow/designer/form/model"
+import type { FormWidget } from "@/types/workflow"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -38,14 +42,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { api, type PageResult } from "@/lib/api"
-import { getFormManifest } from "@/lib/form-registry"
+import { api } from "@/lib/api"
 import { useAuthStore, useHasPerm } from "@/stores/auth-store"
 import { DemoBanner } from "@/pages/document/gongwen/shared"
+import { deriveSchemaFields, fieldsForDef, schemaKeyIssues, type DefField } from "./fields"
 import {
   deleteDef,
   deletePrintTpl,
   disableDef,
+  fetchDefSchema,
   fetchDefs,
   fetchNumberRules,
   fetchPrintTpls,
@@ -72,13 +77,8 @@ interface FormOption {
   name: string
 }
 
-interface FieldOption {
-  key: string
-  label: string
-}
-
 /** 系统字段（台账配置可选，丹青 §3.2 ⑤） */
-const SYS_FIELD_OPTIONS: FieldOption[] = [
+const SYS_FIELD_OPTIONS: DefField[] = [
   { key: "docNo", label: "单号" },
   { key: "status", label: "状态" },
   { key: "creator", label: "创建人" },
@@ -93,8 +93,10 @@ function emptyEditor(): EditorState {
     code: "",
     name: "",
     category: "",
-    formType: "ONLINE",
+    // §10：内置字段设计为默认主路径
+    formType: "INLINE",
     formCode: "",
+    formSchema: [],
     numberRuleId: null,
     wfDefCode: null,
     listConfig: { columns: [], filters: [] },
@@ -113,18 +115,20 @@ export default function BizdocDefsPage() {
   const [loading, setLoading] = useState(true)
   const [demo, setDemo] = useState(false)
 
-  // 下拉数据源
-  const [onlineForms, setOnlineForms] = useState<FormOption[]>([])
+  // 下拉数据源（§10：ONLINE 绑定选项已移除，仅剩 CODE 手写表单清单）
   const [codeForms, setCodeForms] = useState<FormOption[]>([])
   const [rules, setRules] = useState<NumberRule[]>([])
   const [wfDefs, setWfDefs] = useState<WfDefOption[]>([])
 
   const [editor, setEditor] = useState<EditorState | null>(null)
-  const [fields, setFields] = useState<FieldOption[]>([])
+  /** CODE/存量 ONLINE 的统一清单字段（INLINE 直接本地派生，不走此状态） */
+  const [fields, setFields] = useState<DefField[]>([])
   const [tpls, setTpls] = useState<BizDocPrintTpl[]>([])
   const [saving, setSaving] = useState(false)
   const [disabling, setDisabling] = useState<BizDocDef | null>(null)
   const [deleting, setDeleting] = useState<BizDocDef | null>(null)
+  /** 字段设计器 Modal（FormDesignerCore，产物写回 editor.formSchema） */
+  const [designerOpen, setDesignerOpen] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -139,10 +143,7 @@ export default function BizdocDefsPage() {
 
   useEffect(() => {
     void load()
-    // 下拉源（失败降级空/内置）
-    void api<PageResult<{ code: string; name: string; status: string }>>("/api/wf/form-defs?pageNum=1&pageSize=100")
-      .then((p) => setOnlineForms(p.list.filter((f) => f.status === "PUBLISHED").map((f) => ({ code: f.code, name: f.name }))))
-      .catch(() => setOnlineForms([{ code: "expense_form", name: "费用报销表单（演示）" }, { code: "vehicle_form", name: "车辆登记表单（演示）" }]))
+    // 下拉源（失败降级内置演示）
     void api<{ formKey: string; name: string }[]>("/api/wf/forms/code")
       .then((list) => setCodeForms(list.map((f) => ({ code: f.formKey, name: f.name }))))
       .catch(() => setCodeForms([{ code: "gw_send", name: "发文办理单" }, { code: "gw_recv", name: "收文办理单" }]))
@@ -150,56 +151,53 @@ export default function BizdocDefsPage() {
     void fetchPublishedWfDefs().then((r) => setWfDefs(r.data))
   }, [load, offline])
 
-  /* ---- 编辑抽屉打开：拉字段清单 + 打印模板 ---- */
-  const openEdit = useCallback(async (def: BizDocDef | null) => {
-    // listConfig 兜底:API 直建/smoke 留存的定义可能为 null——缺省空配置,避免展开 null 崩整页白屏
-    const next: EditorState = def
-      ? {
-          ...def,
-          id: def.id,
-          listConfig: {
-            columns: [...(def.listConfig?.columns ?? [])],
-            filters: [...(def.listConfig?.filters ?? [])],
-          },
-        }
-      : emptyEditor()
-    setEditor(next)
-    setFields([])
-    setTpls([])
-    if (def) void fetchPrintTpls(def.id).then((r) => setTpls(r.data))
-    if (next.formCode) void loadFields(next.formCode)
+  /** 非 INLINE 的字段清单（统一字段源；INLINE 由 deriveSchemaFields 本地派生） */
+  const loadFields = useCallback(async (def: Pick<BizDocDef, "formType" | "formCode" | "formSchema">) => {
+    setFields(def.formType === "INLINE" ? [] : await fieldsForDef(def))
   }, [])
 
-  /** 表单字段清单（统一接口：CODE registry / ONLINE 后端派生；失败降级演示字段） */
-  const loadFields = async (formCode: string) => {
-    try {
-      const manifest = await getFormManifest(formCode)
-      setFields(manifest.fields.map((f) => ({ key: f.key, label: f.label })))
-    } catch {
-      // 演示：mock 定义的内置字段
-      const demoFields: Record<string, FieldOption[]> = {
-        expense_form: [
-          { key: "expenseType", label: "报销类型" },
-          { key: "amount", label: "报销金额（元）" },
-          { key: "expenseDate", label: "发生日期" },
-          { key: "project", label: "费用归属项目" },
-          { key: "memo", label: "费用说明" },
-        ],
-        vehicle_form: [
-          { key: "plate", label: "车牌号" },
-          { key: "driver", label: "用车人" },
-          { key: "useDate", label: "用车日期" },
-          { key: "destination", label: "目的地" },
-          { key: "reason", label: "事由" },
-        ],
-      }
-      setFields(demoFields[formCode] ?? [])
-    }
-  }
+  /* ---- 编辑抽屉打开：拉字段清单 + 打印模板 ---- */
+  const openEdit = useCallback(
+    async (def: BizDocDef | null) => {
+      // listConfig 兜底:API 直建/smoke 留存的定义可能为 null——缺省空配置,避免展开 null 崩整页白屏
+      const next: EditorState = def
+        ? {
+            ...def,
+            id: def.id,
+            formType: def.formType ?? "INLINE",
+            formSchema: Array.isArray(def.formSchema) ? [...def.formSchema] : [],
+            listConfig: {
+              columns: [...(def.listConfig?.columns ?? [])],
+              filters: [...(def.listConfig?.filters ?? [])],
+            },
+          }
+        : emptyEditor()
+      ensureWidgetIdSeq((next.formSchema ?? []) as unknown as DesignerWidget[])
+      setEditor(next)
+      setFields([])
+      setTpls([])
+      if (def) void fetchPrintTpls(def.id).then((r) => setTpls(r.data))
+      void loadFields(next)
+    },
+    [loadFields],
+  )
 
   const patch = (p: Partial<EditorState>) => setEditor((e) => (e ? { ...e, ...p } : e))
   const patchList = (p: Partial<ListConfig>) =>
     setEditor((e) => (e ? { ...e, listConfig: { ...e.listConfig, ...p } } : e))
+
+  /** 存量 ONLINE → 一键转内置：复制外部在线表单 widgets 进私有 schema */
+  const convertToInline = async () => {
+    if (!editor) return
+    const s = await fetchDefSchema({ ...editor, id: editor.id ?? 0, status: editor.status } as BizDocDef)
+    if (!s.data.length) {
+      toast.error("未取到原在线表单字段，无法转换（可手动重新设计）")
+      return
+    }
+    patch({ formType: "INLINE", formCode: "", formSchema: s.data })
+    setFields([])
+    toast.success(`已转为内置设计（复制 ${s.data.length} 个控件），保存后生效`)
+  }
 
   const doSave = async (publishAfter: boolean) => {
     if (!editor) return
@@ -207,9 +205,17 @@ export default function BizdocDefsPage() {
       toast.error("请填写编码与名称")
       return
     }
-    if (!editor.formCode) {
-      toast.error("请绑定表单")
+    if (editor.formType === "CODE" && !editor.formCode) {
+      toast.error("CODE 形态需选择手写表单")
       return
+    }
+    // §10 发布校验：INLINE 要求 schema 非空且字段 key 唯一
+    if (publishAfter && editor.formType === "INLINE") {
+      const issues = schemaKeyIssues(editor.formSchema)
+      if (issues.length > 0) {
+        toast.error(issues[0])
+        return
+      }
     }
     setSaving(true)
     try {
@@ -298,22 +304,34 @@ export default function BizdocDefsPage() {
       },
       {
         id: "form",
-        meta: { title: "表单" },
-        header: () => <span>表单</span>,
-        cell: ({ row }) => (
-          <span className="flex items-center gap-1.5 text-xs">
-            <span
-              className={
-                row.original.formType === "ONLINE"
-                  ? "rounded bg-blue-500/10 px-1 text-[10px] text-blue-600"
-                  : "rounded bg-violet-500/10 px-1 text-[10px] text-violet-600"
-              }
-            >
-              {row.original.formType}
+        meta: { title: "字段" },
+        header: () => <span>字段</span>,
+        cell: ({ row }) => {
+          const d = row.original
+          if (d.formType === "CODE") {
+            return (
+              <span className="flex items-center gap-1.5 text-xs">
+                <span className="rounded bg-violet-500/10 px-1 text-[10px] text-violet-600">CODE</span>
+                <span className="font-mono text-muted-foreground">{d.formCode}</span>
+              </span>
+            )
+          }
+          if (d.formType === "ONLINE") {
+            return (
+              <span className="flex items-center gap-1.5 text-xs">
+                <span className="rounded bg-amber-500/10 px-1 text-[10px] text-amber-600">存量 ONLINE</span>
+                <span className="font-mono text-muted-foreground">{d.formCode}</span>
+              </span>
+            )
+          }
+          const n = deriveSchemaFields(d.formSchema).length
+          return (
+            <span className="flex items-center gap-1.5 text-xs">
+              <span className="rounded bg-blue-500/10 px-1 text-[10px] text-blue-600">内置</span>
+              <span className="text-muted-foreground">{n > 0 ? `${n} 个字段` : "未设计"}</span>
             </span>
-            <span className="font-mono text-muted-foreground">{row.original.formCode}</span>
-          </span>
-        ),
+          )
+        },
       },
       {
         id: "rule",
@@ -391,12 +409,13 @@ export default function BizdocDefsPage() {
     )
   }
 
-  const formOptions = editor?.formType === "ONLINE" ? onlineForms : codeForms
-  const allFieldOptions = [...fields, ...SYS_FIELD_OPTIONS]
+  // §10 统一字段源：INLINE=私有 schema 本地派生；CODE/存量 ONLINE=统一清单（fields 状态）
+  const formFields = editor?.formType === "INLINE" ? deriveSchemaFields(editor.formSchema) : fields
+  const allFieldOptions = [...formFields, ...SYS_FIELD_OPTIONS]
 
   return (
     <div className="space-y-4">
-      <PageHeader title="单据管理" description="在线定义业务单据：绑表单 + 编号规则 + 打印模板 + 可选审批流，发布后运行时自动获得台账/录入/打印" />
+      <PageHeader title="单据管理" description="在线定义业务单据：内置字段设计 + 编号规则 + 打印模板 + 可选审批流，发布后运行时自动获得台账/录入/打印" />
       {demo && <DemoBanner />}
 
       <DataTable
@@ -467,45 +486,98 @@ export default function BizdocDefsPage() {
             </section>
             <Separator />
 
-            {/* ② 绑定表单 */}
+            {/* ② 单据字段设计（§10：内置设计主路径；高级=CODE；存量 ONLINE 兼容读+转内置） */}
             <section className="space-y-3">
-              <h3 className="text-sm font-semibold">② 绑定表单</h3>
-              <Tabs value={editor.formType} onValueChange={(v) => patch({ formType: v as "ONLINE" | "CODE", formCode: "" })}>
-                <TabsList>
-                  <TabsTrigger value="ONLINE">在线表单</TabsTrigger>
-                  <TabsTrigger value="CODE">CODE 表单</TabsTrigger>
-                </TabsList>
-              </Tabs>
-              <Select
-                value={editor.formCode || undefined}
-                onValueChange={(v) => {
-                  patch({ formCode: v })
-                  void loadFields(v)
-                }}
-              >
-                <SelectTrigger className="h-8 w-full text-xs">
-                  <SelectValue placeholder={formOptions.length ? "选择表单" : "暂无可选表单"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {formOptions.map((f) => (
-                    <SelectItem key={f.code} value={f.code}>
-                      {f.name}（{f.code}）
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {fields.length > 0 && (
-                <div className="rounded-lg border bg-muted/30 p-2.5">
-                  <div className="mb-1.5 text-[11px] text-muted-foreground">字段清单（共 {fields.length} 个）</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {fields.slice(0, 8).map((f) => (
-                      <span key={f.key} className="rounded bg-muted px-1.5 py-0.5 text-[11px]">
-                        {f.label}
-                      </span>
-                    ))}
-                    {fields.length > 8 && <span className="text-[11px] text-muted-foreground">…</span>}
-                  </div>
+              <h3 className="text-sm font-semibold">② 单据字段设计</h3>
+
+              {editor.formType === "ONLINE" ? (
+                <div className="space-y-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    存量定义：引用外部在线表单 <span className="font-mono">{editor.formCode}</span>（兼容读，绑定选项已下线）。
+                  </p>
+                  <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => void convertToInline()}>
+                    <LayoutPanelTop className="size-3.5" /> 转为内置设计（复制当前字段）
+                  </Button>
                 </div>
+              ) : (
+                <Tabs
+                  value={editor.formType}
+                  onValueChange={(v) => patch({ formType: v as "INLINE" | "CODE", formCode: "" })}
+                >
+                  <TabsList>
+                    <TabsTrigger value="INLINE">内置设计</TabsTrigger>
+                    <TabsTrigger value="CODE">高级：CODE 表单</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              )}
+
+              {editor.formType === "INLINE" && (
+                <>
+                  <Button variant="outline" className="h-9 w-full gap-1.5 border-dashed text-sm" onClick={() => setDesignerOpen(true)}>
+                    <LayoutPanelTop className="size-4 text-primary" />
+                    {formFields.length > 0 ? `打开字段设计器（已设计 ${formFields.length} 个字段）` : "打开字段设计器"}
+                  </Button>
+                  {formFields.length > 0 ? (
+                    <div className="rounded-lg border bg-muted/30 p-2.5">
+                      <div className="mb-1.5 text-[11px] text-muted-foreground">字段清单（台账/打印/流程绑定按此取）</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {formFields.slice(0, 8).map((f) => (
+                          <span key={f.key} className="rounded bg-muted px-1.5 py-0.5 text-[11px]">
+                            {f.label}
+                          </span>
+                        ))}
+                        {formFields.length > 8 && <span className="text-[11px] text-muted-foreground">…共 {formFields.length} 个</span>}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground">字段与录入界面为本单据私有（不进表单管理），发布前需至少设计一个字段。</p>
+                  )}
+                </>
+              )}
+
+              {editor.formType === "CODE" && (
+                <>
+                  <Select
+                    value={editor.formCode || undefined}
+                    onValueChange={(v) => {
+                      patch({ formCode: v })
+                      void loadFields({ formType: "CODE", formCode: v, formSchema: null })
+                    }}
+                  >
+                    <SelectTrigger className="h-8 w-full text-xs">
+                      <SelectValue placeholder={codeForms.length ? "选择手写表单" : "暂无可选表单"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {codeForms.map((f) => (
+                        <SelectItem key={f.code} value={f.code}>
+                          {f.name}（{f.code}）
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">发起页路径（submitPath）</Label>
+                    <Input
+                      value={editor.submitPath ?? ""}
+                      onChange={(e) => patch({ submitPath: e.target.value })}
+                      placeholder="如 /document/send?new=1（录入跳该页面）"
+                      className="h-8 font-mono text-xs"
+                    />
+                  </div>
+                  {fields.length > 0 && (
+                    <div className="rounded-lg border bg-muted/30 p-2.5">
+                      <div className="mb-1.5 text-[11px] text-muted-foreground">字段清单（统一接口，共 {fields.length} 个）</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {fields.slice(0, 8).map((f) => (
+                          <span key={f.key} className="rounded bg-muted px-1.5 py-0.5 text-[11px]">
+                            {f.label}
+                          </span>
+                        ))}
+                        {fields.length > 8 && <span className="text-[11px] text-muted-foreground">…</span>}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </section>
             <Separator />
@@ -744,6 +816,49 @@ export default function BizdocDefsPage() {
           </div>
         )}
       </Drawer>
+
+      {/* §10 单据字段设计器：复用 FormDesignerCore（全屏 Modal），产物受控写回 editor.formSchema */}
+      <Modal
+        open={designerOpen && editor !== null}
+        onOpenChange={setDesignerOpen}
+        title={
+          <span className="flex items-center gap-2">
+            <LayoutPanelTop className="size-4 text-primary" />
+            单据字段设计{editor?.name ? ` · ${editor.name}` : ""}
+          </span>
+        }
+        description="字段与录入界面为本单据私有（存 def.formSchema，不进表单管理）；字段标识供台账/打印模板/流程条件绑定"
+        width={1180}
+        height={720}
+        bodyClassName="p-0"
+        footer={
+          <>
+            <span className="mr-auto text-xs text-muted-foreground">
+              {formFields.length} 个数据字段 · 关闭即暂存，随定义「保存」一并持久化
+            </span>
+            <Button size="sm" onClick={() => setDesignerOpen(false)}>
+              完成
+            </Button>
+          </>
+        }
+      >
+        {editor && (
+          <FormDesignerCore
+            widgets={(editor.formSchema ?? []) as unknown as DesignerWidget[]}
+            onWidgetsChange={(updater) =>
+              setEditor((e) => {
+                if (!e) return e
+                const cur = (e.formSchema ?? []) as unknown as DesignerWidget[]
+                const next = typeof updater === "function" ? (updater as (w: DesignerWidget[]) => DesignerWidget[])(cur) : updater
+                return { ...e, formSchema: next as unknown as FormWidget[] }
+              })
+            }
+            title={editor.name || "单据表单"}
+            onTitleChange={() => undefined}
+            showKeyField
+          />
+        )}
+      </Modal>
 
       {/* 停用确认 */}
       <AlertDialog open={disabling !== null} onOpenChange={(o) => !o && setDisabling(null)}>

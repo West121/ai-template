@@ -1,7 +1,7 @@
 /**
  * BizDoc · API 层 + mock 先行（契约 §3，前缀 /api/bizdoc/*；后端在 AI 助手之后开工，形状照文档）。
  * 降级：offline / NetworkError / 404（端点未实现）→ 内存 mock（demo=true）；真实 403/400 照抛。
- * mock 内置 2 个已发布演示定义（报销单=绑流程+编号+打印模板；车辆使用登记=纯台账）+ 若干单据。
+ * §10：单据字段为定义私有 formSchema（INLINE 主路径），演示定义均内嵌 schema；另留一条 CODE 存量形态。
  */
 import { api, ApiError, NetworkError, type PageResult } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
@@ -25,8 +25,15 @@ export interface BizDocDef {
   name: string
   category?: string
   icon?: string
-  formType: "ONLINE" | "CODE"
+  /**
+   * §10 语义：INLINE=内置字段设计（默认/主路径，schema 存 formSchema）｜CODE=高级绑手写表单
+   * ｜ONLINE=存量兼容读（外部在线表单引用，编辑器提供「转为内置设计」）
+   */
+  formType: "INLINE" | "CODE" | "ONLINE"
+  /** CODE/存量 ONLINE 的表单标识；INLINE 留空 */
   formCode: string
+  /** INLINE 私有表单 schema（widgets 与在线表单同构，FormRenderer/设计器零改动复用；磐石 §10 加列） */
+  formSchema?: FormWidget[] | null
   numberRuleId?: number | null
   wfDefCode?: string | null
   listConfig: ListConfig
@@ -217,8 +224,9 @@ const DEFS: BizDocDef[] = [
     name: "费用报销单",
     category: "财务",
     icon: "receipt",
-    formType: "ONLINE",
-    formCode: "expense_form",
+    formType: "INLINE",
+    formCode: "",
+    formSchema: EXPENSE_SCHEMA,
     numberRuleId: 1,
     wfDefCode: "expense_flow",
     listConfig: {
@@ -243,8 +251,9 @@ const DEFS: BizDocDef[] = [
     name: "车辆使用登记",
     category: "行政",
     icon: "car",
-    formType: "ONLINE",
-    formCode: "vehicle_form",
+    formType: "INLINE",
+    formCode: "",
+    formSchema: VEHICLE_SCHEMA,
     numberRuleId: null,
     wfDefCode: null,
     listConfig: {
@@ -265,22 +274,38 @@ const DEFS: BizDocDef[] = [
     code: "asset_in",
     name: "资产入库单",
     category: "行政",
-    formType: "ONLINE",
-    formCode: "asset_form",
+    formType: "INLINE",
+    formCode: "",
+    formSchema: [],
     numberRuleId: 1,
     wfDefCode: null,
     listConfig: { columns: [], filters: [] },
     status: "DRAFT",
-    remark: "草稿中的定义（未发布，不出现在单据中心）",
+    remark: "草稿中的定义（字段未设计，发布校验会拦）",
     updatedAt: "2026-07-11T09:00:00",
+  },
+  {
+    id: 4,
+    code: "gw_send_reg",
+    name: "发文办理（CODE 表单）",
+    category: "公文",
+    formType: "CODE",
+    formCode: "gw_send",
+    numberRuleId: null,
+    wfDefCode: "gw_send",
+    listConfig: { columns: [], filters: [] },
+    status: "PUBLISHED",
+    remark: "高级：绑手写 CODE 表单的存量形态（录入走其业务页面）",
+    submitPath: "/document/send?new=1",
+    updatedAt: "2026-07-11T11:00:00",
   },
 ]
 
-/** mock：定义 → 表单 widgets（真实走 /api/wf/form-defs/{code}/latest） */
-const DEF_SCHEMAS: Record<string, FormWidget[]> = {
-  expense_form: EXPENSE_SCHEMA,
-  vehicle_form: VEHICLE_SCHEMA,
-  asset_form: [],
+/** 定义的录入 schema（§10）：INLINE=私有 formSchema；CODE=无（走 submitPath）；ONLINE 存量=mock 无从取回空 */
+function schemaOfDef(def: BizDocDef | undefined): FormWidget[] {
+  if (!def) return []
+  if (def.formType === "INLINE") return def.formSchema ?? []
+  return []
 }
 
 const TPLS: BizDocPrintTpl[] = [
@@ -421,8 +446,16 @@ export function deleteDef(id: number): Promise<BdResult<void>> {
   )
 }
 
-/** 定义的表单 widgets（ONLINE：真实走 form-defs latest；mock 用内置 schema） */
+/**
+ * 定义的录入表单 widgets（§10）：
+ * INLINE → 直接取私有 formSchema（本地，不发请求）；
+ * CODE → 空（录入走其业务页面 submitPath）；
+ * 存量 ONLINE → 兼容读外部在线表单（form-defs latest）。
+ */
 export function fetchDefSchema(def: BizDocDef): Promise<BdResult<FormWidget[]>> {
+  if (def.formType !== "ONLINE") {
+    return Promise.resolve({ data: schemaOfDef(def), demo: false })
+  }
   return withMock(
     async () => {
       const detail = await api<{ schemaJson?: unknown }>(`/api/wf/form-defs/${def.formCode}/latest`)
@@ -433,7 +466,7 @@ export function fetchDefSchema(def: BizDocDef): Promise<BdResult<FormWidget[]>> 
         return []
       }
     },
-    () => DEF_SCHEMAS[def.formCode] ?? [],
+    () => [],
   )
 }
 
@@ -612,7 +645,7 @@ export function fetchPrintData(docId: number, tplId?: number): Promise<BdResult<
         TPLS.find((t) => (tplId != null ? t.id === tplId : t.defId === doc.defId && t.isDefault)) ??
         ({ id: 0, defId: doc.defId, name: "临时模板", paper: "A4", landscape: false, content: emptyTemplateV2(), isDefault: false } satisfies BizDocPrintTpl)
       const fields: Record<string, string> = {}
-      for (const w of DEF_SCHEMAS[def?.formCode ?? ""] ?? []) fields[w.key ?? w.id] = w.label
+      for (const w of schemaOfDef(def)) fields[w.key ?? w.id] = w.label
       // §9.3：绑流程单据带 _approvals（按办理顺序）；mock 按状态推演，真实由磐石从流程实例取
       const approvals: Record<string, unknown>[] = []
       if (doc.processInstanceId && (doc.status === "APPROVING" || doc.status === "EFFECTIVE" || doc.status === "REJECTED")) {

@@ -11,7 +11,6 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
-import { getFormManifest } from "@/lib/form-registry"
 import { useHasPerm } from "@/stores/auth-store"
 import {
   emptyTemplateV2,
@@ -25,30 +24,13 @@ import {
   type BdTemplateV2,
 } from "@/components/bizdoc/model-v2"
 import { fetchDef, fetchPrintTpl, savePrintTpl, type BizDocDef } from "../mock"
+import { fieldsForDef } from "../fields"
 import { useHistory } from "./history"
 import { Palette } from "./palette"
 import { DesignerCanvas } from "./canvas"
 import { PagePanel, BlockPanel } from "./props-panel"
 import { PreviewDialog, JsonDialog } from "./dialogs"
 import type { FieldOption } from "./field-picker"
-
-/** 演示字段（后端/registry 均取不到时兜底，与 defs.tsx 同口径） */
-const DEMO_FIELDS: Record<string, FieldOption[]> = {
-  expense_form: [
-    { key: "expenseType", label: "报销类型" },
-    { key: "amount", label: "报销金额（元）" },
-    { key: "expenseDate", label: "发生日期" },
-    { key: "project", label: "费用归属项目" },
-    { key: "memo", label: "费用说明" },
-  ],
-  vehicle_form: [
-    { key: "plate", label: "车牌号" },
-    { key: "driver", label: "用车人" },
-    { key: "useDate", label: "用车日期" },
-    { key: "destination", label: "目的地" },
-    { key: "reason", label: "事由" },
-  ],
-}
 
 export default function TplDesignerPage() {
   const { defCode = "", tplId = "new" } = useParams()
@@ -80,12 +62,9 @@ export default function TplDesignerPage() {
         if (!alive) return
         setDef(defRes.data)
         if (defRes.data) {
-          try {
-            const manifest = await getFormManifest(defRes.data.formCode)
-            if (alive) setFields(manifest.fields.map((f) => ({ key: f.key, label: f.label })))
-          } catch {
-            if (alive) setFields(DEMO_FIELDS[defRes.data.formCode] ?? [])
-          }
+          // §10 统一字段源：INLINE=def.formSchema 本地派生；CODE/存量 ONLINE=统一清单
+          const fs = await fieldsForDef(defRes.data)
+          if (alive) setFields(fs)
         }
         if (tplId !== "new") {
           const tplRes = await fetchPrintTpl(Number(tplId))
