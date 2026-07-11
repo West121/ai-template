@@ -105,6 +105,27 @@ public class DocNumberService {
         return number;
     }
 
+    /**
+     * 外部业务占号（BizDoc 等非公文单据）：原子序号 + 台账落行（document_id 置空——
+     * 该列语义专属 oa_document，避免与公文幂等查询串号），<b>幂等由调用方保证</b>（如单据已有单号则跳过）。
+     */
+    @Transactional
+    public String allocateExternal(Long ruleId, String docType, String refTitle, String issuer) {
+        DocNumberRule rule = resolveRule(ruleId, docType);
+        String period = period(rule);
+        int seq = nextSeqAtomic(rule.getId(), period);
+        String number = compose(rule, period, seq);
+
+        DocNumberLedger ledger = new DocNumberLedger();
+        ledger.setDocNumber(number);
+        ledger.setRuleId(rule.getId());
+        ledger.setDocTitle(refTitle);
+        ledger.setIssuer(issuer);
+        ledger.setStatus(DocNumberLedger.STATUS_OCCUPIED);
+        ledgerRepository.save(ledger);
+        return number;
+    }
+
     /** 作废文号：只改台账状态 VOID，不回收序号。 */
     @Transactional
     public void voidNumber(String docNumber) {

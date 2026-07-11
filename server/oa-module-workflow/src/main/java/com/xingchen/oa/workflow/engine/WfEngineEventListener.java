@@ -19,6 +19,8 @@ import org.flowable.common.engine.api.delegate.event.FlowableEventType;
 import org.flowable.common.engine.api.delegate.event.FlowableEngineEvent;
 import org.flowable.engine.delegate.event.FlowableProcessStartedEvent;
 import org.flowable.task.api.Task;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
@@ -54,6 +56,9 @@ public class WfEngineEventListener implements FlowableEventListener {
     private final WfProcessExtRepository processRepository;
     /** 延迟解析，避免 processEngine ↔ 全局事件监听器循环依赖。 */
     private final ObjectProvider<TaskService> taskServiceProvider;
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     @Override
     public void onEvent(FlowableEvent event) {
@@ -122,6 +127,7 @@ public class WfEngineEventListener implements FlowableEventListener {
         if (pid == null) {
             return;
         }
+        bizdocSync(pid, "REJECTED"); // BizDoc §3：实例被删（驳回退发起人/终止/撤销）→ 单据 REJECTED 可改重提
         WfInstanceExt inst = instanceRepository.findByProcInstId(pid).orElse(null);
         if (inst == null || !WfInstanceExt.STATUS_RUNNING.equals(inst.getBizStatus())) {
             return;
@@ -129,6 +135,23 @@ public class WfEngineEventListener implements FlowableEventListener {
         inst.setBizStatus(WfInstanceExt.STATUS_CANCELED);
         inst.setEndedAt(OffsetDateTime.now());
         instanceRepository.save(inst);
+    }
+
+    /**
+     * BizDoc 状态回写（§3 事件回写）：按 process_instance_id 原生 UPDATE oa_bizdoc（仅 APPROVING 态），
+     * 不引入 office 实体依赖；非单据实例零行更新、零成本。失败不阻断引擎事件。
+     */
+    private void bizdocSync(String procInstId, String toStatus) {
+        try {
+            entityManager.createNativeQuery(
+                            "UPDATE oa_bizdoc SET status = :st, updated_at = now() "
+                                    + "WHERE process_instance_id = :pid AND status = 'APPROVING'")
+                    .setParameter("st", toStatus)
+                    .setParameter("pid", procInstId)
+                    .executeUpdate();
+        } catch (Exception e) {
+            log.warn("BizDoc 状态回写失败 pid={} → {}: {}", procInstId, toStatus, e.getMessage());
+        }
     }
 
     private Long asLong(Object v) {
@@ -202,6 +225,7 @@ public class WfEngineEventListener implements FlowableEventListener {
         inst.setBizStatus(WfInstanceExt.STATUS_APPROVED);
         inst.setEndedAt(OffsetDateTime.now());
         instanceRepository.save(inst);
+        bizdocSync(procInstId, "EFFECTIVE"); // BizDoc §3：审批通过 → 单据生效（按 process_instance_id 原生回写）
         if (inst.getInitiatorId() != null) {
             notify(inst.getInitiatorId(), WfNotify.TYPE_RESULT, "审批通过：" + inst.getTitle(),
                     "您发起的流程「" + inst.getTitle() + "」已审批通过", procInstId);

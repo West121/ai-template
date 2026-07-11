@@ -35,6 +35,7 @@ function cleanupTestData() {
     // 编排（V25）冒烟数据
     "DELETE FROM orch_exec_node; DELETE FROM orch_exec; DELETE FROM orch_flow_version;",
     "DELETE FROM ai_chat_message; DELETE FROM ai_chat_session;",
+    "DELETE FROM oa_bizdoc; DELETE FROM oa_bizdoc_print_tpl; DELETE FROM oa_bizdoc_def WHERE code LIKE 'smoke_bd%';",
     "DELETE FROM orch_flow WHERE code LIKE 'smoke_orch%'; DELETE FROM orch_credential WHERE name LIKE '冒烟%';",
   ].join(" ")
   const pg = process.env.OA_PG_CONTAINER ?? "oa-postgres"
@@ -338,7 +339,7 @@ check("文号防跳(第二次序号 = 第一次 +1)", seqOf(b.issued?.data?.code
 // —— 台账连续可查 ——
 const ledger = await call(admin.token, "GET", `/api/office/doc/ledger?year=${new Date().getFullYear()}&pageNum=1&pageSize=100`)
 const lrows = ledger.body?.data?.list ?? []
-check("文号台账含两条占号记录", lrows.length >= 2 && lrows.every((r) => r.status === "OCCUPIED"), String(lrows.length))
+check("文号台账含本轮两条占号记录(OCCUPIED)", [a.issued?.data?.code, b.issued?.data?.code].every((n) => lrows.some((r) => r.docNumber === n && r.status === "OCCUPIED")), String(lrows.length))
 const lseqs = lrows.map((r) => seqOf(r.docNumber)).filter((n) => !Number.isNaN(n))
 const lastTwo = lseqs.slice(-2)
 check("台账序号连续(末两条 +1)", lastTwo.length === 2 && lastTwo[1] === lastTwo[0] + 1, lastTwo.join(","))
@@ -2471,7 +2472,7 @@ async function hlCompleted(token, iid) {
           else if (lastUser.includes("统计") || lastUser.includes("报表")) tool = { name: "stats_report", arguments: '{"module":"approval","dimension":"status"}' }
           else if (lastUser.includes("急")) tool = { name: "query_urgent", arguments: "{}" }
           else if (lastUser.includes("同意") && lastUser.includes("任务")) tool = { name: "approve_task", arguments: '{"taskId":"' + (lastUser.match(/任务(\S+)/)?.[1] ?? "x") + '","decision":"APPROVE"}' }
-          else if (lastUser.includes("日程")) tool = { name: "create_schedule", arguments: '{"title":"AI冒烟日程","date":"2026-08-01","type":"OTHER"}' }
+          else if (lastUser.includes("日程")) tool = { name: "create_schedule", arguments: JSON.stringify({ title: `AI冒烟日程${TS}`, date: "2026-08-01", type: "OTHER" }) }
           else if (lastUser.includes("公文")) tool = { name: "query_documents", arguments: "{}" }
           if (tool) {
             res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: tool }] } }] }))
@@ -3092,13 +3093,13 @@ async function hlCompleted(token, iid) {
   check("ai confirm 不存在 actionId → 410", badConfirm.body?.code === 410, JSON.stringify(badConfirm.body?.code))
   // 确认前：日程未创建
   const schedBefore = await call(admin.token, "GET", "/api/office/schedules?month=2026-08")
-  const hadBefore = (schedBefore.body?.data ?? []).some((x) => x.title === "AI冒烟日程")
+  const hadBefore = (schedBefore.body?.data ?? []).some((x) => x.title === `AI冒烟日程${TS}`)
   check("ai confirm 前变更未生效", !hadBefore)
   // 确认执行 → 生效
   const doConfirm = await call(admin.token, "POST", "/api/ai/confirm", { actionId: confirmCard?.actionId })
   check("ai confirm 确认执行成功", doConfirm.body?.code === 0 && doConfirm.body?.data?.success === true, JSON.stringify(doConfirm.body?.data))
   const schedAfter = await call(admin.token, "GET", "/api/office/schedules?month=2026-08")
-  check("ai confirm 后日程真实创建(变更生效)", (schedAfter.body?.data ?? []).some((x) => x.title === "AI冒烟日程"))
+  check("ai confirm 后日程真实创建(变更生效)", (schedAfter.body?.data ?? []).some((x) => x.title === `AI冒烟日程${TS}`))
   const reConfirm = await call(admin.token, "POST", "/api/ai/confirm", { actionId: confirmCard?.actionId })
   check("ai confirm 二次确认 → 410(一次性消费)", reConfirm.body?.code === 410, JSON.stringify(reConfirm.body?.code))
 
@@ -3123,6 +3124,121 @@ async function hlCompleted(token, iid) {
   check("ai zhangsan 对话正常(工具带其数据权限,不 500)", zsChat2.body?.code === 0 && zsChat2.body?.data?.messages?.[0]?.role === "ASSISTANT", JSON.stringify(zsChat2.body?.code))
 
   sink.close()
+}
+
+/* ---------- 单据管理 BizDoc（V29：定义/状态机/事件回写/套打数据/数据权限） ---------- */
+{
+  const bdWait = async (id, want, timeoutMs = 15000) => {
+    const until = Date.now() + timeoutMs
+    while (Date.now() < until) {
+      const d = await call(admin.token, "GET", `/api/bizdoc/docs/${id}`)
+      if (d.body?.data?.status === want) return d.body.data
+      await new Promise((r) => setTimeout(r, 400))
+    }
+    return (await call(admin.token, "GET", `/api/bizdoc/docs/${id}`)).body?.data
+  }
+  const ruleId = (await call(admin.token, "GET", "/api/office/doc/number/rules")).body?.data?.[0]?.id
+
+  // 1. 纯台账定义（无流程 + 编号规则）：发布校验 + 提交即生效 + 占号格式
+  const defA = await call(admin.token, "POST", "/api/bizdoc/defs", {
+    code: `smoke_bd_plain_${TS}`, name: "冒烟登记单", formType: "ONLINE", formCode: "leave", numberRuleId: ruleId,
+    listConfig: { columns: [{ field: "leaveType", label: "类型" }, { field: "days", label: "天数" }], filters: [{ field: "leaveType", label: "类型", type: "select" }] },
+  })
+  check("bizdoc 定义创建", defA.body?.code === 0 && defA.body?.data?.status === "DRAFT", JSON.stringify(defA.body?.message))
+  const badPub = await call(admin.token, "POST", "/api/bizdoc/defs", { code: `smoke_bd_bad_${TS}`, name: "坏定义", formCode: "no_such_form" })
+  const badPubResp = await call(admin.token, "POST", `/api/bizdoc/defs/${badPub.body?.data?.id}/publish`)
+  check("bizdoc 发布校验(表单不存在 400)", badPubResp.body?.code === 400, JSON.stringify(badPubResp.body?.message))
+  const badColDef = await call(admin.token, "POST", "/api/bizdoc/defs", {
+    code: `smoke_bd_badcol_${TS}`, name: "坏列", formType: "ONLINE", formCode: "leave",
+    listConfig: { columns: [{ field: "no_such_field", label: "x" }] },
+  })
+  const badColPub = await call(admin.token, "POST", `/api/bizdoc/defs/${badColDef.body?.data?.id}/publish`)
+  check("bizdoc 发布校验(台账列不在表单清单 400)", badColPub.body?.code === 400 && (badColPub.body?.message ?? "").includes("清单"), JSON.stringify(badColPub.body?.message))
+  await call(admin.token, "POST", `/api/bizdoc/defs/${defA.body?.data?.id}/publish`)
+  const defAGet = await call(admin.token, "GET", `/api/bizdoc/defs/smoke_bd_plain_${TS}`)
+  check("bizdoc 定义按 code 取(已发布)", defAGet.body?.data?.status === "PUBLISHED")
+
+  const docA = await call(admin.token, "POST", "/api/bizdoc/docs", {
+    defCode: `smoke_bd_plain_${TS}`, formData: { leaveType: "ANNUAL", days: 2, reason: "冒烟" },
+  })
+  check("bizdoc 创建草稿(标题缺省=定义名+创建人)", docA.body?.code === 0 && docA.body?.data?.status === "DRAFT" && (docA.body?.data?.title ?? "").includes("冒烟登记单"), JSON.stringify(docA.body?.data?.title))
+  const subA = await call(admin.token, "POST", `/api/bizdoc/docs/${docA.body?.data?.id}/submit`)
+  check("bizdoc 无流程提交即生效+占号〔〕格式", subA.body?.data?.status === "EFFECTIVE" && /〔\d{4}〕\d+号$/.test(subA.body?.data?.docNo ?? ""), JSON.stringify({ s: subA.body?.data?.status, n: subA.body?.data?.docNo }))
+  const subA2 = await call(admin.token, "POST", `/api/bizdoc/docs/${docA.body?.data?.id}/submit`)
+  check("bizdoc 生效单据重复提交被拒", subA2.body?.code === 400)
+
+  // 台账 filters（form_data 字段过滤）
+  const ledgerHit = await call(admin.token, "GET", `/api/bizdoc/docs?defCode=smoke_bd_plain_${TS}&filters=${encodeURIComponent('{"leaveType":"ANNUAL"}')}`)
+  check("bizdoc 台账 filters 命中(fields 平铺)", (ledgerHit.body?.data?.list ?? []).length === 1 && ledgerHit.body?.data?.list?.[0]?.fields?.leaveType === "ANNUAL", JSON.stringify(ledgerHit.body?.data?.total))
+  const ledgerMiss = await call(admin.token, "GET", `/api/bizdoc/docs?defCode=smoke_bd_plain_${TS}&filters=${encodeURIComponent('{"leaveType":"SICK"}')}`)
+  check("bizdoc 台账 filters 无命中", ledgerMiss.body?.data?.total === 0)
+
+  // 作废：EFFECTIVE→VOID + 单号台账 VOID 不回收
+  const voidA = await call(admin.token, "POST", `/api/bizdoc/docs/${docA.body?.data?.id}/void`)
+  check("bizdoc 作废(VOID)", voidA.body?.data?.status === "VOID")
+  const ledgerVoid = await call(admin.token, "GET", `/api/office/doc/ledger?keyword=${encodeURIComponent("BIZDOC:")}&pageNum=1&pageSize=10`)
+  check("bizdoc 单号台账置 VOID 不回收", (ledgerVoid.body?.data?.list ?? []).some((l) => l.status === "VOID"), JSON.stringify(ledgerVoid.body?.data?.total))
+
+  // 2. 绑流程定义：提交→APPROVING→审批通过→EFFECTIVE(事件回写)
+  const defB = await call(admin.token, "POST", "/api/bizdoc/defs", {
+    code: `smoke_bd_flow_${TS}`, name: "冒烟审批单", formType: "ONLINE", formCode: "leave", wfDefCode: "leave_approval",
+    listConfig: { columns: [{ field: "days", label: "天数" }] },
+  })
+  await call(admin.token, "POST", `/api/bizdoc/defs/${defB.body?.data?.id}/publish`)
+  const docB = await call(zhangsan.token, "POST", "/api/bizdoc/docs", {
+    defCode: `smoke_bd_flow_${TS}`, title: `冒烟审批单B-${TS}`, formData: { leaveType: "ANNUAL", days: 2, reason: "走流程" },
+  })
+  const subB = await call(zhangsan.token, "POST", `/api/bizdoc/docs/${docB.body?.data?.id}/submit`)
+  check("bizdoc 绑流程提交→APPROVING(一等实例)", subB.body?.data?.status === "APPROVING" && !!subB.body?.data?.processInstanceId, JSON.stringify(subB.body?.data?.status))
+  const bdTaskB = await findTodo(manager.token, `冒烟审批单B-${TS}`)
+  check("bizdoc 审批任务落经理待办", !!bdTaskB)
+  if (bdTaskB) await call(manager.token, "POST", `/api/wf/tasks/${bdTaskB.taskId}/approve`, { comment: "过" })
+  const docBDone = await bdWait(docB.body?.data?.id, "EFFECTIVE")
+  check("bizdoc 审批通过→EFFECTIVE(事件回写)", docBDone?.status === "EFFECTIVE", JSON.stringify(docBDone?.status))
+
+  // 3. 驳回→REJECTED 可改再提
+  const docC = await call(zhangsan.token, "POST", "/api/bizdoc/docs", {
+    defCode: `smoke_bd_flow_${TS}`, title: `冒烟审批单C-${TS}`, formData: { leaveType: "ANNUAL", days: 2, reason: "待驳回" },
+  })
+  await call(zhangsan.token, "POST", `/api/bizdoc/docs/${docC.body?.data?.id}/submit`)
+  const bdTaskC = await findTodo(manager.token, `冒烟审批单C-${TS}`)
+  if (bdTaskC) await call(manager.token, "POST", `/api/wf/tasks/${bdTaskC.taskId}/reject`, { comment: "资料不足", target: "START" })
+  const docCRej = await bdWait(docC.body?.data?.id, "REJECTED")
+  check("bizdoc 驳回→REJECTED(事件回写)", docCRej?.status === "REJECTED", JSON.stringify(docCRej?.status))
+  const updC = await call(zhangsan.token, "PUT", `/api/bizdoc/docs/${docC.body?.data?.id}`, { formData: { leaveType: "ANNUAL", days: 1, reason: "已补充" } })
+  check("bizdoc REJECTED 可改", updC.body?.code === 0)
+  const resubC = await call(zhangsan.token, "POST", `/api/bizdoc/docs/${docC.body?.data?.id}/submit`)
+  check("bizdoc 改后重提→APPROVING(新实例)", resubC.body?.data?.status === "APPROVING" && resubC.body?.data?.processInstanceId !== docCRej?.processInstanceId)
+
+  // 4. 打印模板 + 打印数据
+  const tpl = await call(admin.token, "POST", `/api/bizdoc/defs/${defA.body?.data?.id}/print-tpls`, {
+    name: "默认模板", paper: "A4", landscape: false,
+    content: { schemaVersion: 1, paper: "A4", landscape: false, margin: [10, 10, 10, 10], elements: [
+      { id: "e1", type: "label", x: 80, y: 12, w: 50, h: 8, text: "冒烟登记单", style: { fontSize: 16, bold: true, align: "center" } },
+      { id: "e2", type: "field", x: 25, y: 30, w: 60, h: 7, field: "leaveType", label: "类型:" },
+      { id: "e3", type: "sysfield", x: 150, y: 30, w: 50, h: 7, field: "docNo", label: "单号:" },
+      { id: "e4", type: "qrcode", x: 180, y: 8, w: 20, h: 20, value: "{{docNo}}" },
+    ] },
+  })
+  check("bizdoc 打印模板创建(首个自动默认)", tpl.body?.code === 0 && tpl.body?.data?.isDefault === true)
+  const printData = await call(admin.token, "GET", `/api/bizdoc/docs/${docA.body?.data?.id}/print`)
+  check("bizdoc 打印数据(tpl+data 系统字段+fields label 映射)",
+    printData.body?.code === 0 && printData.body?.data?.tpl?.content?.elements?.length === 4 &&
+      !!printData.body?.data?.data?.docNo && printData.body?.data?.data?.status === "VOID" &&
+      (printData.body?.data?.fields ?? []).some((f) => f.key === "leaveType"),
+    JSON.stringify({ n: printData.body?.data?.data?.docNo, st: printData.body?.data?.data?.status }))
+
+  // 5. 权限 + submitPath 契约（CODE 定义带发起路径）
+  const zsDef = await call(zhangsan.token, "POST", "/api/bizdoc/defs", { code: `smoke_bd_deny_${TS}`, name: "越权" })
+  check("bizdoc zhangsan 建定义 → 403(bizdoc:def:write)", zsDef.status === 403, `status=${zsDef.status}`)
+  const codeDef = await call(admin.token, "POST", "/api/bizdoc/defs", {
+    code: `smoke_bd_code_${TS}`, name: "冒烟CODE单", formType: "CODE", formCode: "gw_send", submitPath: "/document/send?new=1",
+  })
+  check("bizdoc CODE 定义回传 submitPath(疾风批A契约)", codeDef.body?.code === 0 && codeDef.body?.data?.submitPath === "/document/send?new=1", JSON.stringify(codeDef.body?.data?.submitPath))
+
+  // 6. 数据权限：zhangsan(SELF) 看不到 admin 的单据
+  const zsLedger = await call(zhangsan.token, "GET", `/api/bizdoc/docs?defCode=smoke_bd_plain_${TS}`)
+  check("bizdoc 数据权限(zhangsan 看不到 admin 单据)", zsLedger.body?.code === 0 && zsLedger.body?.data?.total === 0, JSON.stringify(zsLedger.body?.data?.total))
 }
 
 /* ---------- 汇总 ---------- */
