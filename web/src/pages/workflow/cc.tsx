@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { wfFormatTime, wfInstancePath, type WfCcItem } from "@/types/workflow"
-import { useServerPage } from "./use-server-page"
+import { useServerPage } from "@/lib/use-server-page"
 
 /**
  * 待阅列表（我的审批「待阅」Tab 内容）。

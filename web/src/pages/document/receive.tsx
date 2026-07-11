@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Plus } from "lucide-react"
@@ -6,8 +6,9 @@ import { PageHeader } from "@/components/page-header"
 import { DataTable } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { Button } from "@/components/ui/button"
-import { useAuthStore, useHasPerm } from "@/stores/auth-store"
-import { fetchDocList } from "./gongwen/mock"
+import { useHasPerm } from "@/stores/auth-store"
+import { useDebounced, useServerPage } from "@/lib/use-server-page"
+import { fetchDocPage } from "./gongwen/mock"
 import { gwFormatDate, type GwDoc } from "./gongwen/types"
 import { DocTypeBadge, GwStatusBadge, SecretBadge, UrgencyBadge } from "./gongwen/badges"
 import { DraftFormDialog } from "./gongwen/draft-form"
@@ -15,17 +16,12 @@ import { DemoBanner, EMPTY_FILTER, GwFilterBar, toListQuery, type GwFilterState 
 
 export default function ReceivePage() {
   const navigate = useNavigate()
-  const [rows, setRows] = useState<GwDoc[]>([])
-  const [loading, setLoading] = useState(true)
   const [demo, setDemo] = useState(false)
-  const [errMsg, setErrMsg] = useState<string | null>(null)
   const [filter, setFilter] = useState<GwFilterState>(EMPTY_FILTER)
+  const [keyword, setKeyword] = useState("")
   const [createOpen, setCreateOpen] = useState(false)
 
   const [searchParams, setSearchParams] = useSearchParams()
-
-  const offline = useAuthStore((s) => s.offline)
-  const activeAssignmentId = useAuthStore((s) => s.activeAssignmentId)
   const canRegister = useHasPerm("office:doc:recv")
 
   // 从「发起申请」跳转（formSubmitPath=/document/receive?new=1）：自动打开登记弹窗并清掉 query，避免刷新/返回重复弹
@@ -38,23 +34,17 @@ export default function ReceivePage() {
     }
   }, [searchParams, setSearchParams])
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setErrMsg(null)
-    try {
-      const res = await fetchDocList(toListQuery("RECEIVE", filter))
-      setRows(res.data)
+  // 服务端分页 + 服务端搜索（keyword 防抖；offline/未就绪时 fetchDocPage 内 mock 过滤+切片）
+  const query = useDebounced(keyword.trim())
+  const page = useServerPage<GwDoc>(
+    async (pageNum, pageSize) => {
+      const res = await fetchDocPage({ ...toListQuery("RECEIVE", filter), keyword: query || undefined, pageNum, pageSize })
       setDemo(res.demo)
-    } catch (err) {
-      setErrMsg(err instanceof Error ? err.message : "加载失败")
-    } finally {
-      setLoading(false)
-    }
-  }, [filter])
-
-  useEffect(() => {
-    void load()
-  }, [load, offline, activeAssignmentId])
+      return res.data
+    },
+    { resetKey: `${JSON.stringify(filter)}|${query}`, offlineFetch: true },
+  )
+  const { rows, loading, loadError, reload } = page
 
   const columns = useMemo<ColumnDef<GwDoc, unknown>[]>(
     () => [
@@ -134,10 +124,17 @@ export default function ReceivePage() {
         searchKeys={["registerNo", "title", "sourceUnit"]}
         searchPlaceholder="搜索收文号 / 标题 / 来文单位"
         loading={loading}
-        onRefresh={() => void load()}
+        onRefresh={reload}
         exportFileName="收文台账"
         onRowClick={(row) => navigate(`/document/receive/${row.id}`)}
         filterSlot={<GwFilterBar direction="RECEIVE" value={filter} onChange={setFilter} />}
+        serverSearch={{ keyword, onKeywordChange: setKeyword }}
+        serverPagination={{
+          pageIndex: page.pageIndex,
+          pageSize: page.pageSize,
+          rowCount: page.total,
+          onPaginationChange: page.onPaginationChange,
+        }}
         actionSlot={
           canRegister ? (
             <Button size="sm" className="h-8" onClick={() => setCreateOpen(true)}>
@@ -148,7 +145,9 @@ export default function ReceivePage() {
         }
       />
 
-      {errMsg && <div className="text-center text-sm text-rose-500">{errMsg}</div>}
+      {loadError && loadError !== "network" && (
+        <div className="text-center text-sm text-rose-500">{loadError}</div>
+      )}
 
       <DraftFormDialog
         direction="RECEIVE"

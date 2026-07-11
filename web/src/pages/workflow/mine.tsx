@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { WF_STATUS_META, wfFormatTime, wfInstancePath, type WfMyInstance } from "@/types/workflow"
-import { useServerPage } from "./use-server-page"
+import { useServerPage } from "@/lib/use-server-page"
 
 /** 我发起的列表（我的审批「我发起」Tab 内容） */
 export function MineList() {

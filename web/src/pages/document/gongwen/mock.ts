@@ -6,7 +6,7 @@
  * 并向调用方回传 `demo=true`（页面据此显示"后端未连接（演示数据）"提示）。真实 ApiError
  * （403 无权限 / 400 业务错误）照常抛出，不吞。接口就绪后 demo 恒为 false，自然切真实数据。
  */
-import { api, NetworkError } from "@/lib/api"
+import { api, NetworkError, type PageResult } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
 import type { WfPredictResult } from "@/types/workflow-p3"
 import type {
@@ -584,6 +584,15 @@ export interface GwListQuery {
   status?: string
   dateFrom?: string
   dateTo?: string
+  /** 1-based（对齐后端） */
+  pageNum: number
+  pageSize: number
+}
+
+/** mock 分页切片（真分页语义：list=当前页，total=过滤后总数） */
+function slicePage<T>(list: T[], pageNum: number, pageSize: number): PageResult<T> {
+  const start = (pageNum - 1) * pageSize
+  return { list: list.slice(start, start + pageSize), total: list.length, pageNum, pageSize }
 }
 
 function applyFilter(list: GwDoc[], q: GwListQuery): GwDoc[] {
@@ -605,7 +614,7 @@ function applyFilter(list: GwDoc[], q: GwListQuery): GwDoc[] {
 
 function toQueryString(q: GwListQuery): string {
   // 参数名对齐后端 GongwenController#list（日期用 from/to）
-  const p = new URLSearchParams({ direction: q.direction, pageNum: "1", pageSize: "200" })
+  const p = new URLSearchParams({ direction: q.direction, pageNum: String(q.pageNum), pageSize: String(q.pageSize) })
   if (q.keyword) p.set("keyword", q.keyword)
   if (q.secret) p.set("secret", q.secret)
   if (q.urgency) p.set("urgency", q.urgency)
@@ -616,13 +625,14 @@ function toQueryString(q: GwListQuery): string {
   return p.toString()
 }
 
-export function fetchDocList(q: GwListQuery): Promise<GwResult<GwDoc[]>> {
+/** 发文/收文列表（服务端分页 + keyword；mock 路径过滤后本地切片，同一分页语义） */
+export function fetchDocPage(q: GwListQuery): Promise<GwResult<PageResult<GwDoc>>> {
   return withMock(
     async () => {
-      const page = await api<{ list: RawListItem[] }>(`${DOC_BASE}/list?${toQueryString(q)}`)
-      return page.list.map(mapListItem)
+      const page = await api<PageResult<RawListItem>>(`${DOC_BASE}/list?${toQueryString(q)}`)
+      return { ...page, list: page.list.map(mapListItem) }
     },
-    () => applyFilter(docStore(q.direction), q),
+    () => slicePage(applyFilter(docStore(q.direction), q), q.pageNum, q.pageSize),
   )
 }
 
@@ -633,14 +643,33 @@ export function fetchDoc(id: number, direction: GwDirection): Promise<GwResult<G
   )
 }
 
-export function fetchLedger(year?: string): Promise<GwResult<GwLedgerRow[]>> {
+export interface GwLedgerQuery {
+  year?: string
+  keyword?: string
+  pageNum: number
+  pageSize: number
+}
+
+/** 文号台账（服务端分页 + year/keyword） */
+export function fetchLedgerPage(q: GwLedgerQuery): Promise<GwResult<PageResult<GwLedgerRow>>> {
   return withMock(
     async () => {
-      const qs = year ? `?year=${year}&pageSize=500` : "?pageSize=500"
-      const page = await api<{ list: RawLedger[] }>(`${DOC_BASE}/ledger${qs}`)
-      return page.list.map(mapLedger)
+      const p = new URLSearchParams({ pageNum: String(q.pageNum), pageSize: String(q.pageSize) })
+      if (q.year) p.set("year", q.year)
+      if (q.keyword) p.set("keyword", q.keyword)
+      const page = await api<PageResult<RawLedger>>(`${DOC_BASE}/ledger?${p.toString()}`)
+      return { ...page, list: page.list.map(mapLedger) }
     },
-    () => (year ? LEDGER.filter((r) => r.year === year) : LEDGER),
+    () =>
+      slicePage(
+        LEDGER.filter(
+          (r) =>
+            (!q.year || r.year === q.year) &&
+            (!q.keyword || r.docNumber.includes(q.keyword) || r.docTitle.includes(q.keyword)),
+        ),
+        q.pageNum,
+        q.pageSize,
+      ),
   )
 }
 
@@ -648,28 +677,33 @@ export interface GwArchiveQuery {
   year?: string
   category?: string
   keyword?: string
+  pageNum: number
+  pageSize: number
 }
 
-export function fetchArchives(q: GwArchiveQuery): Promise<GwResult<GwDoc[]>> {
+/** 归档卷宗（服务端分页 + direction/keyword；year 参数一并下发，后端未支持时仅 mock 生效——缺口已上报） */
+export function fetchArchivePage(q: GwArchiveQuery): Promise<GwResult<PageResult<GwDoc>>> {
   return withMock(
     async () => {
-      // 后端 /archive 仅支持 direction/keyword 过滤；年度/类别在前端对映射结果二次筛选
-      const p = new URLSearchParams({ pageSize: "500" })
+      const p = new URLSearchParams({ pageNum: String(q.pageNum), pageSize: String(q.pageSize) })
       if (q.category === "发文") p.set("direction", "SEND")
       else if (q.category === "收文") p.set("direction", "RECEIVE")
       if (q.keyword) p.set("keyword", q.keyword)
-      const page = await api<{ list: RawListItem[] }>(`${DOC_BASE}/archive?${p.toString()}`)
-      return page.list
-        .map(mapListItem)
-        .filter((d) => !q.year || d.archivedAt?.slice(0, 4) === q.year)
+      if (q.year) p.set("year", q.year)
+      const page = await api<PageResult<RawListItem>>(`${DOC_BASE}/archive?${p.toString()}`)
+      return { ...page, list: page.list.map(mapListItem) }
     },
     () =>
-      ARCHIVES.filter((d) => {
-        if (q.year && d.archivedAt?.slice(0, 4) !== q.year) return false
-        if (q.category && d.archiveCategory !== q.category) return false
-        if (q.keyword && !d.title.includes(q.keyword) && !d.code.includes(q.keyword)) return false
-        return true
-      }),
+      slicePage(
+        ARCHIVES.filter((d) => {
+          if (q.year && d.archivedAt?.slice(0, 4) !== q.year) return false
+          if (q.category && d.archiveCategory !== q.category) return false
+          if (q.keyword && !d.title.includes(q.keyword) && !d.code.includes(q.keyword)) return false
+          return true
+        }),
+        q.pageNum,
+        q.pageSize,
+      ),
   )
 }
 

@@ -23,7 +23,7 @@ import {
   type WfFormData,
   type WfInstanceDetail,
 } from "@/types/workflow"
-import { useServerPage } from "./use-server-page"
+import { useServerPage } from "@/lib/use-server-page"
 
 /** 草稿列表（我的审批「草稿」Tab 内容） */
 export function DraftList() {

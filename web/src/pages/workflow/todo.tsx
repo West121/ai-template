@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { wfFormatTime, wfInstancePath, type WfTaskItem } from "@/types/workflow"
-import { useServerPage } from "./use-server-page"
+import { useServerPage } from "@/lib/use-server-page"
 
 /** 待办列表（我的审批「待办」Tab 内容）；onCount 上报待办总数供徽标 / 小红点 */
 export function TodoList({ onCount }: { onCount?: (n: number) => void }) {

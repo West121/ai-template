@@ -55,7 +55,7 @@ export interface OrchNodeMeta {
 }
 
 export const NODE_META: Record<OrchNodeType, OrchNodeMeta> = {
-  trigger: { type: "trigger", label: "触发器", description: "手动 / 定时 / 事件 / Webhook", icon: Zap, headerClass: "bg-emerald-600", handleColor: "!bg-emerald-600" },
+  trigger: { type: "trigger", label: "触发器", description: "流程起点：手动 / 定时 / 事件 / Webhook", icon: Zap, headerClass: "bg-emerald-600", handleColor: "!bg-emerald-600" },
   condition: { type: "condition", label: "条件分支", description: "多出边 = Switch 多路（每边一条件 + 默认支）", icon: GitFork, headerClass: "bg-amber-600", handleColor: "!bg-amber-600" },
   parallel: { type: "parallel", label: "并行", description: "开叉 / 汇合（WHEN）", icon: Columns2, headerClass: "bg-amber-600", handleColor: "!bg-amber-600" },
   loop: { type: "loop", label: "循环", description: "遍历集合逐项执行", icon: Repeat2, headerClass: "bg-amber-600", handleColor: "!bg-amber-600" },
@@ -170,6 +170,12 @@ function OrchCard({ id: _id, type, data, selected }: NodeProps<OrchRfNode>) {
       <div className={cn("flex h-8 items-center gap-1.5 px-3 text-xs font-medium text-white", meta.headerClass)}>
         <Icon className="size-3.5 shrink-0" />
         <span className="min-w-0 flex-1 truncate">{data.name || meta.label}</span>
+        {/* 触发器即流程起点（无独立「开始」节点），标题条常显标识 */}
+        {type === "trigger" && (
+          <span className="shrink-0 rounded bg-white/25 px-1 text-[10px] leading-4" title="流程从触发器开始执行">
+            起点
+          </span>
+        )}
         {exec && <exec.icon className={cn("size-3.5 shrink-0", exec.cls)} />}
       </div>
       <div className="truncate px-3 py-2 text-xs text-muted-foreground">{summarizeNode(meta.type, data)}</div>

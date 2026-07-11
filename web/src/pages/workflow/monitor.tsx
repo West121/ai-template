@@ -13,7 +13,8 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
-import { api, NetworkError, type PageResult } from "@/lib/api"
+import { api, NetworkError } from "@/lib/api"
+import { useDebounced, useServerPage } from "@/lib/use-server-page"
 import { PageHeader } from "@/components/page-header"
 import { PermissionBanner } from "@/components/permission-banner"
 import { Modal } from "@/components/modal"
@@ -27,6 +28,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuthStore, useHasPerm } from "@/stores/auth-store"
 import {
@@ -243,9 +251,8 @@ function OverviewTab() {
 function InstancesTab() {
   const navigate = useNavigate()
   const offline = useAuthStore((s) => s.offline)
-  const [rows, setRows] = useState<WfAdminInstance[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
+  const [keyword, setKeyword] = useState("")
+  const [statusFilter, setStatusFilter] = useState("all")
 
   // 离职交接
   const [handover, setHandover] = useState(false)
@@ -256,30 +263,19 @@ function InstancesTab() {
   const [comment, setComment] = useState("")
   const [submitting, setSubmitting] = useState(false)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setLoadError(null)
-    try {
-      const page = await api<PageResult<WfAdminInstance>>(
-        "/api/wf/instances/admin?pageNum=1&pageSize=100",
-      )
-      setRows(page.list)
-    } catch (err) {
-      if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (offline) {
-      setLoading(false)
-      setLoadError("network")
-      return
-    }
-    void load()
-  }, [load, offline])
+  // 服务端分页 + 服务端搜索/状态筛选（后端 /api/wf/instances/admin 支持 keyword/status）
+  const query = useDebounced(keyword.trim())
+  const page = useServerPage<WfAdminInstance>(
+    (pageNum, pageSize) => {
+      const p = new URLSearchParams({ pageNum: String(pageNum), pageSize: String(pageSize) })
+      if (query) p.set("keyword", query)
+      if (statusFilter !== "all") p.set("status", statusFilter)
+      return `/api/wf/instances/admin?${p.toString()}`
+    },
+    { resetKey: `${statusFilter}|${query}` },
+  )
+  const { rows, loading, loadError, reload } = page
+  const load = reload
 
   const openHandover = () => {
     setFromUser([])
@@ -395,13 +391,13 @@ function InstancesTab() {
       </div>
 
       {loadError === "network" ? (
-        <BackendDownCard onRetry={() => void load()} />
+        <BackendDownCard onRetry={load} />
       ) : loadError ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
             <ShieldAlert className="size-8 text-rose-500/60" />
             <div className="text-sm">{loadError}</div>
-            <Button size="sm" variant="outline" onClick={() => void load()}>
+            <Button size="sm" variant="outline" onClick={load}>
               重试
             </Button>
           </CardContent>
@@ -413,10 +409,31 @@ function InstancesTab() {
           loading={loading}
           searchKeys={["title", "defName", "initiatorName"]}
           searchPlaceholder="搜索标题 / 流程 / 发起人"
-          facetedFilters={[{ columnId: "bizStatus", title: "状态" }]}
           onRowClick={(row) => navigate(wfInstancePath(row))}
-          onRefresh={() => void load()}
+          onRefresh={load}
           exportFileName="流程实例"
+          serverSearch={{ keyword, onKeywordChange: setKeyword }}
+          serverPagination={{
+            pageIndex: page.pageIndex,
+            pageSize: page.pageSize,
+            rowCount: page.total,
+            onPaginationChange: page.onPaginationChange,
+          }}
+          filterSlot={
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger size="sm" className="h-8 w-32 text-sm">
+                <SelectValue placeholder="状态" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部状态</SelectItem>
+                {Object.entries(WF_STATUS_META).map(([k, m]) => (
+                  <SelectItem key={k} value={k}>
+                    {m.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          }
         />
       )}
 

@@ -17,11 +17,13 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
+  useInternalNode,
   useNodesState,
   useReactFlow,
   type Connection,
   type EdgeProps,
   type EdgeTypes,
+  type InternalNode,
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
 import { toast } from "sonner"
@@ -45,16 +47,66 @@ import {
 let idSeq = 0
 const genId = (prefix: string) => `${prefix}_${(idSeq++).toString(36)}${Math.random().toString(36).slice(2, 5)}`
 
-/* ============================ 边组件（条件摘要标签） ============================ */
+/* ============================ 边组件（条件摘要标签 + 浮动边界锚点） ============================ */
 
-function OrchEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, selected, data }: EdgeProps) {
+/** 节点包围盒（中心 + 半宽半高）；首帧未测量时回退默认尺寸，绝不取 0 */
+function nodeBox(n: InternalNode): { cx: number; cy: number; hw: number; hh: number } {
+  const nn = n as InternalNode & { width?: number; height?: number }
+  const w = n.measured.width || nn.width || 208
+  const h = n.measured.height || nn.height || 60
+  const x = n.internals.positionAbsolute.x
+  const y = n.internals.positionAbsolute.y
+  return { cx: x + w / 2, cy: y + h / 2, hw: w / 2, hh: h / 2 }
+}
+
+/**
+ * 中心连线 × 包围盒边界交点 + 所在边朝向：边端点恰落在节点边界（竖排=底出顶入、横排=左右出入），
+ * 绝不悬空、绝不穿节点体（与审批流设计器 sequence-flow-edge 同一做法）。
+ */
+function boundaryPoint(cx: number, cy: number, hw: number, hh: number, towardX: number, towardY: number): { x: number; y: number; pos: Position } {
+  const dx = towardX - cx
+  const dy = towardY - cy
+  if (dx === 0 && dy === 0) return { x: cx, y: cy, pos: Position.Top }
+  const scaleX = dx !== 0 ? hw / Math.abs(dx) : Number.POSITIVE_INFINITY
+  const scaleY = dy !== 0 ? hh / Math.abs(dy) : Number.POSITIVE_INFINITY
+  const scale = Math.min(scaleX, scaleY)
+  const x = cx + dx * scale
+  const y = cy + dy * scale
+  const pos = scaleX < scaleY ? (dx > 0 ? Position.Right : Position.Left) : dy > 0 ? Position.Bottom : Position.Top
+  return { x, y, pos }
+}
+
+function OrchEdge({ id, source, target, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, selected, data }: EdgeProps) {
+  const sourceNode = useInternalNode(source)
+  const targetNode = useInternalNode(target)
+
+  // 浮动锚点：无视边挂靠的具体 Handle（序列化不存 Handle），按两节点实时几何求边界交点
+  let sx = sourceX
+  let sy = sourceY
+  let sp = sourcePosition ?? Position.Bottom
+  let tx = targetX
+  let ty = targetY
+  let tp = targetPosition ?? Position.Top
+  if (sourceNode && targetNode) {
+    const S = nodeBox(sourceNode)
+    const T = nodeBox(targetNode)
+    const a = boundaryPoint(S.cx, S.cy, S.hw, S.hh, T.cx, T.cy)
+    const b = boundaryPoint(T.cx, T.cy, T.hw, T.hh, S.cx, S.cy)
+    sx = a.x
+    sy = a.y
+    sp = a.pos
+    tx = b.x
+    ty = b.y
+    tp = b.pos
+  }
+
   const [path, labelX, labelY] = getSmoothStepPath({
-    sourceX,
-    sourceY,
-    sourcePosition: sourcePosition ?? Position.Bottom,
-    targetX,
-    targetY,
-    targetPosition: targetPosition ?? Position.Top,
+    sourceX: sx,
+    sourceY: sy,
+    sourcePosition: sp,
+    targetX: tx,
+    targetY: ty,
+    targetPosition: tp,
     borderRadius: 8,
   })
   const d = data as { condition?: never; expression?: string; isDefault?: boolean } | undefined

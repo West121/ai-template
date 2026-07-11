@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { wfFormatTime, wfInstancePath, type WfDoneItem } from "@/types/workflow"
-import { useServerPage } from "./use-server-page"
+import { useServerPage } from "@/lib/use-server-page"
 
 const ACTION_META: Record<string, { label: string; className: string }> = {
   APPROVE: { label: "同意", className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600" },

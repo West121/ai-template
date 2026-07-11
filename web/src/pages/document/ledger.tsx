@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Archive, FileText } from "lucide-react"
@@ -16,8 +16,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
-import { useAuthStore } from "@/stores/auth-store"
-import { fetchArchives, fetchLedger } from "./gongwen/mock"
+import { useDebounced, useServerPage } from "@/lib/use-server-page"
+import { fetchArchivePage, fetchLedgerPage } from "./gongwen/mock"
 import { gwFormatDate, type GwDoc, type GwLedgerRow } from "./gongwen/types"
 import { DocTypeBadge } from "./gongwen/badges"
 import { DemoBanner } from "./gongwen/shared"
@@ -27,26 +27,26 @@ const YEARS = ["2026", "2025", "2024"]
 /* ------------------------------- 文号台账 ------------------------------- */
 
 function NumberLedger() {
-  const [rows, setRows] = useState<GwLedgerRow[]>([])
-  const [loading, setLoading] = useState(true)
   const [demo, setDemo] = useState(false)
   const [year, setYear] = useState("all")
-  const offline = useAuthStore((s) => s.offline)
+  const [keyword, setKeyword] = useState("")
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res = await fetchLedger(year === "all" ? undefined : year)
-      setRows(res.data)
+  // 服务端分页 + keyword（后端 /api/office/doc/ledger 支持 year/keyword/pageNum/pageSize）
+  const query = useDebounced(keyword.trim())
+  const page = useServerPage<GwLedgerRow>(
+    async (pageNum, pageSize) => {
+      const res = await fetchLedgerPage({
+        year: year === "all" ? undefined : year,
+        keyword: query || undefined,
+        pageNum,
+        pageSize,
+      })
       setDemo(res.demo)
-    } finally {
-      setLoading(false)
-    }
-  }, [year])
-
-  useEffect(() => {
-    void load()
-  }, [load, offline])
+      return res.data
+    },
+    { resetKey: `${year}|${query}`, offlineFetch: true },
+  )
+  const { rows, loading, reload } = page
 
   const columns = useMemo<ColumnDef<GwLedgerRow, unknown>[]>(
     () => [
@@ -124,8 +124,15 @@ function NumberLedger() {
         searchKeys={["docNumber", "docTitle"]}
         searchPlaceholder="搜索文号 / 标题"
         loading={loading}
-        onRefresh={() => void load()}
+        onRefresh={reload}
         exportFileName="文号台账"
+        serverSearch={{ keyword, onKeywordChange: setKeyword }}
+        serverPagination={{
+          pageIndex: page.pageIndex,
+          pageSize: page.pageSize,
+          rowCount: page.total,
+          onPaginationChange: page.onPaginationChange,
+        }}
         filterSlot={
           <Select value={year} onValueChange={setYear}>
             <SelectTrigger size="sm" className="h-8 w-28 text-sm">
@@ -150,30 +157,28 @@ function NumberLedger() {
 
 function ArchiveSearch() {
   const navigate = useNavigate()
-  const [rows, setRows] = useState<GwDoc[]>([])
-  const [loading, setLoading] = useState(true)
   const [demo, setDemo] = useState(false)
   const [year, setYear] = useState("all")
   const [category, setCategory] = useState("all")
-  const offline = useAuthStore((s) => s.offline)
+  const [keyword, setKeyword] = useState("")
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res = await fetchArchives({
+  // 服务端分页 + keyword（后端 /api/office/doc/archive 支持 direction/keyword/pageNum/pageSize）
+  const query = useDebounced(keyword.trim())
+  const page = useServerPage<GwDoc>(
+    async (pageNum, pageSize) => {
+      const res = await fetchArchivePage({
         year: year === "all" ? undefined : year,
         category: category === "all" ? undefined : category,
+        keyword: query || undefined,
+        pageNum,
+        pageSize,
       })
-      setRows(res.data)
       setDemo(res.demo)
-    } finally {
-      setLoading(false)
-    }
-  }, [year, category])
-
-  useEffect(() => {
-    void load()
-  }, [load, offline])
+      return res.data
+    },
+    { resetKey: `${year}|${category}|${query}`, offlineFetch: true },
+  )
+  const { rows, loading, reload } = page
 
   const columns = useMemo<ColumnDef<GwDoc, unknown>[]>(
     () => [
@@ -234,9 +239,16 @@ function ArchiveSearch() {
         searchKeys={["archiveNo", "code", "title"]}
         searchPlaceholder="搜索卷宗号 / 文号 / 标题"
         loading={loading}
-        onRefresh={() => void load()}
+        onRefresh={reload}
         exportFileName="归档卷宗"
         onRowClick={(row) => navigate(`/document/${row.direction === "SEND" ? "send" : "receive"}/${row.id}`)}
+        serverSearch={{ keyword, onKeywordChange: setKeyword }}
+        serverPagination={{
+          pageIndex: page.pageIndex,
+          pageSize: page.pageSize,
+          rowCount: page.total,
+          onPaginationChange: page.onPaginationChange,
+        }}
         filterSlot={
           <>
             <Select value={year} onValueChange={setYear}>
