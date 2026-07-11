@@ -1,14 +1,18 @@
 /**
- * AI 助手 · API 层 + mock 先行（契约 §3：POST /api/ai/chat、POST /api/ai/confirm、会话 CRUD）。
+ * AI 助手 · API 层 + mock 先行。
  *
- * 降级口径：后端 /api/ai/* 未就绪（NetworkError 或 404）→ 内存 mock 顶住（demo=true）；
- * auth offline 模式由面板层按丹青 §1.4 呈现"离线不可用"提示（不落到本层）。
- * mock 演示覆盖：功能介绍 / navigate 卡 / 待办 list 卡 / 图表卡（bar/pie/line）/ 请假 form 卡 /
- * 发文 CODE form 卡 / confirm 全状态（普通/危险/过期）/ 多轮上下文（「再按部门」）。
+ * V2（ai-assistant-design-v2.md 批A）：`sendChatStream` = SSE 主路径（POST /api/ai/chat/messages，
+ * fetch ReadableStream）→ 建立失败自动回退旧阻塞端点 /api/ai/chat（行为兼容）→ 仍不可用回
+ * **SSE mock（可控事件序列**：message.started → tool.* → text.delta → part.created → completed）。
+ * 确认卡切 /api/ai/actions/{id}/confirm|cancel（Idempotency-Key 头），404 回退旧 /api/ai/confirm。
+ * 业务错误（409 AI_SESSION_BUSY / 410 过期 / AI_ACTION_STALE…）不回退，按 §22 文案呈现。
  */
 import { api, ApiError, NetworkError } from "@/lib/api"
+import { useAuthStore } from "@/stores/auth-store"
 import type { AiAttachment, AiCard, AiChatResponse, AiConfirmResponse, AiMessage, AiModelOption, AiSession } from "./types"
 import { formatBytes } from "./attachments"
+import { cardsToParts, friendlyAiError, ulid, type AiMessagePart, type AiSseEvent } from "./protocol"
+import { SseUnavailableError, streamChatMessage } from "./sse-client"
 
 export interface AiResult<T> {
   data: T
@@ -335,4 +339,254 @@ export function deleteSession(id: string): Promise<AiResult<void>> {
       if (i >= 0) MOCK_SESSIONS.splice(i, 1)
     },
   )
+}
+
+/* ============================ V2：流式发送编排（SSE → 阻塞回退 → SSE mock） ============================ */
+
+/** 工具状态条条目（§9.2 displayName 驱动，「正在查询我的待办…✓」） */
+export interface ToolStatusItem {
+  id: string
+  displayName: string
+  state: "running" | "done" | "failed"
+}
+
+/** 流式事件 → UI 回调（assistant.tsx 按此驱动打字态/状态条/逐卡片落地） */
+export interface ChatStreamHandlers {
+  /** message.started：出打字态/助手占位气泡 */
+  onStarted?: () => void
+  /** message.text.delta：正文增量 */
+  onTextDelta?: (text: string) => void
+  /** tool.started / tool.completed / tool.failed：工具状态条 */
+  onToolStatus?: (item: ToolStatusItem) => void
+  /** message.part.created：逐卡片落进消息流 */
+  onPart?: (part: AiMessagePart) => void
+  /** 回退路径（旧阻塞端点）：整条助手消息（旧 cards 形状） */
+  onAssistantMessage?: (msg: AiMessage) => void
+}
+
+export interface ChatSendRequest {
+  sessionId?: string
+  /** 前端生成 ULID（重试沿用同一 id，服务端幂等去重） */
+  clientMessageId: string
+  message: string
+  credentialId?: number
+  model?: string
+  attachments?: AiAttachment[]
+}
+
+export interface ChatStreamOutcome {
+  sessionId?: string
+  demo: boolean
+  /** sse=流式主路径；fallback=旧阻塞端点；mock=演示 */
+  mode: "sse" | "fallback" | "mock"
+}
+
+/** SSE 事件分发到 handlers；捕获 sessionId 与 message.failed（有则由上层抛出） */
+function dispatchEvent(evt: AiSseEvent, h: ChatStreamHandlers, acc: { sessionId?: string; failed?: string }) {
+  if (evt.sessionId) acc.sessionId = evt.sessionId
+  const p = evt.payload ?? {}
+  switch (evt.type) {
+    case "message.started":
+      h.onStarted?.()
+      break
+    case "message.text.delta":
+      if (typeof p.text === "string") h.onTextDelta?.(p.text)
+      else if (typeof p.delta === "string") h.onTextDelta?.(p.delta)
+      break
+    case "tool.started":
+      h.onToolStatus?.({ id: String(p.toolCallId ?? ""), displayName: String(p.displayName ?? "正在执行工具"), state: "running" })
+      break
+    case "tool.completed":
+      h.onToolStatus?.({ id: String(p.toolCallId ?? ""), displayName: String(p.displayName ?? "工具执行完成"), state: "done" })
+      break
+    case "tool.failed":
+      h.onToolStatus?.({ id: String(p.toolCallId ?? ""), displayName: String(p.displayName ?? "工具执行失败"), state: "failed" })
+      break
+    case "message.part.created": {
+      const part = (p.part ?? p) as Partial<AiMessagePart>
+      if (part && typeof part.partType === "string") {
+        h.onPart?.({
+          partId: String(part.partId ?? `pt_${ulid()}`),
+          partType: part.partType,
+          schemaVersion: typeof part.schemaVersion === "number" ? part.schemaVersion : 1,
+          payload: (part.payload as Record<string, unknown>) ?? {},
+          sequenceNo: typeof part.sequenceNo === "number" ? part.sequenceNo : 0,
+        })
+      }
+      break
+    }
+    case "message.failed":
+      acc.failed = typeof p.message === "string" && p.message ? p.message : typeof p.code === "string" ? p.code : "回复失败"
+      break
+    case "message.completed":
+    case "action.status.changed":
+    default:
+      break
+  }
+}
+
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** SSE mock：把关键词应答脑的产物按可控事件序列回放（parts 形状 + 工具状态演示） */
+async function runMockStream(req: ChatSendRequest, h: ChatStreamHandlers): Promise<ChatStreamOutcome> {
+  const session = mockSession(req.sessionId)
+  if (session.messages.length === 0) session.title = req.message.slice(0, 20) || "附件对话"
+  const userMsg: AiMessage = {
+    role: "USER",
+    content: req.message,
+    attachments: req.attachments?.length ? req.attachments : undefined,
+    clientMessageId: req.clientMessageId,
+    createdAt: now(),
+  }
+  const reply = mockReply(req.message, session, { credentialId: req.credentialId, model: req.model, attachments: req.attachments })
+  const parts = cardsToParts(reply.cards)
+
+  await delay(250)
+  h.onStarted?.()
+
+  // 工具状态条演示（按卡片种类推断 displayName）
+  const kinds = new Set((reply.cards ?? []).map((c) => c.type))
+  const toolName = kinds.has("list")
+    ? "正在查询我的待办"
+    : kinds.has("chart")
+      ? "正在生成统计数据"
+      : kinds.has("form")
+        ? "正在调取表单定义"
+        : kinds.has("confirm")
+          ? "正在准备操作预览"
+          : req.attachments?.length
+            ? "正在解析附件"
+            : null
+  if (toolName) {
+    const id = `tc_${ulid()}`
+    h.onToolStatus?.({ id, displayName: toolName, state: "running" })
+    await delay(420)
+    h.onToolStatus?.({ id, displayName: toolName, state: "done" })
+  }
+
+  // 正文分两段 delta（演示打字流）
+  const mid = Math.ceil(reply.content.length / 2)
+  h.onTextDelta?.(reply.content.slice(0, mid))
+  await delay(160)
+  h.onTextDelta?.(reply.content.slice(mid))
+
+  for (const part of parts) {
+    await delay(120)
+    h.onPart?.(part)
+  }
+
+  session.messages.push(userMsg, { ...reply, parts: parts.length ? parts : undefined })
+  session.updatedAt = now()
+  return { sessionId: session.id, demo: true, mode: "mock" }
+}
+
+/**
+ * 发送消息（V2 主入口）：
+ * 1) SSE（POST /api/ai/chat/messages，fetch ReadableStream）；
+ * 2) 通道不可用（网络/404/非流响应）→ 旧阻塞端点 /api/ai/chat（行为兼容）；
+ * 3) 旧端点也不可用 → SSE mock；
+ * 业务错误（409/410/§22 码）不回退，转文案后抛出。message.failed 事件同样以异常抛出。
+ */
+export async function sendChatStream(req: ChatSendRequest, h: ChatStreamHandlers): Promise<ChatStreamOutcome> {
+  if (useAuthStore.getState().offline) return runMockStream(req, h)
+
+  // ---- 1) SSE 主路径 ----
+  try {
+    const acc: { sessionId?: string; failed?: string } = {}
+    await streamChatMessage(
+      {
+        sessionId: req.sessionId,
+        clientMessageId: req.clientMessageId,
+        message: req.message,
+        credentialId: req.credentialId,
+        model: req.model,
+        attachments: req.attachments?.map((a) => ({ kind: a.kind, name: a.name, dataUrl: a.dataUrl, fileId: a.fileId })),
+      },
+      (evt) => dispatchEvent(evt, h, acc),
+    )
+    if (acc.failed) throw new ApiError(500, friendlyAiError(new Error(acc.failed)))
+    return { sessionId: acc.sessionId ?? req.sessionId, demo: false, mode: "sse" }
+  } catch (err) {
+    const channelDown = err instanceof SseUnavailableError || err instanceof NetworkError || (err instanceof ApiError && err.code === 404)
+    if (!channelDown) {
+      // 业务错误：§22 文案化后抛出（不回退）
+      throw err instanceof ApiError ? new ApiError(err.code, friendlyAiError(err)) : err
+    }
+  }
+
+  // ---- 2) 旧阻塞端点回退（行为兼容） ----
+  try {
+    const res = await api<AiChatResponse>("/api/ai/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId: req.sessionId,
+        message: req.message,
+        clientMessageId: req.clientMessageId,
+        credentialId: req.credentialId,
+        model: req.model,
+        attachments: req.attachments?.map((a) => ({ kind: a.kind, name: a.name, dataUrl: a.dataUrl, fileId: a.fileId })),
+      }),
+    })
+    h.onStarted?.()
+    for (const msg of res.messages) h.onAssistantMessage?.(msg)
+    return { sessionId: res.sessionId, demo: false, mode: "fallback" }
+  } catch (err) {
+    if (err instanceof NetworkError || (err instanceof ApiError && err.code === 404)) {
+      // ---- 3) SSE mock ----
+      return runMockStream(req, h)
+    }
+    throw err instanceof ApiError ? new ApiError(err.code, friendlyAiError(err)) : err
+  }
+}
+
+/* ============================ V2：确认 / 取消（持久化动作草稿，§7） ============================ */
+
+/** V2 确认响应（status 含 EXECUTING 过渡态；兼容旧 ok/expired 形状） */
+export interface AiActionResult {
+  ok: boolean
+  status?: "CONFIRMED" | "EXECUTING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "EXPIRED"
+  message?: string
+  resultLink?: string
+  expired?: boolean
+  /** AI_ACTION_STALE：状态已变化，请重新查询 */
+  stale?: boolean
+}
+
+/**
+ * 确认执行（V2）：POST /api/ai/actions/{id}/confirm + **Idempotency-Key**（前端 ULID，
+ * 同一动作重试沿用同一 key）；请求体为空对象（§7.3：执行参数以服务端草稿为准）。
+ * 404（新端点未实现）→ 回退旧 /api/ai/confirm → 仍不可用回 mock 演示。
+ * 409/410/AI_ACTION_STALE 等业务错误按 §22 文案转结构化状态。
+ */
+export async function confirmActionV2(actionId: string, idempotencyKey: string): Promise<AiResult<AiActionResult>> {
+  try {
+    const data = await api<AiActionResult>(`/api/ai/actions/${encodeURIComponent(actionId)}/confirm`, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({}),
+    })
+    return { data, demo: false }
+  } catch (err) {
+    if (err instanceof ApiError && err.code !== 404) {
+      const text = friendlyAiError(err)
+      if (err.code === 410 || /AI_ACTION_EXPIRED/.test(err.message)) return { data: { ok: false, expired: true, message: text }, demo: false }
+      if (/AI_ACTION_STALE/.test(err.message)) return { data: { ok: false, stale: true, message: text }, demo: false }
+      if (/AI_ACTION_ALREADY_EXECUTED/.test(err.message)) return { data: { ok: true, status: "SUCCEEDED", message: text }, demo: false }
+      throw new ApiError(err.code, text)
+    }
+    if (!(err instanceof NetworkError) && !(err instanceof ApiError)) throw err
+    // 新端点未实现/网络不可用 → 旧端点（其内部含 mock 兜底）
+    const legacy = await confirmAction(actionId)
+    return { data: { ...legacy.data }, demo: legacy.demo }
+  }
+}
+
+/** 取消（V2）：POST /api/ai/actions/{id}/cancel；端点不可用时静默成功（本地已置取消态） */
+export async function cancelActionV2(actionId: string): Promise<void> {
+  try {
+    await api<void>(`/api/ai/actions/${encodeURIComponent(actionId)}/cancel`, { method: "POST", body: JSON.stringify({}) })
+  } catch (err) {
+    if (err instanceof NetworkError || (err instanceof ApiError && err.code === 404)) return
+    throw err
+  }
 }

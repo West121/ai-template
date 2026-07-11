@@ -16,14 +16,16 @@ export interface AiNavigateCard {
 
 export interface AiConfirmCard {
   type: "confirm"
-  /** 服务端暂存的待确认动作 id（10min 过期，绑定 session+user） */
+  /** 服务端持久化的待确认动作 id（V2：ai_action_draft，过期/幂等/乐观锁在服务端） */
   actionId: string
   title: string
   summary?: string
-  /** 参数摘要（label/value 展示） */
+  /** 参数摘要（label/value 展示；执行参数以服务端草稿为准） */
   params?: { label: string; value: string }[]
   /** 危险操作（删除/驳回等）红色语义（§10） */
   danger?: boolean
+  /** V2：过期时间（展示） */
+  expiresAt?: string
 }
 
 export interface AiFormCard {
@@ -106,10 +108,24 @@ export interface AiMessage {
   role: "USER" | "ASSISTANT"
   /** 助手消息为 markdown；用户消息按纯文本渲染（不套 .ai-md，防注入+反白） */
   content: string
+  /** 旧协议卡片（历史消息兼容读；有 parts 时优先 parts） */
   cards?: AiCard[]
+  /** V2 消息 Part（§9.3：partId/partType/schemaVersion/payload/sequenceNo，兼容并存） */
+  parts?: AiMessagePartRef[]
   /** 随消息附带的附件（用户气泡回显） */
   attachments?: AiAttachment[]
+  /** 前端生成 ULID（重试幂等，§9.1 clientMessageId） */
+  clientMessageId?: string
   createdAt?: string
+}
+
+/** 结构同 protocol.AiMessagePart（此处内联避免循环依赖：types 保持无运行时依赖） */
+export interface AiMessagePartRef {
+  partId: string
+  partType: string
+  schemaVersion: number
+  payload: Record<string, unknown>
+  sequenceNo: number
 }
 
 export interface AiSession {

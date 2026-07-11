@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ChatView } from "./chat-view"
 import { SessionListView } from "./session-list"
+import type { ToolStatusItem } from "./api"
 import type { AiAttachment, AiMessage, AiModelOption, AiSession } from "./types"
 import "./ai-chat.css"
 
@@ -40,6 +41,8 @@ export interface AssistantPanelProps {
   sessions: AiSession[]
   activeSessionId?: string
   sending: boolean
+  /** 流式过程中的工具状态条（V2 tool.* 事件） */
+  toolStatuses: ToolStatusItem[]
   /** null=无错误；有值=失败文案（空串走默认文案） */
   sendError: string | null
   /** §11 模型切换 */
@@ -187,6 +190,7 @@ export default function AssistantPanel(p: AssistantPanelProps) {
         <ChatView
           messages={p.messages}
           sending={p.sending}
+          toolStatuses={p.toolStatuses}
           sendError={p.sendError}
           offline={p.offline}
           models={p.models}

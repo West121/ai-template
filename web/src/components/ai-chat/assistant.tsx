@@ -10,12 +10,14 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { Sparkles, X } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
-import { ApiError } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
-import { deleteSession, fetchModels, fetchSessionMessages, fetchSessions, sendChat } from "./api"
+import type { ToolStatusItem } from "./api"
 import type { AiAttachment, AiMessage, AiModelOption, AiSession } from "./types"
 
 const AssistantPanel = lazy(() => import("./assistant-panel"))
+/** API/协议层（SSE 客户端/解析器/mock）随首次使用懒加载——主包只留 FAB 与会话壳（分片纪律） */
+const loadApi = () => import("./api")
+const loadProtocol = () => import("./protocol")
 
 export function AiAssistant() {
   const offline = useAuthStore((s) => s.offline)
@@ -27,10 +29,13 @@ export function AiAssistant() {
   const [messages, setMessages] = useState<AiMessage[]>([])
   const [sessions, setSessions] = useState<AiSession[]>([])
   const [sending, setSending] = useState(false)
-  /** null=无错误；有值=失败文案（后端 400 明确文案友好呈现，如 视觉能力缺失） */
+  /** null=无错误；有值=失败文案（§22 错误码文案化呈现） */
   const [sendError, setSendError] = useState<string | null>(null)
+  /** 流式过程中的工具状态条（tool.* 事件驱动） */
+  const [toolStatuses, setToolStatuses] = useState<ToolStatusItem[]>([])
   const [demo, setDemo] = useState(false)
-  const lastSentRef = useRef<{ text: string; attachments: AiAttachment[] } | null>(null)
+  /** 重试沿用同一 clientMessageId（服务端幂等去重） */
+  const lastSentRef = useRef<{ text: string; attachments: AiAttachment[]; clientMessageId: string } | null>(null)
   const fabRef = useRef<HTMLButtonElement>(null)
   const [focusSignal, setFocusSignal] = useState(0)
 
@@ -43,7 +48,8 @@ export function AiAssistant() {
   useEffect(() => {
     if (!open || offline || modelsLoadedRef.current) return
     modelsLoadedRef.current = true
-    void fetchModels()
+    void loadApi()
+      .then((m) => m.fetchModels())
       .then((res) => setModels(res.data))
       .catch(() => setModels([]))
   }, [open, offline])
@@ -56,35 +62,90 @@ export function AiAssistant() {
     [sessionId],
   )
 
-  /* ---- 发送（重试复用：不新增用户气泡；随消息带 credentialId/model/attachments） ---- */
+  /* ---- 发送（V2 流式：SSE 事件驱动 UI；重试复用同一 clientMessageId，不新增用户气泡） ---- */
   const doSend = useCallback(
     async (text: string, attachments: AiAttachment[], isRetry: boolean) => {
+      const [{ sendChatStream }, { friendlyAiError, ulid }] = await Promise.all([loadApi(), loadProtocol()])
+      const clientMessageId = (isRetry && lastSentRef.current?.clientMessageId) || ulid()
       setSending(true)
       setSendError(null)
+      setToolStatuses([])
       if (!isRetry) {
         setMessages((prev) => [
           ...prev,
-          { role: "USER", content: text, attachments: attachments.length ? attachments : undefined, createdAt: new Date().toISOString() },
+          {
+            role: "USER",
+            content: text,
+            attachments: attachments.length ? attachments : undefined,
+            clientMessageId,
+            createdAt: new Date().toISOString(),
+          },
         ])
       }
-      lastSentRef.current = { text, attachments }
+      lastSentRef.current = { text, attachments, clientMessageId }
+
+      /** 流式助手消息占位是否已建（started/首个增量时建，失败前无空气泡） */
+      const streamOpenRef = { open: false }
+      const ensureStreamMsg = () => {
+        if (streamOpenRef.open) return
+        streamOpenRef.open = true
+        setMessages((prev) => [...prev, { role: "ASSISTANT", content: "", parts: [], createdAt: new Date().toISOString() }])
+      }
+      /** 修改最后一条流式助手消息 */
+      const patchStreamMsg = (fn: (m: AiMessage) => AiMessage) => {
+        ensureStreamMsg()
+        setMessages((prev) => {
+          const next = [...prev]
+          for (let i = next.length - 1; i >= 0; i--) {
+            if (next[i].role === "ASSISTANT") {
+              next[i] = fn(next[i])
+              break
+            }
+          }
+          return next
+        })
+      }
+
       try {
         const selected = models.find((m) => m.credentialId === modelId)
-        const res = await sendChat(sessionId, text, {
-          credentialId: selected?.credentialId,
-          model: selected?.model,
-          attachments: attachments.length ? attachments : undefined,
-        })
+        const res = await sendChatStream(
+          {
+            sessionId,
+            clientMessageId,
+            message: text,
+            credentialId: selected?.credentialId,
+            model: selected?.model,
+            attachments: attachments.length ? attachments : undefined,
+          },
+          {
+            onStarted: () => ensureStreamMsg(),
+            onTextDelta: (t) => patchStreamMsg((m) => ({ ...m, content: m.content + t })),
+            onPart: (part) => patchStreamMsg((m) => ({ ...m, parts: [...(m.parts ?? []), part] })),
+            onToolStatus: (item) =>
+              setToolStatuses((prev) => {
+                const i = prev.findIndex((x) => x.id === item.id)
+                if (i >= 0) return prev.map((x, xi) => (xi === i ? item : x))
+                return [...prev, item]
+              }),
+            // 回退路径（旧阻塞端点）：整条消息（旧 cards 形状）直接追加
+            onAssistantMessage: (msg) => {
+              streamOpenRef.open = true
+              setMessages((prev) => [...prev, msg])
+            },
+          },
+        )
         setDemo(res.demo)
-        setSessionId(res.data.sessionId)
-        modelBySessionRef.current.set(res.data.sessionId, modelId)
+        if (res.sessionId) {
+          setSessionId(res.sessionId)
+          modelBySessionRef.current.set(res.sessionId, modelId)
+        }
         if (!sessionTitle) setSessionTitle(text.slice(0, 20) || "附件对话")
-        setMessages((prev) => [...prev, ...res.data.messages])
       } catch (err) {
-        // 400（如所选模型不支持图片）按后端明确文案呈现；其余通用文案
-        setSendError(err instanceof ApiError && err.code === 400 && err.message ? err.message : "")
+        // 业务失败：§22 错误码/明确文案；已产生的流式局部内容保留
+        setSendError(friendlyAiError(err, "") || "")
       } finally {
         setSending(false)
+        setToolStatuses([])
       }
     },
     [sessionId, sessionTitle, models, modelId],
@@ -108,7 +169,7 @@ export function AiAssistant() {
   const openSessionList = useCallback(async () => {
     setView("sessions")
     try {
-      const res = await fetchSessions()
+      const res = await loadApi().then((m) => m.fetchSessions())
       setSessions(res.data)
     } catch {
       setSessions([])
@@ -117,7 +178,7 @@ export function AiAssistant() {
 
   const openSession = useCallback(async (id: string) => {
     try {
-      const res = await fetchSessionMessages(id)
+      const res = await loadApi().then((m) => m.fetchSessionMessages(id))
       setSessionId(id)
       setMessages(res.data)
       setSessionTitle(null)
@@ -134,7 +195,7 @@ export function AiAssistant() {
   const removeSession = useCallback(
     async (id: string) => {
       try {
-        await deleteSession(id)
+        await loadApi().then((m) => m.deleteSession(id))
         setSessions((prev) => prev.filter((s) => s.id !== id))
         if (id === sessionId) newSession()
         toast.success("会话已删除")
@@ -204,6 +265,7 @@ export function AiAssistant() {
             sessions={sessions}
             activeSessionId={sessionId}
             sending={sending}
+            toolStatuses={toolStatuses}
             sendError={sendError}
             models={models}
             modelId={modelId}

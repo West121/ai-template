@@ -1,0 +1,196 @@
+/**
+ * V2 协议层用例（批A）：SSE 增量解析器 / Part 白名单与降级 / 新旧适配 / 受控导航 / 错误码文案 / ULID。
+ */
+import { describe, expect, it } from "vitest"
+import { ApiError } from "@/lib/api"
+import {
+  AI_ERROR_TEXT,
+  cardsToParts,
+  cardToPart,
+  createSseParser,
+  friendlyAiError,
+  parseAiEvent,
+  partToCard,
+  resolveFeaturePath,
+  resolvePart,
+  ulid,
+  type AiMessagePart,
+  type SseFrame,
+} from "./protocol"
+import { CONFIRM_INITIAL, confirmReducer, type ConfirmCardState } from "./cards/confirm-machine"
+
+/* ============================ SSE 解析器 ============================ */
+
+function collect(chunks: string[]): SseFrame[] {
+  const frames: SseFrame[] = []
+  const parser = createSseParser((f) => frames.push(f))
+  for (const c of chunks) parser.feed(c)
+  parser.end()
+  return frames
+}
+
+describe("SSE 增量解析器（fetch ReadableStream 消费）", () => {
+  it("单 chunk 多事件：按空行分帧", () => {
+    const frames = collect(['data: {"type":"message.started"}\n\ndata: {"type":"message.completed"}\n\n'])
+    expect(frames.map((f) => f.data)).toEqual(['{"type":"message.started"}', '{"type":"message.completed"}'])
+  })
+
+  it("事件跨 chunk 任意断开（行中间/帧中间）都能拼回", () => {
+    const frames = collect(["data: {\"ty", 'pe":"tool.started"', "}\n", "\nda", 'ta: {"type":"x"}\n\n'])
+    expect(frames.length).toBe(2)
+    expect(frames[0].data).toBe('{"type":"tool.started"}')
+  })
+
+  it("多条 data: 行拼接为多行 payload；event:/id: 字段解析；CRLF 兼容", () => {
+    const frames = collect(['event: message.part.created\r\nid: 7\r\ndata: {"a":1,\r\ndata: "b":2}\r\n\r\n'])
+    expect(frames[0].event).toBe("message.part.created")
+    expect(frames[0].id).toBe("7")
+    expect(frames[0].data).toBe('{"a":1,\n"b":2}')
+  })
+
+  it("注释行（keepalive）忽略；流结束残帧照常吐出", () => {
+    const frames = collect([": keepalive\n", 'data: {"type":"message.completed"}'])
+    expect(frames.length).toBe(1)
+    expect(frames[0].data).toBe('{"type":"message.completed"}')
+  })
+
+  it("parseAiEvent：type 取 data JSON，缺省回退 event 名；坏 JSON 回 null", () => {
+    expect(parseAiEvent({ data: '{"type":"tool.completed","sequence":8,"payload":{"toolCallId":"tc1"}}' })?.type).toBe("tool.completed")
+    expect(parseAiEvent({ event: "message.started", data: '{"sessionId":"ses_1"}' })?.type).toBe("message.started")
+    expect(parseAiEvent({ event: "message.started", data: '{"sessionId":"ses_1"}' })?.sessionId).toBe("ses_1")
+    expect(parseAiEvent({ data: "{bad json" })).toBeNull()
+    expect(parseAiEvent({ data: "  " })).toBeNull()
+  })
+})
+
+/* ============================ Part 白名单与降级（§16.3） ============================ */
+
+const part = (over: Partial<AiMessagePart>): AiMessagePart => ({
+  partId: "pt_1",
+  partType: "list",
+  schemaVersion: 1,
+  payload: {},
+  sequenceNo: 1,
+  ...over,
+})
+
+describe("Part 协议：白名单 + schemaVersion 降级", () => {
+  it("白名单 partType v1 → ok", () => {
+    for (const t of ["text", "navigate", "form", "confirm", "list", "chart", "approval", "status", "error"]) {
+      expect(resolvePart(part({ partType: t }))).toEqual({ status: "ok", type: t })
+    }
+  })
+
+  it("未知 partType / 超版本 / 形状非法 → 降级（不空白不报错）", () => {
+    expect(resolvePart(part({ partType: "iframe" }))).toEqual({ status: "degraded", reason: "unknown-type" })
+    expect(resolvePart(part({ schemaVersion: 2 }))).toEqual({ status: "degraded", reason: "unsupported-version" })
+    expect(resolvePart(null)).toEqual({ status: "degraded", reason: "malformed" })
+    expect(resolvePart({ partType: "list" } as Partial<AiMessagePart>)).toEqual({ status: "degraded", reason: "malformed" })
+  })
+})
+
+/* ============================ 新旧协议适配 ============================ */
+
+describe("cards ↔ parts 适配（兼容读旧消息 / mock 升级）", () => {
+  it("confirm 卡 → part（displayParams）→ 回卡片渲染形状", () => {
+    const p = cardToPart(
+      { type: "confirm", actionId: "act_1", title: "同意审批", summary: "s", params: [{ label: "任务", value: "T" }], danger: true },
+      3,
+    )
+    expect(p.partType).toBe("confirm")
+    expect(p.sequenceNo).toBe(3)
+    expect((p.payload.displayParams as unknown[]).length).toBe(1)
+    const back = partToCard(p)
+    expect(back).toMatchObject({ type: "confirm", actionId: "act_1", title: "同意审批", danger: true })
+    expect((back as { params?: unknown[] }).params?.length).toBe(1)
+  })
+
+  it("navigate part：v2 featureCode 经受控映射；path 过渡期直通；未知 featureCode → null（降级）", () => {
+    expect(partToCard(part({ partType: "navigate", payload: { featureCode: "WF_MY_TODO", title: "待办" } }))).toMatchObject({
+      type: "navigate",
+      path: "/workflow/tasks",
+    })
+    expect(partToCard(part({ partType: "navigate", payload: { path: "/workflow/start", title: "发起" } }))).toMatchObject({
+      path: "/workflow/start",
+    })
+    expect(partToCard(part({ partType: "navigate", payload: { featureCode: "HACKED_CODE", title: "x" } }))).toBeNull()
+  })
+
+  it("cardsToParts：link 卡拆成多个 navigate part；sequenceNo 递增", () => {
+    const parts = cardsToParts([
+      { type: "link", items: [{ title: "A", path: "/a" }, { title: "B", path: "/b" }] },
+      { type: "navigate", path: "/c", title: "C" },
+    ])
+    expect(parts.map((x) => x.partType)).toEqual(["navigate", "navigate", "navigate"])
+    expect(parts.map((x) => x.sequenceNo)).toEqual([1, 2, 3])
+  })
+})
+
+/* ============================ 受控导航（§10.2） ============================ */
+
+describe("resolveFeaturePath", () => {
+  it("已知 featureCode → 站内路径；参数占位替换并编码", () => {
+    expect(resolveFeaturePath("WF_MY_TODO")).toBe("/workflow/tasks")
+    expect(resolveFeaturePath("WF_INSTANCE_DETAIL", { instanceId: "pi 9/1" })).toBe("/workflow/instances/pi%209%2F1")
+  })
+
+  it("未知 code / 缺参 → null（渲染禁用态，不执行任意 URL）", () => {
+    expect(resolveFeaturePath("EVIL")).toBeNull()
+    expect(resolveFeaturePath("WF_INSTANCE_DETAIL", {})).toBeNull()
+    expect(resolveFeaturePath(undefined)).toBeNull()
+  })
+})
+
+/* ============================ 错误码文案（§22） ============================ */
+
+describe("friendlyAiError", () => {
+  it("识别 §22 错误码（message 内嵌码）→ 文案", () => {
+    expect(friendlyAiError(new ApiError(400, "AI_ACTION_STALE"))).toBe(AI_ERROR_TEXT.AI_ACTION_STALE)
+    expect(friendlyAiError(new Error("AI_SESSION_BUSY: session locked"))).toBe(AI_ERROR_TEXT.AI_SESSION_BUSY)
+  })
+
+  it("HTTP 语义兜底：409 → 忙；410 → 过期；普通 message 原样", () => {
+    expect(friendlyAiError(new ApiError(409, "Conflict"))).toBe(AI_ERROR_TEXT.AI_SESSION_BUSY)
+    expect(friendlyAiError(new ApiError(410, "Gone"))).toBe(AI_ERROR_TEXT.AI_ACTION_EXPIRED)
+    expect(friendlyAiError(new Error("自定义文案"))).toBe("自定义文案")
+    expect(friendlyAiError(undefined, "兜底")).toBe("兜底")
+  })
+})
+
+/* ============================ ULID ============================ */
+
+describe("ulid", () => {
+  it("26 位 Crockford Base32；同毫秒不同随机；时间前缀可排序", () => {
+    const a = ulid(1700000000000)
+    const b = ulid(1700000000000)
+    const c = ulid(1800000000000)
+    expect(a).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/)
+    expect(a.slice(0, 10)).toBe(b.slice(0, 10))
+    expect(a).not.toBe(b)
+    expect(c.slice(0, 10) > a.slice(0, 10)).toBe(true)
+  })
+})
+
+/* ============================ 确认状态机（V2 §7.2：EXECUTING/STALE） ============================ */
+
+describe("confirm 状态机 V2 增量", () => {
+  const step = (s: ConfirmCardState, ...events: Parameters<typeof confirmReducer>[1][]) => events.reduce(confirmReducer, s)
+
+  it("submitting → EXECUTING → SUCCESS：执行中过渡态", () => {
+    const executing = step(CONFIRM_INITIAL, { type: "CONFIRM" }, { type: "EXECUTING" })
+    expect(executing.state).toBe("executing")
+    expect(step(executing, { type: "SUCCESS", message: "已通过" }).state).toBe("done")
+  })
+
+  it("AI_ACTION_STALE → stale 终态（状态已变化请重新查询，不可重试）", () => {
+    const stale = step(CONFIRM_INITIAL, { type: "CONFIRM" }, { type: "FAILURE", stale: true, error: "该对象状态已经变化" })
+    expect(stale.state).toBe("stale")
+    expect(confirmReducer(stale, { type: "CONFIRM" }).state).toBe("stale")
+  })
+
+  it("executing 中 FAILURE(expired) → expired；CANCEL 无效", () => {
+    const executing = step(CONFIRM_INITIAL, { type: "CONFIRM" }, { type: "EXECUTING" })
+    expect(confirmReducer(executing, { type: "CANCEL" }).state).toBe("executing")
+    expect(confirmReducer(executing, { type: "FAILURE", expired: true }).state).toBe("expired")
+  })
+})

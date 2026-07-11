@@ -5,7 +5,7 @@
  * 所选模型不支持视觉时附图就地提示引导切换）；用户气泡回显附件。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react"
-import { AlertTriangle, ArrowDown, ArrowUp, CloudOff, Eye, FileText, Loader2, Paperclip, RotateCw, Sparkles, X } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, CloudOff, Eye, FileText, Loader2, Paperclip, RotateCw, Sparkles, X, XCircle } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { sanitizeHtml } from "@/lib/sanitize"
@@ -13,8 +13,11 @@ import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { mdToHtml } from "./markdown"
 import { CardRouter } from "./cards/card-router"
+import { PartRouter } from "./cards/part-router"
 import { LinkCard } from "./cards/simple-cards"
 import { MAX_ATTACHMENTS, checkAttachmentFile, formatBytes, needsVisionWarning } from "./attachments"
+import type { AiMessagePart } from "./protocol"
+import type { ToolStatusItem } from "./api"
 import type { AiAttachment, AiMessage, AiModelOption } from "./types"
 
 function formatTime(iso?: string): string {
@@ -80,6 +83,8 @@ function MessageRow({ message }: { message: AiMessage }) {
       </div>
     )
   }
+  // V2：有 parts 优先按 Part 协议渲染（白名单 + 降级）；否则兼容读旧 cards
+  const parts = message.parts?.length ? ([...message.parts].sort((a, b) => a.sequenceNo - b.sequenceNo) as AiMessagePart[]) : null
   return (
     <div className="flex gap-2.5">
       <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -87,11 +92,32 @@ function MessageRow({ message }: { message: AiMessage }) {
       </div>
       <div className="flex min-w-0 max-w-[85%] flex-1 flex-col gap-2">
         {message.content && <AssistantMarkdown content={message.content} />}
-        {message.cards?.map((c, i) => <CardRouter key={i} card={c} />)}
+        {parts ? parts.map((p) => <PartRouter key={p.partId} part={p} />) : message.cards?.map((c, i) => <CardRouter key={i} card={c} />)}
         {message.createdAt && (
           <time className="px-1 text-[11px] text-muted-foreground">{formatTime(message.createdAt)}</time>
         )}
       </div>
+    </div>
+  )
+}
+
+/** 工具状态条（§9.2 displayName：正在查询我的待办… ✓/✗），随流式过程更新 */
+function ToolStatusBar({ items }: { items: ToolStatusItem[] }) {
+  if (items.length === 0) return null
+  return (
+    <div className="ml-9 flex w-fit min-w-0 flex-col gap-1 rounded-lg border border-dashed bg-muted/30 px-2.5 py-1.5">
+      {items.map((t) => (
+        <div key={t.id || t.displayName} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          {t.state === "running" ? (
+            <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
+          ) : t.state === "done" ? (
+            <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" />
+          ) : (
+            <XCircle className="size-3.5 shrink-0 text-destructive" />
+          )}
+          <span className="min-w-0 truncate">{t.displayName}</span>
+        </div>
+      ))}
     </div>
   )
 }
@@ -159,6 +185,8 @@ function readAsDataUrl(file: File): Promise<string> {
 export interface ChatViewProps {
   messages: AiMessage[]
   sending: boolean
+  /** 流式过程中的工具状态条（tool.started/completed/failed 驱动） */
+  toolStatuses: ToolStatusItem[]
   /** 上次发送失败文案（null=无错误；后端 400 明确文案友好呈现） */
   sendError: string | null
   offline: boolean
@@ -172,7 +200,7 @@ export interface ChatViewProps {
   focusSignal: number
 }
 
-export function ChatView({ messages, sending, sendError, offline, models, modelId, onModelChange, onSend, onRetry, focusSignal }: ChatViewProps) {
+export function ChatView({ messages, sending, toolStatuses, sendError, offline, models, modelId, onModelChange, onSend, onRetry, focusSignal }: ChatViewProps) {
   const [value, setValue] = useState("")
   const [pending, setPending] = useState<AiAttachment[]>([])
   const listRef = useRef<HTMLDivElement>(null)
@@ -191,12 +219,12 @@ export function ChatView({ messages, sending, sendError, offline, models, modelI
     }
   }, [focusSignal, offline])
 
-  // 新消息自动滚底（用户上滚时暂停跟随）
+  // 新消息/流式增量自动滚底（用户上滚时暂停跟随）
   useEffect(() => {
     if (stickBottom && listRef.current) {
       listRef.current.scrollTop = listRef.current.scrollHeight
     }
-  }, [messages, sending, sendError, stickBottom])
+  }, [messages, sending, toolStatuses, sendError, stickBottom])
 
   const handleScroll = useCallback(() => {
     const el = listRef.current
@@ -270,6 +298,7 @@ export function ChatView({ messages, sending, sendError, offline, models, modelI
             {messages.map((m, i) => (
               <MessageRow key={i} message={m} />
             ))}
+            {sending && <ToolStatusBar items={toolStatuses} />}
             {sending && <TypingIndicator />}
             {sendError != null && (
               <div className="flex w-fit max-w-[85%] flex-col gap-2 rounded-2xl rounded-bl-md border border-destructive/40 bg-destructive/5 px-3.5 py-2.5">

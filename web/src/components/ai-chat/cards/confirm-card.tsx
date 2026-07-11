@@ -1,36 +1,53 @@
 /**
- * confirm 卡（§3.2 变更类二段式确认）：LLM 只出卡，用户点「确认」→ POST /api/ai/confirm 执行。
- * danger=红色语义（左描边 + destructive 键）；状态机 idle/submitting/done/cancelled/expired
- * 见 confirm-machine.ts（纯 reducer，可测）。
+ * confirm 卡（V2 §7 持久化动作草稿）：LLM 只出卡，用户点「确认」→
+ * POST /api/ai/actions/{id}/confirm（**Idempotency-Key**：首次点击生成 ULID，重试沿用同一 key）；
+ * 「取消」→ /cancel（端点不可用静默）。§22 错误 → expired（410）/ stale（AI_ACTION_STALE，
+ * 状态已变化请重新查询，终态）/ 可重试文案。danger=红色语义（左描边 + destructive 键）；
+ * 状态机含 EXECUTING 见 confirm-machine.ts（纯 reducer，可测）。
  */
-import { Fragment, useReducer } from "react"
+import { Fragment, useReducer, useRef } from "react"
 import { useNavigate } from "react-router-dom"
-import { AlertTriangle, CheckCircle2, ExternalLink, ShieldCheck } from "lucide-react"
+import { AlertTriangle, CheckCircle2, ExternalLink, RotateCw, ShieldCheck } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { confirmAction } from "../api"
+import { cancelActionV2, confirmActionV2 } from "../api"
+import { friendlyAiError, ulid } from "../protocol"
 import type { AiConfirmCard } from "../types"
 import { CONFIRM_INITIAL, confirmReducer } from "./confirm-machine"
 
 export function ConfirmCard({ card }: { card: AiConfirmCard }) {
   const navigate = useNavigate()
   const [s, dispatch] = useReducer(confirmReducer, CONFIRM_INITIAL)
+  // 幂等键：同一动作的重试沿用同一 key（服务端幂等去重，§7.3）
+  const idemKeyRef = useRef<string | null>(null)
 
   const doConfirm = async () => {
+    if (!idemKeyRef.current) idemKeyRef.current = ulid()
     dispatch({ type: "CONFIRM" })
     try {
-      const res = await confirmAction(card.actionId)
-      if (res.data.ok) {
-        dispatch({ type: "SUCCESS", message: res.data.message, resultLink: res.data.resultLink })
+      const res = await confirmActionV2(card.actionId, idemKeyRef.current)
+      const r = res.data
+      if (r.status === "EXECUTING") dispatch({ type: "EXECUTING" })
+      if (r.ok) {
+        dispatch({ type: "SUCCESS", message: r.message, resultLink: r.resultLink })
       } else {
-        dispatch({ type: "FAILURE", expired: res.data.expired })
+        dispatch({ type: "FAILURE", expired: r.expired, stale: r.stale, error: r.message })
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "执行失败")
-      dispatch({ type: "FAILURE" })
+      const text = friendlyAiError(err, "执行失败")
+      toast.error(text)
+      dispatch({ type: "FAILURE", error: text })
     }
   }
+
+  const doCancel = () => {
+    dispatch({ type: "CANCEL" })
+    // 服务端草稿标记取消（V2；旧后端/离线静默成功）
+    void cancelActionV2(card.actionId).catch(() => undefined)
+  }
+
+  const busy = s.state === "submitting" || s.state === "executing"
 
   return (
     <div
@@ -45,7 +62,8 @@ export function ConfirmCard({ card }: { card: AiConfirmCard }) {
         ) : (
           <ShieldCheck className="size-4 shrink-0 text-primary" />
         )}
-        <p className="text-sm font-semibold">{card.title}</p>
+        <p className="min-w-0 flex-1 text-sm font-semibold">{card.title}</p>
+        <span className="shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600">需确认</span>
       </div>
       {card.summary && <p className="mb-3 text-xs text-muted-foreground">{card.summary}</p>}
 
@@ -86,17 +104,21 @@ export function ConfirmCard({ card }: { card: AiConfirmCard }) {
           </div>
           <p className="text-xs text-muted-foreground">此操作已过期，请重新发起</p>
         </div>
+      ) : s.state === "stale" ? (
+        <div aria-live="polite" className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-xs text-amber-600 dark:text-amber-400">
+          <RotateCw className="mt-0.5 size-3.5 shrink-0" />
+          <span className="min-w-0">{s.error ?? "该对象状态已经变化，请重新查询后再操作。"}</span>
+        </div>
       ) : (
         <div className="space-y-2">
           {s.error && <p className="text-xs text-destructive">{s.error}</p>}
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8"
-              disabled={s.state === "submitting"}
-              onClick={() => dispatch({ type: "CANCEL" })}
-            >
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {card.expiresAt && (
+              <span className="mr-auto text-[10px] text-muted-foreground">
+                有效期至 {card.expiresAt.slice(0, 16).replace("T", " ")}
+              </span>
+            )}
+            <Button variant="outline" size="sm" className="h-8" disabled={busy} onClick={doCancel}>
               取消
             </Button>
             <Button
@@ -106,7 +128,7 @@ export function ConfirmCard({ card }: { card: AiConfirmCard }) {
               disabled={s.state !== "idle"}
               onClick={() => void doConfirm()}
             >
-              {s.state === "submitting" ? "执行中…" : "确认"}
+              {s.state === "submitting" ? "提交中…" : s.state === "executing" ? "执行中…" : "确认"}
             </Button>
           </div>
         </div>
