@@ -67,10 +67,12 @@ export function toOrchModel(nodes: OrchRfNode[], edges: OrchRfEdge[], meta: Orch
 /** OrchModel → 画布 */
 export function fromOrchModel(model: OrchModel): { nodes: OrchRfNode[]; edges: OrchRfEdge[] } {
   return {
-    nodes: model.nodes.map((n): OrchRfNode => ({
+    // position 兜底：API 直建的流(如 smoke/脚本)节点可能缺坐标——缺省按序竖排,
+    // 避免 n.position.x 崩整页白屏(载入后可用「整理」一键布局)。
+    nodes: model.nodes.map((n, i): OrchRfNode => ({
       id: n.id,
       type: n.type,
-      position: { x: n.position.x, y: n.position.y },
+      position: { x: n.position?.x ?? 80, y: n.position?.y ?? 60 + i * 110 },
       data: { name: n.name, config: n.config },
     })),
     edges: model.edges.map((e): OrchRfEdge => {

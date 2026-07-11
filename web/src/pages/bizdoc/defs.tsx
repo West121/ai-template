@@ -152,8 +152,16 @@ export default function BizdocDefsPage() {
 
   /* ---- 编辑抽屉打开：拉字段清单 + 打印模板 ---- */
   const openEdit = useCallback(async (def: BizDocDef | null) => {
+    // listConfig 兜底:API 直建/smoke 留存的定义可能为 null——缺省空配置,避免展开 null 崩整页白屏
     const next: EditorState = def
-      ? { ...def, id: def.id, listConfig: { columns: [...def.listConfig.columns], filters: [...def.listConfig.filters] } }
+      ? {
+          ...def,
+          id: def.id,
+          listConfig: {
+            columns: [...(def.listConfig?.columns ?? [])],
+            filters: [...(def.listConfig?.filters ?? [])],
+          },
+        }
       : emptyEditor()
     setEditor(next)
     setFields([])

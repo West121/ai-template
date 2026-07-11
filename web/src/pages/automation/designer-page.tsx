@@ -43,6 +43,7 @@ import {
 } from "./mock"
 import type { OrchModel, TriggerConfig, TriggerType } from "./designer/model"
 import { parseOrchModel, type OrchExecNodeStatus } from "./designer/serialize"
+import { ErrorBoundary } from "@/components/error-boundary"
 import { OrchDesigner, type OrchDesignerHandle } from "./designer/orch-designer"
 import { ExecNodeTimeline, WaitingResumeBar } from "./exec-view"
 
@@ -491,16 +492,18 @@ export default function AutomationDesignerPage() {
         </div>
       )}
 
-      {/* 设计器（key 含 version：版本回滚后强制以快照重挂画布） */}
-      <OrchDesigner
-        key={`${flow?.id ?? "new"}-${flow?.version ?? 0}`}
-        ref={designerRef}
-        initialModel={model}
-        meta={{ key: flowCode, name }}
-        credentials={credentials}
-        flows={flows}
-        onDirty={() => setDirty(true)}
-      />
+      {/* 设计器（key 含 version：版本回滚后强制以快照重挂画布）。ErrorBoundary:脏数据崩画布时隔离,不整页白屏 */}
+      <ErrorBoundary key={`eb-${flow?.id ?? "new"}-${flow?.version ?? 0}`}>
+        <OrchDesigner
+          key={`${flow?.id ?? "new"}-${flow?.version ?? 0}`}
+          ref={designerRef}
+          initialModel={model}
+          meta={{ key: flowCode, name }}
+          credentials={credentials}
+          flows={flows}
+          onDirty={() => setDirty(true)}
+        />
+      </ErrorBoundary>
 
       {/* 测试运行抽屉 */}
       <Drawer open={testOpen} onOpenChange={(o) => (o ? setTestOpen(true) : closeTest())} title="测试运行" description="保存当前设计并以模拟 payload 触发一次真实执行，逐节点回放结果" width={480}>
