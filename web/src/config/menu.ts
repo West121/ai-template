@@ -41,6 +41,9 @@ import {
   Inbox,
   Activity,
   Zap,
+  FileSpreadsheet,
+  Files,
+  FileCog,
 } from "lucide-react"
 
 export interface MenuItem {
@@ -72,6 +75,15 @@ export const menuTree: MenuItem[] = [
     ],
   },
   { title: "自动化编排", path: "/automation", icon: Zap },
+  {
+    title: "单据管理",
+    path: "/bizdoc",
+    icon: FileSpreadsheet,
+    children: [
+      { title: "单据中心", path: "/bizdoc/center", icon: Files },
+      { title: "单据定义", path: "/bizdoc/defs", icon: FileCog },
+    ],
+  },
   {
     title: "公文管理",
     path: "/document",

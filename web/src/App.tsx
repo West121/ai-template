@@ -19,6 +19,9 @@ const WorkflowFormDefsPage = lazy(() => import("@/pages/workflow/form-defs"))
 const WorkflowInstanceDetailPage = lazy(() => import("@/pages/workflow/instance-detail"))
 const WorkflowSealsPage = lazy(() => import("@/pages/workflow/seals"))
 const AutomationPage = lazy(() => import("@/pages/automation"))
+const BizdocCenterPage = lazy(() => import("@/pages/bizdoc/center"))
+const BizdocDefsPage = lazy(() => import("@/pages/bizdoc/defs"))
+const BizdocRunPage = lazy(() => import("@/pages/bizdoc/run"))
 const AutomationDesignerPage = lazy(() => import("@/pages/automation/designer-page"))
 const DocumentReceivePage = lazy(() => import("@/pages/document/receive"))
 const DocumentReceiveDetailPage = lazy(() => import("@/pages/document/receive-detail"))
@@ -128,6 +131,12 @@ export default function App() {
               <Route path="delegate" element={<Navigate to="/workflow/tasks?tab=delegate" replace />} />
               <Route path="admin" element={<Navigate to="/workflow/monitor" replace />} />
               <Route path="instances/:id" element={<WorkflowInstanceDetailPage />} />
+            </Route>
+            <Route path="bizdoc">
+              <Route index element={<Navigate to="/bizdoc/center" replace />} />
+              <Route path="center" element={<BizdocCenterPage />} />
+              <Route path="defs" element={<BizdocDefsPage />} />
+              <Route path="run/:defCode" element={<BizdocRunPage />} />
             </Route>
             <Route path="automation">
               <Route index element={<AutomationPage />} />

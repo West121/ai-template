@@ -1,0 +1,82 @@
+/**
+ * BizDoc 套打纸面（丹青 bizdoc-ui-spec §0/§1.10，结构照 gongwen.css 物理单位方案）。
+ * 红线：.bd-paper 内一律 mm/pt + 写死黑白，禁任何主题 token；编辑 chrome（.bd-desk 等）走 token。
+ */
+
+/* 灰底桌面（跟随主题，同 gw-preview-shell 观感） */
+.bd-desk {
+  background: #e5e7eb;
+  overflow: auto;
+}
+.dark .bd-desk {
+  background: #1f2328;
+}
+
+/* 纸面：恒白，脱离主题 */
+.bd-paper {
+  position: relative;
+  background: #fff;
+  color: #000;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+}
+
+/* 元素：绝对定位（left/top/width/height 由 mm 值内联生成） */
+.bd-el {
+  position: absolute;
+  overflow: hidden;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 作废水印层（§8 裁定：VOID 打印必须带，防作废件流通） */
+.bd-void-mark {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 5;
+}
+.bd-void-mark span {
+  position: absolute;
+  transform: rotate(-45deg);
+  font-size: 22pt;
+  font-weight: 700;
+  color: #9ca3af;
+  opacity: 0.25;
+  letter-spacing: 0.25em;
+  font-family: "SimHei", "黑体", sans-serif;
+}
+
+/* 缩放 wrapper（仅屏幕；打印前置 transform:none） */
+.bd-paper--scaled {
+  transform-origin: 0 0;
+}
+
+/* ============ 打印隔离（照 gongwen.css） ============ */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  .bd-print-root,
+  .bd-print-root * {
+    visibility: visible !important;
+  }
+  .bd-print-root {
+    position: absolute !important;
+    inset: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+  .bd-paper {
+    box-shadow: none !important;
+    transform: none !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .bd-editing-only {
+    display: none !important;
+  }
+}
