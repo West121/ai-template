@@ -213,3 +213,32 @@
   模板列表→选模板→render-data→paper-renderer 渲染→print(复用 print-preview)。无匹配模板时
   按钮隐藏或提示。
 - mock 先行;四门+用例。业务单据(§5)入口不动。
+
+## 12. 计算配置(用户第四张截图裁定)
+
+模板编辑器顶部「启用计算配置」开关:开启后编辑器变**两步向导:① 计算配置 → ② 模板设计**。
+计算配置产出命名变量,模板 `{{变量名}}` 引用;计算在**后端出数据时求值**(render-data 与 BIZDOC print
+同路径),结果按格式化落入 data。
+
+### 12.1 契约(tpl content v2 增 calc 段)
+```jsonc
+"calc": {
+  "aggregates": [ { "name":"total_amount", "label":"合计金额", "source":"items"(子表字段),
+                    "field":"amount", "fn":"SUM|AVG|MAX|MIN|COUNT",
+                    "format":"number|chinese", "scale":2 } ],
+  "computed":   [ { "name":"final_amount", "label":"折后金额",
+                    "expr":"quantity * unit_price * (1 - discount_rate)",   // Aviator,可引表单字段与聚合结果
+                    "format":"number|chinese", "scale":2 } ]
+}
+```
+- 求值顺序:aggregates → computed(computed 可引用聚合名);函数:round/abs/numberToChinese
+  (Aviator 注册;chinese 格式 = numberToChinese 人民币大写)。失败该变量置 "-" 不阻断打印。
+- name 与表单字段/系统字段不得重名(编辑器校验)。
+
+### 12.2 分工
+- 磐石:render-data(/api/bizdoc/tpls)与 docs/{id}/print(BIZDOC)对含 calc 的模板求值并入 data
+  (格式化后值);numberToChinese 人民币大写实现;smoke(KEEP=1:SUM+scale/chinese 大写/computed 引聚合/
+  坏公式置 "-")。
+- 疾风:编辑器「启用计算配置」开关 + 两步向导(步骤条:计算配置|模板设计,对齐截图:聚合/计算字段
+  卡片列表、函数提示、使用说明蓝条);字段树加「计算变量」组;预览:mock/样例含计算演示
+  (前端可复用 formula-eval 做样例求值或直接样例值,疾风定);校验重名/公式空。
