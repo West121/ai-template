@@ -126,6 +126,14 @@ RECEIVE status: TO_SIGN(待签收)/PROCESSING(办理中)/FINISHED(已办结)；S
 - 语义：未配维度=不限；ALL=不限；CUSTOM=仅 values 集内（空集=什么都看不到，默认更严）。维度白名单在后端（注册才可配，取值范围校验）。多维**维度间 AND**；内建 dept 维仍走既有 5 档 role.dataScope（**向后兼容：只有 dept 维的实体行为完全不变**）。
 - 性能：用户各维可见 id 集**预计算 → Redis 缓存**（`dp:dims:{userId}`，TTL 30min + 授权/任职变更主动失效），查询侧直接取集拼 `col IN (集)`，不 join 授权表；ALL 短路不拼谓词。基础数据 `sys_cost_center`/`biz_project`；示例实体 oa_approval 接入 costCenter(cost_center_id)/project(project_id) 维度。
 
+### 离职 offboarding + 交接治理（DP2，oa-module-system）
+- SysUser 加 `status`(ACTIVE/RESIGNED) + `resignDate`；UserResponse 增 `status` 字段。RESIGNED → **禁登录** + **已发 token 即时失效**（loadUserContext 每请求校验）+ 停用其任职（退出组织范围）+ 数据权限缓存即时失效。
+- POST `/api/system/users/{id}/resign` `{successorId?, reason?, resignDate?}` → `{handoverId}`【P:system:user:edit】。校验：**是部门负责人且未指定继任者 → 400 阻断**；继任者须为在职启用、非本人。建 RESIGN 交接单 + 扫描各类归属建 items，并置该用户离职。
+- GET `/api/system/handovers/{id}` → `{id,fromUserId,fromUserName,toUserId,toUserName,type,reason,status:DRAFT|RUNNING|DONE,createdAt,completedAt,items:[{id,itemType,refType,refId,oldValue,newValue,status:PENDING|DONE|SKIPPED,successorId,note}]}`（登录可查）
+- PUT `/api/system/handovers/{id}/items/{itemId}` `{successorId?, status?:"SKIPPED"|"PENDING"}`【P:system:user:edit】逐项改继任者/跳过（DONE 项不可改）
+- POST `/api/system/handovers/{id}/execute` → `{doneIds:number[], failed:[{itemId,reason}]}`【P:system:user:edit】。逐项**幂等**执行（DONE/SKIPPED 跳过，失败保持 PENDING 可重试）；全部非 PENDING → 交接单 DONE。
+- 交接项处理器可插拔（`HandoverItemProvider` SPI，system 定义，workflow/office 实现，不反向依赖）：**WF_TASK**（未办待办→批量转办继任者）、**DEPT_LEADER**（部门负责人→换继任者）已交付；KB_SPACE_OWNER/DATA_OWNER/WF_NODE_ASSIGNEE(显式未来节点重写) 为 DP2b。历史数据（applicant_id/办理记录）**不变**。
+
 ## 新增权限码与角色授权（V3 种子，B1 负责写入）
 新权限码：office:document:list/edit、office:announcement:publish、system:dept:edit、system:post:edit、system:user:edit、system:role:edit
 授权：ADMIN=全部；DEPT_MANAGER 增加 office:document:list/edit、office:announcement:publish；EMPLOYEE/FINANCE 增加 office:document:list。

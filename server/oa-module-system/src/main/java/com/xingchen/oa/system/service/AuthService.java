@@ -34,6 +34,9 @@ public class AuthService {
             if (!passwordEncoder.matches(request.password(), user.getPassword())) {
                 throw new BusinessException(401, "用户名或密码错误");
             }
+            if (SysUser.STATUS_RESIGNED.equals(user.getStatus())) {
+                throw new BusinessException(403, "账号已离职，无法登录");
+            }
             if (Boolean.FALSE.equals(user.getEnabled())) {
                 throw new BusinessException(403, "账号已被禁用");
             }

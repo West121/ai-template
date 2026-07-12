@@ -54,6 +54,10 @@ public class PermissionService {
     public UserContext loadUserContext(String username, String activeAssignment) {
         SysUser user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new BusinessException(401, "用户不存在"));
+        // DP2 离职：RESIGNED 用户即时失效已发 token（本方法每请求经 JwtAuthFilter 调用，抛出即被清理为未认证）
+        if (SysUser.STATUS_RESIGNED.equals(user.getStatus())) {
+            throw new BusinessException(401, "账号已离职，登录已失效");
+        }
         List<SysUserAssignment> assignments = findEnabledAssignments(user.getId());
 
         // 功能权限：所有任职角色权限的并集；超级管理员直接拥有全部权限码

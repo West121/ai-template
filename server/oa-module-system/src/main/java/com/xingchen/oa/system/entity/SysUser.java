@@ -77,6 +77,17 @@ public class SysUser {
     @Column(nullable = false)
     private Boolean enabled = true;
 
+    public static final String STATUS_ACTIVE = "ACTIVE";
+    public static final String STATUS_RESIGNED = "RESIGNED";
+
+    /** 在职状态：ACTIVE / RESIGNED（离职）。默认 ACTIVE，向后兼容。RESIGNED → 禁登录 + token 失效。 */
+    @Column(nullable = false, length = 16)
+    private String status = STATUS_ACTIVE;
+
+    /** 离职日期（RESIGNED 时记录，可空）。 */
+    @Column(name = "resign_date")
+    private LocalDate resignDate;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;

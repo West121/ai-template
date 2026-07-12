@@ -28,6 +28,8 @@ public record UserResponse(
         String avatar,
         String remark,
         Boolean enabled,
+        /** 在职状态：ACTIVE / RESIGNED（离职）。 */
+        String status,
         LocalDateTime createdAt,
         String primaryDeptName,
         String primaryPostName,
@@ -72,6 +74,7 @@ public record UserResponse(
                 user.getAvatar(),
                 user.getRemark(),
                 user.getEnabled(),
+                user.getStatus(),
                 user.getCreatedAt(),
                 primary != null && primary.getDept() != null ? primary.getDept().getName() : null,
                 primary != null && primary.getPost() != null ? primary.getPost().getName() : null,

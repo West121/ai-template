@@ -2020,6 +2020,93 @@ async function mkProcFull(code, designer, extra = {}) {
   await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [desig.uid, fb.uid] })
 }
 
+// --- DP2 离职 offboarding 治理（磐石：离职态/token 失效/交接扫描·执行/部门负责人阻断/幂等重试） ---
+{
+  const { execFileSync: ex } = await import("node:child_process")
+  const psql = (q) => ex("docker", ["exec", process.env.OA_PG_CONTAINER ?? "oa-postgres", "psql", "-U", "oa", "-d", "oa_platform", "-t", "-A", "-c", q], { stdio: ["ignore", "pipe", "pipe"] }).toString().trim()
+  const flattenDepts = (nodes, out = []) => { for (const n of nodes || []) { out.push(n); flattenDepts(n.children, out) } return out }
+  const deptLeaderId = async (deptId) => {
+    const t = await call(admin.token, "GET", "/api/system/depts/tree")
+    return (flattenDepts(t.body?.data ?? []).find((d) => d.id === deptId) || {}).leaderId
+  }
+  const postId0 = (await call(admin.token, "GET", "/api/system/posts?pageNum=1&pageSize=5")).body?.data?.list?.[0]?.id
+  const empRoleId = (await call(admin.token, "GET", "/api/system/roles?pageNum=1&pageSize=100")).body?.data?.list?.find((r) => r.code === "EMPLOYEE")?.id
+  const mkUser = async (uname) => {
+    const r = await call(admin.token, "POST", "/api/system/users", { username: uname, name: uname, password: "admin123", deptId: 2, postId: postId0, roleIds: [empRoleId] })
+    return r.body?.data?.id ?? r.body?.data
+  }
+  const mkDept = async (name) => {
+    const r = await call(admin.token, "POST", "/api/system/depts", { name, parentId: 1, sort: 99 })
+    return r.body?.data?.id
+  }
+  // 造：继任者 S、离职人 U(领导部门 D，且有一个待办)、部门负责人 U2(领导部门 D2)
+  const sId = await mkUser(`dp2succ_${TS}`)
+  const uId = await mkUser(`dp2resign_${TS}`)
+  const u2Id = await mkUser(`dp2lead_${TS}`)
+  const dId = await mkDept(`DP2部门_${TS}`)
+  const d2Id = await mkDept(`DP2部门2_${TS}`)
+  await call(admin.token, "PUT", `/api/system/depts/${dId}`, { leaderId: uId })
+  await call(admin.token, "PUT", `/api/system/depts/${d2Id}`, { leaderId: u2Id })
+  check("DP2 造测试数据(S/U/U2/D/D2)", !!(sId && uId && u2Id && dId && d2Id), JSON.stringify({ sId, uId, u2Id, dId, d2Id }))
+  // U 有一个待办（含 U 为办理人的审批节点实例）+ U 的历史审批单（验历史归属不变）
+  const dpProc = await mkProc(`dp2proc_${TS}`, [approvalNode("ap", "离职人审批", uId, "ANY")])
+  const dpTitle = `离职交接待办-${TS}`
+  await call(admin.token, "POST", "/api/wf/instances", { defCode: dpProc, title: dpTitle, formData: {} })
+  const uLogin = await call(null, "POST", "/api/auth/login", { username: `dp2resign_${TS}`, password: "admin123" })
+  const uToken = uLogin.body?.data?.token
+  check("DP2 离职人 U 离职前可登录", !!uToken)
+  const uAppr = await call(uToken, "POST", "/api/office/approvals", { title: `U历史单-${TS}`, type: "OTHER", reason: "历史归属测试" })
+  const uApprId = uAppr.body?.data?.id
+  // ② 部门负责人未指定继任 → 阻断
+  const block = await call(admin.token, "POST", `/api/system/users/${u2Id}/resign`, { reason: "无继任" })
+  check("DP2 部门负责人未指定继任→阻断(非 0)", block.body?.code !== 0, JSON.stringify(block.body))
+  // ① 触发离职 U（继任 S）→ 建交接单 + 扫描 items
+  const resignRes = await call(admin.token, "POST", `/api/system/users/${uId}/resign`, { successorId: sId, reason: "离职测试", resignDate: "2026-07-31" })
+  const hId = resignRes.body?.data?.handoverId
+  check("DP2 离职触发建交接单", !!hId, JSON.stringify(resignRes.body))
+  const hv = await call(admin.token, "GET", `/api/system/handovers/${hId}`)
+  const items = hv.body?.data?.items ?? []
+  check("DP2 扫描含 WF_TASK item(未办待办)", items.some((i) => i.itemType === "WF_TASK"), JSON.stringify(items.map((i) => i.itemType)))
+  check("DP2 扫描含 DEPT_LEADER item(其为部门负责人 D)", items.some((i) => i.itemType === "DEPT_LEADER" && i.refId === String(dId)))
+  // ④ 离职用户禁登录 + 已发 token 失效 + 数据范围即时失效
+  const uReLogin = await call(null, "POST", "/api/auth/login", { username: `dp2resign_${TS}`, password: "admin123" })
+  check("DP2 离职用户禁登录(403)", uReLogin.status === 403 || uReLogin.body?.code === 403, JSON.stringify({ s: uReLogin.status, c: uReLogin.body?.code }))
+  const uTokDead = await call(uToken, "GET", "/api/wf/tasks/todo?pageNum=1&pageSize=10")
+  check("DP2 离职用户已发 token 即时失效(401)", uTokDead.status === 401, `status=${uTokDead.status}`)
+  // ③ 执行交接 → 待办转办继任者 S + 部门负责人变更为 S
+  const exec1 = await call(admin.token, "POST", `/api/system/handovers/${hId}/execute`)
+  check("DP2 执行交接 doneIds≥2(待办+部门负责人)", (exec1.body?.data?.doneIds ?? []).length >= 2 && (exec1.body?.data?.failed ?? []).length === 0, JSON.stringify(exec1.body?.data))
+  const sLogin = await call(null, "POST", "/api/auth/login", { username: `dp2succ_${TS}`, password: "admin123" })
+  const sTodo = await findTodo(sLogin.body?.data?.token, dpTitle)
+  check("DP2 待办已转办给继任者 S", !!sTodo, JSON.stringify(sTodo))
+  check("DP2 部门负责人已变更为继任者 S", (await deptLeaderId(dId)) === sId, `leader=${await deptLeaderId(dId)} S=${sId}`)
+  // ⑥ 历史 applicant 不变（U 的历史单仍归 U）
+  const uApprAfter = await call(admin.token, "GET", "/api/office/approvals?pageNum=1&pageSize=500")
+  const histRow = (uApprAfter.body?.data?.list ?? []).find((a) => a.id === uApprId)
+  check("DP2 历史数据 applicant 不变(U 的历史单仍归 U)", histRow?.applicantId === uId, JSON.stringify({ found: !!histRow, applicantId: histRow?.applicantId, uId }))
+  // 全部完成 → 交接单 DONE；重复执行幂等
+  check("DP2 全部完成→交接单 DONE", (await call(admin.token, "GET", `/api/system/handovers/${hId}`)).body?.data?.status === "DONE")
+  const exec2 = await call(admin.token, "POST", `/api/system/handovers/${hId}/execute`)
+  check("DP2 重复执行幂等(已 DONE 不再执行,doneIds 空)", (exec2.body?.data?.doneIds ?? []).length === 0, JSON.stringify(exec2.body?.data))
+  // ⑤ item 级失败重试幂等：注入一个指向不存在部门的 DEPT_LEADER item → 执行失败 → 跳过后重试 DONE
+  psql(`INSERT INTO sys_handover_item (handover_id, item_type, ref_type, ref_id, status) VALUES (${hId}, 'DEPT_LEADER', 'DEPT', '999999', 'PENDING')`)
+  const exec3 = await call(admin.token, "POST", `/api/system/handovers/${hId}/execute`)
+  check("DP2 item 级失败进 failed[](部门不存在,可重试)", (exec3.body?.data?.failed ?? []).length >= 1, JSON.stringify(exec3.body?.data))
+  check("DP2 有失败项→交接单回 RUNNING(未 DONE)", (await call(admin.token, "GET", `/api/system/handovers/${hId}`)).body?.data?.status === "RUNNING")
+  const bogus = ((await call(admin.token, "GET", `/api/system/handovers/${hId}`)).body?.data?.items ?? []).find((i) => i.refId === "999999")
+  await call(admin.token, "PUT", `/api/system/handovers/${hId}/items/${bogus.id}`, { status: "SKIPPED" })
+  const exec4 = await call(admin.token, "POST", `/api/system/handovers/${hId}/execute`)
+  check("DP2 跳过失败项后重试→交接单 DONE", (await call(admin.token, "GET", `/api/system/handovers/${hId}`)).body?.data?.status === "DONE", JSON.stringify(exec4.body?.data))
+  // 自清（离职是破坏性态，务必复原）：撤实例 + 删部门(先解负责人引用) + 删用户 + 清交接单
+  const dpInst = (await call(admin.token, "GET", "/api/wf/instances/my?pageNum=1&pageSize=100")).body?.data?.list?.find((r) => r.title === dpTitle)
+  if (dpInst) await call(admin.token, "POST", `/api/wf/instances/${dpInst.id}/cancel`)
+  await call(admin.token, "DELETE", `/api/system/depts/${dId}`)
+  await call(admin.token, "DELETE", `/api/system/depts/${d2Id}`)
+  await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [uId, u2Id, sId] })
+  psql(`DELETE FROM sys_handover_item WHERE handover_id=${hId}; DELETE FROM sys_handover WHERE id=${hId}`)
+  check("DP2 自清完成(部门/用户/交接单删除)", true)
+}
+
 // --- 办理选项 candidate → 认领（等价 CLAIM） ---
 {
   const P_CAND = await mkProc(`p2cand_${TS}`, [{
