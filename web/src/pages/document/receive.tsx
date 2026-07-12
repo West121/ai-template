@@ -12,7 +12,8 @@ import { fetchDocPage } from "./gongwen/mock"
 import { gwFormatDate, type GwDoc } from "./gongwen/types"
 import { DocTypeBadge, GwStatusBadge, SecretBadge, UrgencyBadge } from "./gongwen/badges"
 import { DraftFormDialog } from "./gongwen/draft-form"
-import { DemoBanner, EMPTY_FILTER, GwFilterBar, toListQuery, type GwFilterState } from "./gongwen/shared"
+import { DemoBanner, GwFilterBar } from "./gongwen/shared"
+import { EMPTY_FILTER, toListQuery, type GwFilterState } from "./gongwen/list-filter"
 
 export default function ReceivePage() {
   const navigate = useNavigate()

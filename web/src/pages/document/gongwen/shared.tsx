@@ -16,6 +16,8 @@ import {
   SEND_STATUS_META,
   type GwDirection,
 } from "./types"
+// GwFilterState / EMPTY_FILTER / toListQuery 已拆到 ./list-filter（保 shared.tsx 只导出组件，满足 react-refresh）
+import type { GwFilterState } from "./list-filter"
 
 /** 后端未连接时的演示数据提示（不阻断，页面照常用 mock 呈现） */
 export function DemoBanner() {
@@ -27,24 +29,6 @@ export function DemoBanner() {
       </span>
     </div>
   )
-}
-
-export interface GwFilterState {
-  secret: string
-  urgency: string
-  docType: string
-  status: string
-  dateFrom: string
-  dateTo: string
-}
-
-export const EMPTY_FILTER: GwFilterState = {
-  secret: "all",
-  urgency: "all",
-  docType: "all",
-  status: "all",
-  dateFrom: "",
-  dateTo: "",
 }
 
 export function GwFilterBar({
@@ -131,17 +115,4 @@ export function GwFilterBar({
       />
     </div>
   )
-}
-
-/** 把筛选栏状态映射为 fetchDocList 查询参数（all/空 → undefined） */
-export function toListQuery(direction: GwDirection, f: GwFilterState) {
-  return {
-    direction,
-    secret: f.secret === "all" ? undefined : f.secret,
-    urgency: f.urgency === "all" ? undefined : f.urgency,
-    docType: f.docType === "all" ? undefined : f.docType,
-    status: f.status === "all" ? undefined : f.status,
-    dateFrom: f.dateFrom || undefined,
-    dateTo: f.dateTo || undefined,
-  }
 }

@@ -439,3 +439,123 @@ GongwenPreview 主体、gongwen.css 版式。
 6. **迁移节奏**:按 5 阶段;疾风排在**预测前端全链路收口之后**执行。**A 阶段(抽共享 WorkflowFlowTrack)
    是关键**,务必保证审批现有流程图(节点信息/回放/预测/连线高亮/完整链路)**零回归**——A 完成先跑
    审批 instance-detail 反白屏冒烟再往下。每阶段独立可提交、可回滚。
+
+---
+
+## 7. 范式:业务详情页接入 WorkflowDetailShell(阶段 E 固化,已落地)
+
+> 阶段 A–D 已合入。**从此所有"带流程的业务详情页"(审批 / 公文 / 单据 BizDoc / 请假 / 报销 / 以后的)
+> 一律套 `WorkflowDetailShell`**,不再各写一套顶部卡+环节条+Tabs+流程图骨架。这是与"防白屏四层规约"
+> 同级的**结构约定**(见 CLAUDE.md)。基座数据模型无关,新业务只做三件事:①写适配层 ②填五段 slot
+> ③流程图/办理记录零成本继承。
+
+**实际文件位置(照抄这两个已落地页即可):**
+
+| 资产 | 路径 |
+|---|---|
+| 基座 | `web/src/pages/workflow/workflow-detail-shell.tsx`(导出 `WorkflowDetailShell` / `ShellField` / `ShellTimeline` + 全部契约类型) |
+| 共享流程图 | `web/src/pages/workflow/designer/flow/workflow-flow-track.tsx`(`WorkflowFlowTrack`,基座内建调用,业务一般不直接用) |
+| 参照①·审批 | `web/src/pages/workflow/instance-detail.tsx` |
+| 参照②·公文 | `web/src/pages/document/gongwen/detail.tsx`(`GongwenDetail`,收/发共用一组件,`direction` 分流) |
+| 适配层样例 | `web/src/pages/document/gongwen/adapters.ts`(`opinionsToTimeline`)、`gongwen/info-grid.tsx`(`GongwenInfoGrid` 用 `ShellField`) |
+
+### 7.1 三步接入
+
+**① 写适配层(业务模型 → 归一化 props)** —— 唯一有业务知识的地方,基座本身不认识你的模型:
+- `status`: `{ label, className }`(复用你的 `STATUS_META` 类名口径)。
+- `badges` / `meta`: 业务徽标与头卡元信息行。
+- **timeline 适配器**: 业务流转记录 `[]` → `WfTimelineItem[]`
+  (`{ nodeId?, nodeName?, actorName?, action, comment?, createdAt? }`)。
+  **`nodeId` 必须对齐流程图节点 id**,否则流程图只能高亮当前节点、无法逐节点回填办理信息(后端需在流转
+  记录上回 `nodeId`——见 §6 拍板 1)。
+- `highlight` / `currentNodes`: 走后端 `highlight` 或据状态派生。
+- `predict.run`: 业务预测端点,`() => Promise<WfPredictResult>`(端点不同→只换这个回调,弃用任何旧式弹窗)。
+
+**② 填五段 slot(§1.1)**:头卡 `title/onBack/status/badges/meta/actions/onRefresh` → 环节条
+`currentNode/currentAssignee/stageActions`(办理动作条,与环节同框)→ 信息区 `infoTitle/info`(用
+`ShellField` 拼分组网格,参照 `GongwenInfoGrid`)→ Tabs `flow`(内建办理记录+流程图)`+ extraTabs`
+(业务专属如"正文/明细")→ 底部 `bottom`(可选专区,如公文红头预览)。
+
+**③ 流程图 + 办理记录零成本继承**:传入 `flow` 后,**节点办理信息浮层 / 回放 / 图内预测连线 / 完整链路 /
+全屏 / DINGTALK 跟踪 + 通用时间线(当前环节脉冲行)全部自动获得**,业务不写一行图形/时间线代码。
+`loading` / `error("network"|"notfound"|自定义文案)` 也由基座统一出 Skeleton / 离线卡 / 不存在卡。
+
+### 7.2 最小接入模板(复制改名即用)
+
+```tsx
+// web/src/pages/<biz>/<biz>-detail.tsx —— 例:单据 BizDoc / 请假 / 报销
+import { useNavigate } from "react-router-dom"
+import { WorkflowDetailShell, ShellField } from "@/pages/workflow/workflow-detail-shell"
+import type { WfTimelineItem } from "@/types/workflow"
+import type { WfPredictResult } from "@/types/workflow-p3"
+
+// —— 适配层：业务模型 → 归一化（唯一有业务知识处） —— //
+const STATUS_META: Record<string, { label: string; className?: string }> = {
+  RUNNING: { label: "办理中", className: "border-primary/40 text-primary" },
+  DONE: { label: "已办结", className: "border-emerald-500/40 text-emerald-600" },
+  // …
+}
+const TIMELINE_META = {
+  APPROVE: { label: "同意", dot: "bg-emerald-500" },
+  REJECT: { label: "退回", dot: "bg-rose-500" },
+  // …
+}
+/** 业务流转记录 → 通用时间线（nodeId 对齐流程图节点 id 才能逐节点回填办理信息） */
+function toTimeline(records: BizRecord[]): WfTimelineItem[] {
+  return records.map((r) => ({
+    nodeId: r.nodeId, nodeName: r.taskName, actorName: r.userName,
+    action: r.decision, comment: r.opinion || undefined, createdAt: r.createdAt,
+  }))
+}
+
+export default function BizDetail() {
+  const navigate = useNavigate()
+  const { doc, loading, error, reload } = useBizDetail(/* id */)  // 业务自管 数据/loading/error
+
+  return (
+    <WorkflowDetailShell
+      title={doc?.title}
+      onBack={() => navigate("/biz")}
+      status={doc ? { label: STATUS_META[doc.status].label, className: STATUS_META[doc.status].className } : undefined}
+      badges={<>{/* 业务徽标 */}</>}
+      meta={[{ label: "发起人", value: doc?.creator }, { label: "发起时间", value: doc?.createdAt }]}
+      actions={doc?.instanceId ? <InstancePrintButton instanceId={doc.instanceId} defCode="biz_flow" /> : undefined}
+      onRefresh={reload}
+      currentNode={doc?.status !== "DONE" ? doc?.currentNode : undefined}
+      currentAssignee={doc?.currentAssignee}
+      stageActions={doc ? <BizActionBar doc={doc} onUpdated={reload} /> : undefined}
+      infoTitle="单据信息"
+      info={doc ? <BizInfoGrid doc={doc} /> : undefined}   // 用 ShellField 拼分组网格
+      flow={{
+        source: { load: "defCode", defCode: "biz_flow" },   // 或 inline: { designerType, designerJson, bpmnXml }
+        timeline: toTimeline(doc?.records ?? []),
+        timelineMeta: TIMELINE_META,
+        highlight: doc?.highlight,
+        currentNodes: doc?.currentNodeId ? [{ nodeId: doc.currentNodeId, nodeName: doc.currentNode }] : [],
+        predict: doc ? { enabled: true, run: (): Promise<WfPredictResult> => predictBiz(doc.id) } : undefined,
+      }}
+      extraTabs={[/* 业务专属 Tab，如 { key:"lines", label:"明细", content:<BizLines .../> } */]}
+      bottom={/* 可选底部专区 */ undefined}
+      loading={loading}
+      error={error}
+      onRetry={reload}
+    />
+  )
+}
+```
+
+### 7.3 红线 & 新页 checklist
+
+**红线**
+- 基座**数据模型无关**:不要往基座里加业务 `if`;所有差异在**适配层 / slot** 消化。
+- 逐节点办理信息靠 `timeline[].nodeId` 与流程图节点 id 对齐(后端在流转记录回 `nodeId`)。
+- **防白屏四层不破**:路由级 ErrorBoundary 已全局;新页仍须加 jsdom mount 冒烟("renders without
+  throwing",参照 `instance-detail.render.test.tsx` / `gongwen/detail.render.test.tsx`)。
+- 同业务多形态(如公文收/发)**共用一个适配组件**,`direction`/props 分流,不再分叉。
+
+**新页 checklist**
+- [ ] 建 `<biz>-detail.tsx` 渲染 `<WorkflowDetailShell>`;路由/菜单按 CLAUDE.md「路由即一切」登记。
+- [ ] 适配层:`STATUS_META` / `TIMELINE_META` / `toTimeline`(带 `nodeId`)/ `predict.run`。
+- [ ] `info` 用 `ShellField` 拼分组网格(参照 `gongwen/info-grid.tsx`)。
+- [ ] `loading`/`error` 交给基座,不自写 Skeleton/离线卡。
+- [ ] jsdom mount 冒烟 + 四门全绿(`tsc -b` / `oxlint` / `vitest` / `vite build`)。

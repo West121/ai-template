@@ -63,6 +63,10 @@ Two parallel process designers share one property panel and node model:
 - `designer/dingtalk/` — DingTalk-style linear designer (primary); serializes to `designerJson` compiled server-side by `JsonToBpmnConverter`.
 - `designer/bpmn/oa/serde.ts` — the most convention-heavy file. Serializes `WfNodeProps` ↔ BPMN `extensionElements` under the `oa` namespace (`http://oa/bpmn`), one element per field. All property patches must be batched into **one** `modeling.updateProperties` call. SequenceFlow conditions write both `oa:condition` (structured, for re-editing) and `conditionExpression` (UEL, for Flowable). `compileUel`/`parseUel` **mirror the backend's `ConditionCompiler`** — the formats must stay byte-compatible; change both sides together.
 
+### Business detail pages — WorkflowDetailShell (structural convention, on par with the anti-white-screen rules)
+
+**Every "business detail page that has a workflow" (审批/公文/单据 BizDoc/请假/报销/future ones) MUST render through `WorkflowDetailShell` (`web/src/pages/workflow/workflow-detail-shell.tsx`)** — do not hand-roll another header-card + stage-bar + tabs + flow-chart skeleton. The shell is data-model-agnostic: a new business writes only (1) an adapter layer (business model → normalized props: `status`/`badges`/`meta`, a `WfTimelineItem[]` timeline adapter whose `nodeId` aligns to flow-chart node ids, `predict.run`), (2) fills the five slots (head/stage/info/tabs/bottom, using exported `ShellField` for grouped info grids), and (3) gets the flow chart (node handling info / replay / in-chart prediction / full chain / fullscreen / DINGTALK) + the 办理记录 timeline **for free**. Reference impls: `pages/workflow/instance-detail.tsx` (审批), `pages/document/gongwen/detail.tsx` (公文, 收/发 share one `GongwenDetail` via `direction`). Full paradigm + copy-paste skeleton: `docs/design/workflow-detail-shell.md` §7. Same-business variants share one adapter component (props/`direction` split), never fork.
+
 ## Backend Architecture
 
 Maven modules, dependency direction strictly `oa-boot → oa-module-* → oa-common`:
