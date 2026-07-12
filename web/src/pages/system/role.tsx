@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ColumnDef } from "@tanstack/react-table"
-import { CloudOff, Pencil, Plus, RotateCw, ShieldAlert, ShieldCheck, Trash2 } from "lucide-react"
+import { Building2, CloudOff, Pencil, Plus, RotateCw, ShieldAlert, ShieldCheck, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/page-header"
 import { PermissionBanner } from "@/components/permission-banner"
+import { OrgPicker } from "@/components/org-picker"
 import { DataTable } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { api, NetworkError, type PageResult } from "@/lib/api"
@@ -39,6 +40,14 @@ interface RoleRow {
   enabled: boolean
   userCount: number
   remark?: string
+  /** CUSTOM 数据权限的自定义可见部门（磐石 RoleResponse 补） */
+  customDeptIds?: number[]
+}
+
+interface DeptNode {
+  id: number
+  name: string
+  children?: DeptNode[]
 }
 
 interface PermNode {
@@ -105,10 +114,12 @@ interface RoleForm {
   name: string
   code: string
   dataScope: string
+  /** dataScope=CUSTOM 时的自定义可见部门 id */
+  customDeptIds: number[]
   remark: string
 }
 
-const emptyForm: RoleForm = { name: "", code: "", dataScope: "SELF", remark: "" }
+const emptyForm: RoleForm = { name: "", code: "", dataScope: "SELF", customDeptIds: [], remark: "" }
 
 export default function RolePage() {
   const [rows, setRows] = useState<RoleRow[]>([])
@@ -122,6 +133,30 @@ export default function RolePage() {
   const [editing, setEditing] = useState<RoleRow | null>(null)
   const [form, setForm] = useState<RoleForm>(emptyForm)
   const [submitting, setSubmitting] = useState(false)
+  // CUSTOM 自定义部门：id→名称（回填/展示用）+ 部门选择器开关
+  const [deptNameMap, setDeptNameMap] = useState<Record<number, string>>({})
+  const [deptPickerOpen, setDeptPickerOpen] = useState(false)
+  const deptLoadedRef = useRef(false)
+
+  // 表单打开时懒拉部门树（一次），解析自定义部门名称回填
+  useEffect(() => {
+    if (!formOpen || deptLoadedRef.current || offline) return
+    deptLoadedRef.current = true
+    api<DeptNode[]>("/api/system/depts/tree")
+      .then((tree) => {
+        const map: Record<number, string> = {}
+        const walk = (nodes: DeptNode[]) =>
+          nodes.forEach((n) => {
+            map[n.id] = n.name
+            if (n.children) walk(n.children)
+          })
+        walk(Array.isArray(tree) ? tree : [])
+        setDeptNameMap(map)
+      })
+      .catch(() => {
+        /* 部门树拉取失败 → chips 退回「部门#id」，不阻断 */
+      })
+  }, [formOpen, offline])
 
   // 权限配置
   const [permTarget, setPermTarget] = useState<RoleRow | null>(null)
@@ -163,7 +198,13 @@ export default function RolePage() {
 
   const openEdit = (row: RoleRow) => {
     setEditing(row)
-    setForm({ name: row.name, code: row.code, dataScope: row.dataScope, remark: row.remark ?? "" })
+    setForm({
+      name: row.name,
+      code: row.code,
+      dataScope: row.dataScope,
+      customDeptIds: Array.isArray(row.customDeptIds) ? row.customDeptIds : [],
+      remark: row.remark ?? "",
+    })
     setFormOpen(true)
   }
 
@@ -172,11 +213,17 @@ export default function RolePage() {
       toast.error("请填写角色名称和角色编码")
       return
     }
+    if (form.dataScope === "CUSTOM" && form.customDeptIds.length === 0) {
+      toast.error("已选择「自定义」数据权限，请至少选择一个可见部门")
+      return
+    }
     setSubmitting(true)
     const body = JSON.stringify({
       code: form.code.trim(),
       name: form.name.trim(),
       dataScope: form.dataScope,
+      // 仅 CUSTOM 携带自定义部门；切走时后端也应清空
+      customDeptIds: form.dataScope === "CUSTOM" ? form.customDeptIds : undefined,
       remark: form.remark.trim() || undefined,
     })
     try {
@@ -459,7 +506,10 @@ export default function RolePage() {
               <Label>数据权限范围</Label>
               <Select
                 value={form.dataScope}
-                onValueChange={(v) => setForm((f) => ({ ...f, dataScope: v }))}
+                onValueChange={(v) =>
+                  // 从 CUSTOM 切走 → 清空自定义部门
+                  setForm((f) => ({ ...f, dataScope: v, customDeptIds: v === "CUSTOM" ? f.customDeptIds : [] }))
+                }
               >
                 <SelectTrigger className="w-full">
                   <SelectValue />
@@ -473,6 +523,38 @@ export default function RolePage() {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* CUSTOM → 自定义可见部门多选（非 CUSTOM 隐藏） */}
+            {form.dataScope === "CUSTOM" && (
+              <div className="space-y-1.5">
+                <Label>自定义可见部门</Label>
+                <div className="rounded-md border p-2">
+                  {form.customDeptIds.length === 0 ? (
+                    <p className="px-1 py-1 text-xs text-muted-foreground">未选择部门——请选择该角色可见的部门</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {form.customDeptIds.map((id) => (
+                        <Badge key={id} variant="outline" className="gap-1 pr-1 font-normal">
+                          {deptNameMap[id] ?? `部门#${id}`}
+                          <button
+                            type="button"
+                            aria-label={`移除 ${deptNameMap[id] ?? id}`}
+                            className="rounded hover:bg-muted"
+                            onClick={() => setForm((f) => ({ ...f, customDeptIds: f.customDeptIds.filter((x) => x !== id) }))}
+                          >
+                            <X className="size-3" />
+                          </button>
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                  <Button type="button" variant="outline" size="sm" className="mt-2 gap-1.5" onClick={() => setDeptPickerOpen(true)}>
+                    <Building2 className="size-3.5" /> 选择部门
+                  </Button>
+                </div>
+              </div>
+            )}
+
             <div className="space-y-1.5">
               <Label htmlFor="role-remark">备注</Label>
               <Textarea
@@ -544,6 +626,26 @@ export default function RolePage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* CUSTOM 自定义可见部门选择器（复用 OrgPicker，仅部门） */}
+      <OrgPicker
+        open={deptPickerOpen}
+        onOpenChange={setDeptPickerOpen}
+        title="选择自定义可见部门"
+        types={["DEPT"]}
+        value={form.customDeptIds.map((id) => ({ type: "DEPT" as const, id, name: deptNameMap[id] ?? `部门#${id}` }))}
+        onConfirm={(refs) => {
+          setDeptPickerOpen(false)
+          setForm((f) => ({ ...f, customDeptIds: refs.map((r) => r.id) }))
+          setDeptNameMap((m) => {
+            const next = { ...m }
+            refs.forEach((r) => {
+              next[r.id] = r.name
+            })
+            return next
+          })
+        }}
+      />
     </div>
   )
 }

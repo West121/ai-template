@@ -164,6 +164,19 @@ export interface KbCommentNode extends KbComment {
   replies: KbCommentNode[]
 }
 
+/* ---------------- 批5：统计（集成收尾） ---------------- */
+
+/** 知识库统计概览（GET /api/kb/stats，按可见空间口径） */
+export interface KbStats {
+  spaceCount: number
+  docCount: number
+  /** 可编辑（EDITOR+）空间数 */
+  editableSpaceCount: number
+  tagCount: number
+  /** 最近更新文档（跳转用） */
+  recentDocs: { docId: number; title: string; spaceId: number; spaceName: string; updatedAt?: string }[]
+}
+
 /** 权限判定上下文（当前用户），offline=演示放开 */
 export interface KbUserCtx {
   userId: number | null

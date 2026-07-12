@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { FileText, Plus, Search, Users } from "lucide-react"
+import { FileText, MessagesSquare, Plus, Search, Users } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -14,6 +14,7 @@ import { ErrorBoundary } from "@/components/error-boundary"
 import { fetchSpaces } from "./mock"
 import { KbDemoBanner } from "./kb-ui"
 import { KbSearchDialog } from "./kb-search"
+import { KbStatsOverview } from "./kb-stats"
 import { SpaceDialog } from "./space-dialog"
 import { VISIBILITY_META, type KbSpace } from "./types"
 
@@ -44,6 +45,15 @@ export default function KnowledgeSpaceListPage() {
         description="企业知识空间：建库、分权、沉淀文档。"
         actions={
           <>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              onClick={() => window.dispatchEvent(new CustomEvent("ai:open"))}
+              title="唤起 AI 助手，基于知识库问答（RAG 引用溯源）"
+            >
+              <MessagesSquare className="size-4" /> 问知识库
+            </Button>
             <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setSearchOpen(true)}>
               <Search className="size-4" /> 搜索
             </Button>
@@ -54,6 +64,9 @@ export default function KnowledgeSpaceListPage() {
         }
       />
       {demo && <KbDemoBanner />}
+      <ErrorBoundary label="kb-stats">
+        <KbStatsOverview />
+      </ErrorBoundary>
       <ErrorBoundary label="kb-space-list">
         {loading ? (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">

@@ -321,17 +321,24 @@ export function AiAssistant() {
   )
 
   /* ---- 开合 ---- */
-  const openPanel = () => {
+  const openPanel = useCallback(() => {
     setOpen(true)
     setFocusSignal((n) => n + 1)
     // 首次打开恢复上次会话（有历史→最近会话；无历史→空新会话）
     void restoreLastSession()
-  }
+  }, [restoreLastSession])
   const closePanel = useCallback(() => {
     setOpen(false)
     // 焦点归还 FAB（丹青 §5.1）
     window.setTimeout(() => fabRef.current?.focus(), 50)
   }, [])
+
+  // 全局唤起入口（如知识库「问知识库」）：window 派发 "ai:open" 事件 → 打开面板
+  useEffect(() => {
+    const onOpen = () => openPanel()
+    window.addEventListener("ai:open", onOpen)
+    return () => window.removeEventListener("ai:open", onOpen)
+  }, [openPanel])
 
   // Esc 关闭（§5.2）
   useEffect(() => {

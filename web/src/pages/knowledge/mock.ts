@@ -22,7 +22,7 @@ import { useAuthStore } from "@/stores/auth-store"
 import { stripHtml } from "@/components/rich-text"
 import { htmlToJson } from "./content-codec"
 import { buildDocTree } from "./tree"
-import { roleOf, visibleSpaces } from "./permissions"
+import { canEdit, roleOf, visibleSpaces } from "./permissions"
 import { buildSnippet } from "./search-util"
 import { buildAssistText, type AssistAction } from "./assist-util"
 import type {
@@ -38,6 +38,7 @@ import type {
   KbSpace,
   KbSpaceMember,
   KbTag,
+  KbStats,
   KbTreeNode,
   KbUserCtx,
   KbVersionContent,
@@ -447,6 +448,26 @@ export function fetchTags(): Promise<KbResult<KbTag[]>> {
   return withMock(
     () => api<KbTag[]>(`${KB}/tags`).then(normList<KbTag>),
     () => TAGS,
+  )
+}
+
+/* =============================== 批5：统计（集成收尾） =============================== */
+
+export function fetchKbStats(): Promise<KbResult<KbStats>> {
+  const ctx = currentKbCtx()
+  return withMock(
+    () => api<KbStats>(`${KB}/stats`),
+    () => {
+      const visible = visibleSpaces(SPACES, membersOf, ctx)
+      const visibleIds = new Set(visible.map((s) => s.id))
+      const docs = DOCS.filter((d) => d.type === "DOC" && visibleIds.has(d.spaceId))
+      const editableSpaceCount = visible.filter((s) => canEdit(roleOf(s, membersOf(s.id), ctx))).length
+      const recentDocs = [...docs]
+        .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
+        .slice(0, 5)
+        .map((d) => ({ docId: d.id, title: d.title, spaceId: d.spaceId, spaceName: SPACES.find((s) => s.id === d.spaceId)?.name ?? "", updatedAt: d.updatedAt }))
+      return { spaceCount: visible.length, docCount: docs.length, editableSpaceCount, tagCount: TAGS.length, recentDocs }
+    },
   )
 }
 
