@@ -45,6 +45,7 @@ import {
   Files,
   FileCog,
   LayoutTemplate,
+  Library,
 } from "lucide-react"
 
 export interface MenuItem {
@@ -76,6 +77,7 @@ export const menuTree: MenuItem[] = [
     ],
   },
   { title: "自动化编排", path: "/automation", icon: Zap },
+  { title: "知识库", path: "/knowledge", icon: Library },
   {
     title: "单据管理",
     path: "/bizdoc",

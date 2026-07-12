@@ -25,6 +25,8 @@ const BizdocRunPage = lazy(() => import("@/pages/bizdoc/run"))
 const BizdocTplDesignerPage = lazy(() => import("@/pages/bizdoc/tpl-designer"))
 const BizdocTplsPage = lazy(() => import("@/pages/bizdoc/tpls-page"))
 const AutomationDesignerPage = lazy(() => import("@/pages/automation/designer-page"))
+const KnowledgeSpaceListPage = lazy(() => import("@/pages/knowledge/space-list"))
+const KnowledgeSpaceDetailPage = lazy(() => import("@/pages/knowledge/space-detail"))
 const DocumentReceivePage = lazy(() => import("@/pages/document/receive"))
 const DocumentReceiveDetailPage = lazy(() => import("@/pages/document/receive-detail"))
 const DocumentSendPage = lazy(() => import("@/pages/document/send"))
@@ -148,6 +150,10 @@ export default function App() {
               <Route index element={<AutomationPage />} />
               {/* 设计器整页（/automation/new/design 新建；:code 编辑） */}
               <Route path=":code/design" element={<AutomationDesignerPage />} />
+            </Route>
+            <Route path="knowledge">
+              <Route index element={<KnowledgeSpaceListPage />} />
+              <Route path=":spaceId" element={<KnowledgeSpaceDetailPage />} />
             </Route>
             <Route path="document">
               <Route index element={<Navigate to="/document/receive" replace />} />
