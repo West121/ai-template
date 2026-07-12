@@ -9,6 +9,7 @@ import {
 import { zodResolver } from "@hookform/resolvers/zod"
 import type { ColumnDef } from "@tanstack/react-table"
 import {
+  ArrowLeftRight,
   BriefcaseBusiness,
   Building2,
   ChevronDown,
@@ -36,6 +37,7 @@ import { Drawer } from "@/components/drawer"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { DataDimensionAuthz } from "@/components/system/data-dimension-authz"
 import { ResignWizard } from "@/components/system/resign-wizard"
+import { TransferDialog } from "@/components/system/transfer-dialog"
 import { DataTable, indexColumn } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { RecordPicker, RecordPickerField, type RecordPickerColumn } from "@/components/record-picker"
@@ -345,6 +347,8 @@ export default function UserPage() {
   const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null)
   // 离职交接向导目标（在职用户点「离职」打开三步向导）
   const [resignTarget, setResignTarget] = useState<UserRow | null>(null)
+  // 转岗弹层目标（在职用户点「转岗」变更主任职）
+  const [transferTarget, setTransferTarget] = useState<UserRow | null>(null)
 
   // 批量操作目标（保留选中行原始数据 + 清空选中的回调）
   const [moveDeptTarget, setMoveDeptTarget] = useState<{ rows: UserRow[]; clear: () => void } | null>(null)
@@ -857,6 +861,12 @@ export default function UserPage() {
               </DropdownMenuItem>
               <DropdownMenuItem disabled={!canEdit} onClick={() => setResetTarget(row.original)}>
                 <KeyRound className="size-3.5" /> 重置密码
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!canEdit || row.original.status === "RESIGNED"}
+                onClick={() => setTransferTarget(row.original)}
+              >
+                <ArrowLeftRight className="size-3.5" /> 转岗
               </DropdownMenuItem>
               <DropdownMenuItem
                 disabled={!canEdit || row.original.status === "RESIGNED"}
@@ -1855,6 +1865,27 @@ export default function UserPage() {
           users={tableRows}
           onDone={() => {
             setResignTarget(null)
+            reload()
+          }}
+        />
+      </ErrorBoundary>
+
+      {/* 转岗弹层（DP3）：变更主任职（部门/岗位/角色）+ 旧部门数据保留天数；局部 ErrorBoundary 防坏数据白屏 */}
+      <ErrorBoundary label="transfer-dialog">
+        <TransferDialog
+          open={!!transferTarget}
+          onOpenChange={(o) => !o && setTransferTarget(null)}
+          user={
+            transferTarget
+              ? { id: transferTarget.id, name: transferTarget.name, currentDeptName: transferTarget.primaryDeptName }
+              : { id: 0, name: "" }
+          }
+          deptOptions={deptOptions}
+          postOptions={postOptions}
+          roleOptions={roleOptions}
+          canEdit={canEdit}
+          onDone={() => {
+            setTransferTarget(null)
             reload()
           }}
         />
