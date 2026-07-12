@@ -2161,6 +2161,17 @@ async function mkProcFull(code, designer, extra = {}) {
   const afterExpire = await titlesOf(uTok)
   check("DP3 保留期过期→收敛：仍见新部门B单, 不再见旧部门A单",
     afterExpire.includes(`DP3B单-${TS}`) && !afterExpire.includes(`DP3A单-${TS}`), JSON.stringify(afterExpire.filter((t) => t.startsWith("DP3"))))
+  // roleIds=keep 修复（疾风对账）：转岗只传 dept/post、不传 roleIds → 角色保持不变（不丢角色，数据丢失级 bug 回归）
+  await call(admin.token, "POST", `/api/system/users/${uId}/transfer`, { deptId: aId, postId: postId3 })
+  const primaryAsg = ((await call(admin.token, "GET", `/api/system/users/${uId}/assignments`)).body?.data ?? []).find((a) => a.primary)
+  check("DP3 转岗只传 dept/post 不传 roleIds → 角色保持不变(不丢角色)",
+    (primaryAsg?.roleNames ?? []).includes("DP3转岗角色"), JSON.stringify(primaryAsg?.roleNames))
+  // 离职用户拒转岗 = BusinessException(400 非 404)：造一个离职用户验证
+  const resignU = (await call(admin.token, "POST", "/api/system/users", { username: `dp3res_${TS}`, name: "dp3res", password: "admin123", deptId: aId, postId: postId3, roleIds: [dp3rId] })).body?.data?.id
+  await call(admin.token, "POST", `/api/system/users/${resignU}/resign`, { successorId: uId, reason: "验证" })
+  const transferResigned = await call(admin.token, "POST", `/api/system/users/${resignU}/transfer`, { deptId: bId, postId: postId3 })
+  check("DP3 离职用户拒转岗 → 业务错(code 400,非 404)", transferResigned.body?.code === 400, JSON.stringify(transferResigned.body?.code))
+  await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [resignU] })
   // 自清（转岗/保留期测试复原）
   const inst3a = (await call(admin.token, "GET", "/api/wf/instances/my?pageNum=1&pageSize=200")).body?.data?.list?.find((r) => r.title === taskTitle)
   if (inst3a) await call(admin.token, "POST", `/api/wf/instances/${inst3a.id}/cancel`)

@@ -1,5 +1,6 @@
 package com.xingchen.oa.office.support;
 
+import com.xingchen.oa.system.datadim.CriteriaScopes;
 import com.xingchen.oa.system.datadim.DataDimensionService;
 import com.xingchen.oa.system.datadim.DimensionScope;
 import lombok.RequiredArgsConstructor;
@@ -41,9 +42,8 @@ public class DataScopeSupport {
             }
             String column = binding.getValue();
             Set<Long> values = scope.values();
-            // CUSTOM：col IN (可见集)；空集合 → 该维什么都看不到（默认更严）
-            spec = spec.and((root, query, cb) ->
-                    values.isEmpty() ? cb.disjunction() : root.get(column).in(values));
+            // CUSTOM：col IN (可见集)（DP1b：超大集自动切 = ANY(array)）；空集合 → 什么都看不到（默认更严）
+            spec = spec.and((root, query, cb) -> CriteriaScopes.inOrAny(cb, root.get(column), values));
         }
         return spec;
     }

@@ -271,6 +271,21 @@ public class DataDimensionService {
 
     // ==================== 失效钩子 ====================
 
+    /**
+     * DP1b 登录即预热：强制重算并写入该用户各维可见范围缓存，使登录后首个受权限约束的查询直接命中，
+     * 不冷启动。Redis 故障忽略（下次查询懒加载兜底）。
+     */
+    public void prewarm(Long userId) {
+        if (userId == null) {
+            return;
+        }
+        try {
+            redis.opsForValue().set(CACHE_PREFIX + userId, serialize(computeAllScopes(userId)), CACHE_TTL);
+        } catch (Exception e) {
+            log.warn("DP 维度缓存预热失败(忽略) user={}: {}", userId, e.getMessage());
+        }
+    }
+
     /** 精准失效单个用户可见范围缓存（授权/任职变更 <1s 生效）。 */
     public void evictUser(Long userId) {
         if (userId == null) {

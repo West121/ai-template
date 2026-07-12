@@ -37,6 +37,13 @@ public class SysDept {
     @Column(nullable = false, length = 255)
     private String ancestors = "";
 
+    /**
+     * 物化路径（DP1b），含自身，如 '/1/4/12/'。子树查询 `path LIKE '/1/4/%'` 走 text_pattern_ops 索引，
+     * 替代 ancestors 递归。与 ancestors 结果一致（并存维护，向后兼容）。
+     */
+    @Column(length = 512)
+    private String path;
+
     /** 部门编码，如 XC-TECH，全局唯一（uk_sys_dept_code），可空 */
     @Column(unique = true, length = 32)
     private String code;

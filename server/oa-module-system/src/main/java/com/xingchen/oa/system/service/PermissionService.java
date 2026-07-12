@@ -142,10 +142,10 @@ public class PermissionService {
     private DataScope resolveDataScope(Long userId, List<SysUserAssignment> activeList) {
         boolean selfOnly = false;
         Set<Long> deptIds = new HashSet<>();
-        List<SysDept> allDepts = null;
 
         for (SysUserAssignment assignment : activeList) {
-            Long ownDeptId = assignment.getDept() != null ? assignment.getDept().getId() : null;
+            SysDept ownDept = assignment.getDept();
+            Long ownDeptId = ownDept != null ? ownDept.getId() : null;
             for (SysRole role : assignment.getRoles()) {
                 if (Boolean.FALSE.equals(role.getEnabled())) {
                     continue;
@@ -154,11 +154,12 @@ public class PermissionService {
                     case SysRole.SCOPE_ALL:
                         return DataScope.all(userId);
                     case SysRole.SCOPE_DEPT_AND_CHILD:
-                        if (ownDeptId != null) {
-                            if (allDepts == null) {
-                                allDepts = deptRepository.findAll();
-                            }
-                            deptIds.addAll(withDescendants(ownDeptId, allDepts));
+                        // DP1b：物化路径索引子树（path LIKE '/1/4/%'），替代 findAll + 递归（每请求生效）
+                        if (ownDept != null && ownDept.getPath() != null) {
+                            deptIds.addAll(deptRepository.findIdsByPathPrefix(ownDept.getPath() + "%"));
+                            deptIds.add(ownDeptId);
+                        } else if (ownDeptId != null) {
+                            deptIds.add(ownDeptId);
                         }
                         break;
                     case SysRole.SCOPE_DEPT:
@@ -186,23 +187,4 @@ public class PermissionService {
         return DataScope.self(userId);
     }
 
-    /**
-     * 本部门 + 全部子孙部门（通过 ancestors 链匹配）。
-     */
-    private Set<Long> withDescendants(Long deptId, List<SysDept> allDepts) {
-        Set<Long> ids = new HashSet<>();
-        ids.add(deptId);
-        String target = String.valueOf(deptId);
-        for (SysDept dept : allDepts) {
-            String ancestors = dept.getAncestors();
-            if (ancestors == null || ancestors.isBlank()) {
-                continue;
-            }
-            List<String> chain = new ArrayList<>(List.of(ancestors.split(",")));
-            if (chain.contains(target)) {
-                ids.add(dept.getId());
-            }
-        }
-        return ids;
-    }
 }

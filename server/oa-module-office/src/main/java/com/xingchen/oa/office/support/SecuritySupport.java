@@ -4,6 +4,7 @@ import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.common.security.CurrentUserHolder;
 import com.xingchen.oa.common.security.DataScope;
 import com.xingchen.oa.common.security.UserContext;
+import com.xingchen.oa.system.datadim.CriteriaScopes;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.util.StringUtils;
 
@@ -49,7 +50,7 @@ public final class SecuritySupport {
                 return cb.equal(root.get(userField), scope.userId());
             }
             return cb.or(
-                    root.get(deptField).in(scope.deptIds()),
+                    CriteriaScopes.inOrAny(cb, root.get(deptField), scope.deptIds()),
                     cb.equal(root.get(userField), scope.userId()));
         };
     }

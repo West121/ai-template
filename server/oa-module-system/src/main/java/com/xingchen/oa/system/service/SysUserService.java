@@ -102,7 +102,8 @@ public class SysUserService {
                 Set<Long> deptIds = includeSubDept ? deptService.descendantDeptIds(deptId) : Set.of(deptId);
                 var sub = query.subquery(Long.class);
                 var a = sub.from(SysUserAssignment.class);
-                sub.select(a.get("userId")).where(a.get("dept").get("id").in(deptIds));
+                sub.select(a.get("userId")).where(
+                        com.xingchen.oa.system.datadim.CriteriaScopes.inOrAny(cb, a.get("dept").get("id"), deptIds));
                 predicates.add(root.get("id").in(sub));
             }
             return cb.and(predicates.toArray(new Predicate[0]));
@@ -221,7 +222,11 @@ public class SysUserService {
         SysPost newPost = requirePost(req.postId());
         primary.setDept(newDept);
         primary.setPost(newPost);
-        primary.setRoles(resolveRoles(req.roleIds()));
+        // 转岗是「部分变更」：roleIds=null → 保留原角色（前端不勾选=只改部门/岗位，不丢角色）；
+        // []=清空；非空=替换（对齐 leaderIds 的 null 不改/[] 清空约定）。
+        if (req.roleIds() != null) {
+            primary.setRoles(resolveRoles(req.roleIds()));
+        }
         assignmentRepository.save(primary);
         user.setDept(newDept.getName());
         user.setPost(newPost.getName());

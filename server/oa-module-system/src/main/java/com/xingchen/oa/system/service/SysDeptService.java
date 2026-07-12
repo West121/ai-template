@@ -109,12 +109,18 @@ public class SysDeptService {
     }
 
     /**
-     * 部门自身 + 全部子孙部门 id（通过 ancestors 祖先链段级匹配，避免 id=1 误命中 id=11）。
-     * 对外复用（如按父部门过滤用户"含子部门"），会一次性加载全部部门。
+     * 部门自身 + 全部子孙部门 id。DP1b：改走物化路径 {@code path LIKE '/1/4/%'} 索引查询，
+     * 替代原 ancestors 全表加载 + 递归（结果一致；段级前缀天然避免 id=1 误命中 id=11）。
      */
     @Transactional(readOnly = true)
     public Set<Long> descendantDeptIds(Long deptId) {
-        return descendantDeptIds(deptId, deptRepository.findAll());
+        String path = deptRepository.findById(deptId).map(SysDept::getPath).orElse(null);
+        if (path == null) {
+            return Set.of(deptId); // 兜底（path 未回填/部门不存在）
+        }
+        Set<Long> ids = new HashSet<>(deptRepository.findIdsByPathPrefix(path + "%"));
+        ids.add(deptId); // path LIKE prefix 已含自身，保险再加
+        return ids;
     }
 
     private Set<Long> descendantDeptIds(Long deptId, List<SysDept> all) {
@@ -150,6 +156,9 @@ public class SysDeptService {
         dept.setCode(resolveCode(request.code(), null));
         dept.setLeaderId(requireLeader(request.leaderId()));
         dept.setEnabled(request.enabled() == null || request.enabled());
+        dept.setPath("/"); // 占位满足 NOT NULL；save 取得自增 id 后回填真实物化路径（同事务）
+        deptRepository.save(dept);
+        dept.setPath(parentPath(parentId) + dept.getId() + "/"); // DP1b 物化路径（含自身）
         deptRepository.save(dept);
         return toNode(dept, 0L, leaderNameOf(dept.getLeaderId()), List.of());
     }
@@ -224,22 +233,36 @@ public class SysDeptService {
             throw new BusinessException(400, "父部门不能是自身");
         }
         String oldChain = chainOf(dept);
+        String oldPath = dept.getPath(); // DP1b：捕获旧物化路径前缀（子孙一并前缀替换）
         String newAncestors = resolveAncestors(newParentId);
         if ((newAncestors + ",").startsWith(oldChain + ",")) {
             throw new BusinessException(400, "父部门不能是自身的下级部门");
         }
         dept.setParentId(newParentId);
         dept.setAncestors(newAncestors);
+        dept.setPath(parentPath(newParentId) + dept.getId() + "/");
         String newChain = chainOf(dept);
-        // 同步全部子孙的 ancestors 前缀
+        String newPath = dept.getPath();
+        // 同步全部子孙的 ancestors + path 前缀（两者并存维护，结果一致）
         List<SysDept> all = deptRepository.findAll();
         for (SysDept d : all) {
             if (!Objects.equals(d.getId(), dept.getId())
                     && (d.getAncestors() + ",").startsWith(oldChain + ",")) {
                 d.setAncestors(newChain + d.getAncestors().substring(oldChain.length()));
+                if (oldPath != null && d.getPath() != null && d.getPath().startsWith(oldPath)) {
+                    d.setPath(newPath + d.getPath().substring(oldPath.length()));
+                }
                 deptRepository.save(d);
             }
         }
+    }
+
+    /** 父部门物化路径（根返回 "/"）。 */
+    private String parentPath(long parentId) {
+        if (parentId == ROOT_PARENT_ID) {
+            return "/";
+        }
+        return deptRepository.findById(parentId).map(SysDept::getPath).orElse("/");
     }
 
     private String chainOf(SysDept dept) {

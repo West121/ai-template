@@ -3,6 +3,7 @@ package com.xingchen.oa.system.service;
 import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.common.security.UserContext;
 import com.xingchen.oa.infra.service.LoginLogService;
+import com.xingchen.oa.system.datadim.DataDimensionService;
 import com.xingchen.oa.system.dto.LoginRequest;
 import com.xingchen.oa.system.dto.LoginResponse;
 import com.xingchen.oa.system.entity.SysUser;
@@ -25,6 +26,7 @@ public class AuthService {
     private final JwtTokenProvider jwtTokenProvider;
     private final PermissionService permissionService;
     private final LoginLogService loginLogService;
+    private final DataDimensionService dataDimensionService;
 
     @Transactional(readOnly = true)
     public LoginResponse login(LoginRequest request) {
@@ -42,6 +44,7 @@ public class AuthService {
             }
             // 默认激活主任职
             LoginResponse response = buildResponse(user, null, true);
+            dataDimensionService.prewarm(user.getId()); // DP1b：登录即预热各维可见范围缓存
             loginLogService.record(request.username(), true, "登录成功");
             return response;
         } catch (BusinessException e) {

@@ -124,7 +124,8 @@ RECEIVE status: TO_SIGN(待签收)/PROCESSING(办理中)/FINISHED(已办结)；S
 - GET `/api/system/data-dimensions/{code}/options` → `[{id,label}]`（该维 CUSTOM 可选值，泛化端点，委托 provider；未注册维度→400 白名单红线）
 - GET|PUT `/api/system/roles/{id}/data-dimensions`、GET|PUT `/api/system/users/{id}/data-dimensions` → `[{dimension,scope:"ALL"|"CUSTOM",values:number[]}]`（PUT 全量替换，写需 system:role:edit / system:user:edit）
 - 语义：未配维度=不限；ALL=不限；CUSTOM=仅 values 集内（空集=什么都看不到，默认更严）。维度白名单在后端（注册才可配，取值范围校验）。多维**维度间 AND**；内建 dept 维仍走既有 5 档 role.dataScope（**向后兼容：只有 dept 维的实体行为完全不变**）。
-- 性能：用户各维可见 id 集**预计算 → Redis 缓存**（`dp:dims:{userId}`，TTL 30min + 授权/任职变更主动失效），查询侧直接取集拼 `col IN (集)`，不 join 授权表；ALL 短路不拼谓词。基础数据 `sys_cost_center`/`biz_project`；示例实体 oa_approval 接入 costCenter(cost_center_id)/project(project_id) 维度。
+- 性能（DP1a）：用户各维可见 id 集**预计算 → Redis 缓存**（`dp:dims:{userId}`，TTL 30min + 授权/任职变更主动失效），查询侧直接取集拼 `col IN (集)`，不 join 授权表；ALL 短路不拼谓词。基础数据 `sys_cost_center`/`biz_project`；示例实体 oa_approval 接入 costCenter(cost_center_id)/project(project_id) 维度。
+- 性能（DP1b 深水区）：① **部门物化路径** `sys_dept.path`（如 `/1/4/12/`，text_pattern_ops 前缀索引），子树 `descendantDeptIds`/DEPT_AND_CHILD 改 `path LIKE '/1/4/%'` 索引查询，**替代 ancestors 递归 + 全表加载**（结果一致，向后兼容）；② **登录即预热** dp:dims 缓存（首个受权限查询不冷启动）；③ 可见集谓词走 `col IN` → PG 优化为 `= ANY` 索引扫描（压测：2001 部门/100w 行按权限过滤端点 P95≈285ms，其中 dept_id 索引扫描 count≈187ms；较错误的 array `@>` 谓词快 15×）；④ 缓存失效已覆盖 组织/角色/授权/任职/离职/转岗（dept 范围每请求经 path 索引重解析、无缓存故无需失效）。到千万路径：分页 count 优化（近似 count/keyset）+ 按 dept_id/created 声明式分区 + 冷热归档（列 DP1b+ TODO）。压测 harness：`server/perf-dp1b.mjs`（seed→计时→自清）。
 
 ### 离职 offboarding + 交接治理（DP2，oa-module-system）
 - SysUser 加 `status`(ACTIVE/RESIGNED) + `resignDate`；UserResponse 增 `status` 字段。RESIGNED → **禁登录** + **已发 token 即时失效**（loadUserContext 每请求校验）+ 停用其任职（退出组织范围）+ 数据权限缓存即时失效。
