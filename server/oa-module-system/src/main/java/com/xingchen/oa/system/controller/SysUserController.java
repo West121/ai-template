@@ -1,10 +1,15 @@
 package com.xingchen.oa.system.controller;
 
+import com.xingchen.oa.common.core.BatchResult;
 import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.core.R;
 import com.xingchen.oa.common.log.OperLog;
 import com.xingchen.oa.system.dto.AssignmentCreateRequest;
 import com.xingchen.oa.system.dto.AssignmentInfo;
+import com.xingchen.oa.system.dto.BatchIdsRequest;
+import com.xingchen.oa.system.dto.BatchMoveDeptRequest;
+import com.xingchen.oa.system.dto.BatchSetRolesRequest;
+import com.xingchen.oa.system.dto.BatchStatusRequest;
 import com.xingchen.oa.system.dto.UserCreateRequest;
 import com.xingchen.oa.system.dto.UserEnabledRequest;
 import com.xingchen.oa.system.dto.UserResponse;
@@ -40,9 +45,10 @@ public class SysUserController {
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Long deptId,
             @RequestParam(required = false) Boolean enabled,
+            @RequestParam(defaultValue = "true") boolean includeSubDept,
             @RequestParam(defaultValue = "1") int pageNum,
             @RequestParam(defaultValue = "10") int pageSize) {
-        return R.ok(userService.page(keyword, deptId, enabled, pageNum, pageSize));
+        return R.ok(userService.page(keyword, deptId, enabled, includeSubDept, pageNum, pageSize));
     }
 
     @GetMapping("/{id}")
@@ -85,6 +91,38 @@ public class SysUserController {
     public R<Void> delete(@PathVariable Long id) {
         userService.delete(id);
         return R.ok();
+    }
+
+    // ------------------------------------------------------------
+    // 批量操作（统一协议 BatchResult{successIds, failed[{id,reason}]}；护栏：不误删/停自己与超管）
+    // ------------------------------------------------------------
+
+    @PostMapping("/batch-delete")
+    @PreAuthorize("hasAuthority('system:user:edit')")
+    @OperLog(module = "用户", action = "批量删除")
+    public R<BatchResult> batchDelete(@Valid @RequestBody BatchIdsRequest request) {
+        return R.ok(userService.batchDelete(request.ids()));
+    }
+
+    @PostMapping("/batch-status")
+    @PreAuthorize("hasAuthority('system:user:edit')")
+    @OperLog(module = "用户", action = "批量启停")
+    public R<BatchResult> batchStatus(@Valid @RequestBody BatchStatusRequest request) {
+        return R.ok(userService.batchUpdateEnabled(request.ids(), request.enabled()));
+    }
+
+    @PostMapping("/batch-move-dept")
+    @PreAuthorize("hasAuthority('system:user:edit')")
+    @OperLog(module = "用户", action = "批量移动部门")
+    public R<BatchResult> batchMoveDept(@Valid @RequestBody BatchMoveDeptRequest request) {
+        return R.ok(userService.batchMoveDept(request.ids(), request.deptId()));
+    }
+
+    @PostMapping("/batch-set-roles")
+    @PreAuthorize("hasAuthority('system:user:edit')")
+    @OperLog(module = "用户", action = "批量设置角色")
+    public R<BatchResult> batchSetRoles(@Valid @RequestBody BatchSetRolesRequest request) {
+        return R.ok(userService.batchSetRoles(request.ids(), request.roleIds()));
     }
 
     // ------------------------------------------------------------

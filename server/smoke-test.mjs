@@ -558,6 +558,107 @@ check("配置角色权限", setP.body?.code === 0)
 const dr = await call(admin.token, "DELETE", `/api/system/roles/${rid}`)
 check("删除角色", dr.body?.code === 0)
 
+/* ---------- 11b. 系统管理·批量操作（磐石：统一协议 {successIds, failed[{id,reason}]}） ---------- */
+const BTS = Date.now()
+const adminRoleId = roles.body.data.list.find((r) => r.code === "ADMIN")?.id
+const shape = (d) => Array.isArray(d?.successIds) && Array.isArray(d?.failed)
+async function mkBatchUser(suffix, roleIdsArg = [roleId]) {
+  const r = await call(admin.token, "POST", "/api/system/users", {
+    username: `sbatch_${suffix}_${BTS}`, name: `批量${suffix}`, password: "admin123",
+    deptId, postId, roleIds: roleIdsArg,
+  })
+  return r.body?.data?.id ?? r.body?.data
+}
+const bu1 = await mkBatchUser("u1")
+const bu2 = await mkBatchUser("u2")
+const bu3 = await mkBatchUser("u3")
+const bAdmin = await mkBatchUser("adm", [adminRoleId]) // 第二个超管，用于验证「超管护栏」对非本人用户也生效
+check("批量:测试用户与第二超管创建成功", !!(bu1 && bu2 && bu3 && bAdmin && adminRoleId), `bu1=${bu1} bAdmin=${bAdmin} adminRoleId=${adminRoleId}`)
+
+// (1) batch-status 启停
+const bsOff = await call(admin.token, "POST", "/api/system/users/batch-status", { ids: [bu1, bu2], enabled: false })
+check("batch-status 响应形状 {successIds,failed}", shape(bsOff.body?.data), JSON.stringify(bsOff.body?.data))
+check("batch-status 停用成功 2 条、无失败", bsOff.body?.data?.successIds?.length === 2 && bsOff.body?.data?.failed?.length === 0)
+const bu1Off = await call(admin.token, "GET", `/api/system/users/${bu1}`)
+check("batch-status 停用已生效", bu1Off.body?.data?.enabled === false)
+const bsOn = await call(admin.token, "POST", "/api/system/users/batch-status", { ids: [bu1, bu2], enabled: true })
+check("batch-status 启用成功 2 条", bsOn.body?.data?.successIds?.length === 2)
+
+// (2) batch-status 护栏：含自己(admin id=1)+超管(bAdmin) → failed 带 reason，其余普通用户 success
+const bsGuard = await call(admin.token, "POST", "/api/system/users/batch-status", { ids: [1, bAdmin, bu1], enabled: false })
+check("batch-status 护栏：自己→failed(带 reason)",
+  bsGuard.body?.data?.failed?.some((f) => f.id === 1 && (f.reason ?? "").length > 0), JSON.stringify(bsGuard.body?.data))
+check("batch-status 护栏：超管(非本人)→failed",
+  bsGuard.body?.data?.failed?.some((f) => f.id === bAdmin), JSON.stringify(bsGuard.body?.data))
+check("batch-status 护栏：普通用户仍 success", bsGuard.body?.data?.successIds?.includes(bu1))
+await call(admin.token, "POST", "/api/system/users/batch-status", { ids: [bu1], enabled: true }) // 复原
+
+// (3) batch-move-dept：bu1/bu2 → 人事行政部，含幂等
+const bm = await call(admin.token, "POST", "/api/system/users/batch-move-dept", { ids: [bu1, bu2], deptId: hrDept.id })
+check("batch-move-dept 成功 2 条、无失败", bm.body?.data?.successIds?.length === 2 && bm.body?.data?.failed?.length === 0, JSON.stringify(bm.body?.data))
+const inHr = await call(admin.token, "GET", `/api/system/users?pageNum=1&pageSize=300&deptId=${hrDept.id}&includeSubDept=false`)
+const inHrIds = new Set((inHr.body?.data?.list ?? []).map((u) => u.id))
+check("batch-move-dept 移动生效(在目标部门直属列表)", inHrIds.has(bu1) && inHrIds.has(bu2))
+const bmIdem = await call(admin.token, "POST", "/api/system/users/batch-move-dept", { ids: [bu1], deptId: hrDept.id })
+check("batch-move-dept 幂等(已在目标部门仍 success)", bmIdem.body?.data?.successIds?.includes(bu1))
+const bmBadDept = await call(admin.token, "POST", "/api/system/users/batch-move-dept", { ids: [bu1], deptId: 999999999 })
+check("batch-move-dept 目标部门非法 → 整体 400/业务错", bmBadDept.body?.code !== 0)
+
+// (4) batch-set-roles：普通用户 success；自己(id=1) → failed（防自锁）
+const brole = await call(admin.token, "POST", "/api/system/users/batch-set-roles", { ids: [bu3, 1], roleIds: [roleId] })
+check("batch-set-roles 普通用户 success", brole.body?.data?.successIds?.includes(bu3), JSON.stringify(brole.body?.data))
+check("batch-set-roles 本人 → failed(防自锁)", brole.body?.data?.failed?.some((f) => f.id === 1))
+
+// (5) includeSubDept 含/不含子部门数量差（公司节点直属通常为空，含子部门=全员）
+const incT = await call(admin.token, "GET", `/api/system/users?pageNum=1&pageSize=500&deptId=${company.id}&includeSubDept=true`)
+const incF = await call(admin.token, "GET", `/api/system/users?pageNum=1&pageSize=500&deptId=${company.id}&includeSubDept=false`)
+const incDefault = await call(admin.token, "GET", `/api/system/users?pageNum=1&pageSize=500&deptId=${company.id}`)
+check("includeSubDept=true 含子部门总数 > 不含子部门总数",
+  (incT.body?.data?.total ?? 0) > (incF.body?.data?.total ?? -1),
+  `inc=${incT.body?.data?.total} exc=${incF.body?.data?.total}`)
+check("includeSubDept 默认=true（不传 == 显式 true）",
+  incDefault.body?.data?.total === incT.body?.data?.total,
+  `default=${incDefault.body?.data?.total} inc=${incT.body?.data?.total}`)
+
+// (6) batch-delete 部分成功部分失败：ids=[普通×3, 自己=1, 超管 bAdmin, 不存在]
+const bd = await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [bu1, bu2, bu3, 1, bAdmin, 999999999] })
+check("batch-delete 响应形状 {successIds,failed}", shape(bd.body?.data), JSON.stringify(bd.body?.data))
+check("batch-delete 删自己(id=1) → failed 带 reason",
+  bd.body?.data?.failed?.some((f) => f.id === 1 && typeof f.reason === "string" && f.reason.length > 0), JSON.stringify(bd.body?.data?.failed))
+check("batch-delete 超管(非本人 bAdmin) → failed", bd.body?.data?.failed?.some((f) => f.id === bAdmin))
+check("batch-delete 普通用户 bu1/bu2/bu3 → success", [bu1, bu2, bu3].every((x) => bd.body?.data?.successIds?.includes(x)))
+check("batch-delete 幂等：不存在 id 计 success", bd.body?.data?.successIds?.includes(999999999))
+const goneU1 = await call(admin.token, "GET", `/api/system/users/${bu1}`)
+check("batch-delete 已真正删除(GET 404)", goneU1.body?.code !== 0)
+
+// (7) 角色 batch-delete：内置 ADMIN 不可删、被引用不可删、临时角色可删、不存在幂等
+const tmpRole = await call(admin.token, "POST", "/api/system/roles", { code: `SB_ROLE_${BTS}`, name: `批量角色${BTS}`, dataScope: "SELF" })
+const tmpRoleId = tmpRole.body?.data?.id ?? tmpRole.body?.data
+const rbd = await call(admin.token, "POST", "/api/system/roles/batch-delete", { ids: [adminRoleId, roleId, tmpRoleId, 888888888] })
+check("角色 batch-delete 形状", shape(rbd.body?.data), JSON.stringify(rbd.body?.data))
+check("角色 batch-delete 内置 ADMIN → failed", rbd.body?.data?.failed?.some((f) => f.id === adminRoleId))
+check("角色 batch-delete 被任职引用(EMPLOYEE) → failed", rbd.body?.data?.failed?.some((f) => f.id === roleId))
+check("角色 batch-delete 未引用临时角色 → success", rbd.body?.data?.successIds?.includes(tmpRoleId))
+check("角色 batch-delete 不存在 id → success(幂等)", rbd.body?.data?.successIds?.includes(888888888))
+
+// (8) 岗位 batch-delete：被引用不可删、临时可删
+const tmpPost = await call(admin.token, "POST", "/api/system/posts", { code: `SB_POST_${BTS}`, name: `批量岗位${BTS}`, sort: 99 })
+const tmpPostId = tmpPost.body?.data?.id ?? tmpPost.body?.data
+const usedPostId = postId // 已被现有任职引用
+const pbd = await call(admin.token, "POST", "/api/system/posts/batch-delete", { ids: [tmpPostId, usedPostId] })
+check("岗位 batch-delete 形状", shape(pbd.body?.data))
+check("岗位 batch-delete 临时岗位 → success", pbd.body?.data?.successIds?.includes(tmpPostId))
+check("岗位 batch-delete 被引用岗位 → failed", pbd.body?.data?.failed?.some((f) => f.id === usedPostId))
+
+// (9) 权限护栏：无 system:user:edit 的 zhangsan 调批量 → 403
+const bdDeny = await call(zhangsan.token, "POST", "/api/system/users/batch-delete", { ids: [bu2] })
+check("批量接口鉴权：zhangsan 调 batch-delete → 403", bdDeny.status === 403, `status=${bdDeny.status}`)
+
+// 清理第二超管 bAdmin：先降级角色（batch-set-roles 允许改他人）再删除
+await call(admin.token, "POST", "/api/system/users/batch-set-roles", { ids: [bAdmin], roleIds: [roleId] })
+const cleanupAdmin = await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [bAdmin] })
+check("清理:第二超管降级后可删除", cleanupAdmin.body?.data?.successIds?.includes(bAdmin), JSON.stringify(cleanupAdmin.body?.data))
+
 /* ---------- 12. 定时任务信息 ---------- */
 const jobs = await call(admin.token, "GET", "/api/system/jobs")
 check("定时任务信息(3 个 handler)", jobs.body?.data?.handlers?.length === 3 && jobs.body.data.appname === "oa-executor")
@@ -614,6 +715,44 @@ const operLogs = await call(admin.token, "GET", "/api/infra/logs/oper?pageNum=1&
 check("infra 操作日志非空", (operLogs.body?.data?.total ?? 0) > 0)
 const rt = await call(admin.token, "GET", "/api/infra/logs/runtime?lines=50")
 check("infra 运行日志 tail", rt.body?.code === 0 && Array.isArray(rt.body.data?.lines) && rt.body.data.lines.length > 0)
+
+/* ---------- 13b. 基础设施·批量删除（磐石：统一协议） ---------- */
+const IBTS = Date.now()
+const shapeI = (d) => Array.isArray(d?.successIds) && Array.isArray(d?.failed)
+// 文件批量删除：上传 2 个文件后批量删 + 幂等（不存在 id 计 success）
+async function upSmokeFile(name) {
+  const f = new FormData()
+  f.append("file", new Blob([`批量文件-${name}-${IBTS}`], { type: "text/plain" }), `${name}.txt`)
+  const b = await fetch(`${BASE}/api/infra/files/upload`, {
+    method: "POST", headers: { Authorization: `Bearer ${admin.token}` }, body: f,
+  }).then((r) => r.json()).catch(() => null)
+  return b?.data?.id
+}
+const bf1 = await upSmokeFile("bf1")
+const bf2 = await upSmokeFile("bf2")
+const fbd = await call(admin.token, "POST", "/api/infra/files/batch-delete", { ids: [bf1, bf2, 999999999] })
+check("infra 文件 batch-delete 形状", shapeI(fbd.body?.data), JSON.stringify(fbd.body?.data))
+check("infra 文件 batch-delete 2 个 + 不存在幂等 → success 3",
+  [bf1, bf2, 999999999].every((x) => fbd.body?.data?.successIds?.includes(x)), JSON.stringify(fbd.body?.data))
+// 字典类型批量删除：建两个临时类型 → 批量删 + 护栏（有字典项不可删）
+const t1 = await call(admin.token, "POST", "/api/infra/dict/types", { code: `sb_dt1_${IBTS}`, name: `批量字典1` })
+const t2 = await call(admin.token, "POST", "/api/infra/dict/types", { code: `sb_dt2_${IBTS}`, name: `批量字典2` })
+const t1Id = t1.body?.data?.id ?? t1.body?.data
+const t2Id = t2.body?.data?.id ?? t2.body?.data
+// 给 t2 加一个字典项，使其「有子项不可删」
+await call(admin.token, "POST", "/api/infra/dict/items", { typeId: t2Id, label: "项A", value: "A" })
+const dtbd = await call(admin.token, "POST", "/api/infra/dict/types/batch-delete", { ids: [t1Id, t2Id] })
+check("infra 字典类型 batch-delete 形状", shapeI(dtbd.body?.data), JSON.stringify(dtbd.body?.data))
+check("infra 字典类型 batch-delete 空类型 → success", dtbd.body?.data?.successIds?.includes(t1Id))
+check("infra 字典类型 batch-delete 含字典项 → failed", dtbd.body?.data?.failed?.some((f) => f.id === t2Id))
+// 字典项批量删除：删掉 t2 下字典项后，再删空类型 t2 收尾（自清）
+const t2Items = await call(admin.token, "GET", `/api/infra/dict/types/${t2Id}/items`)
+const itemIds = (t2Items.body?.data ?? []).map((n) => n.id)
+if (itemIds.length > 0) {
+  const dibd = await call(admin.token, "POST", "/api/infra/dict/items/batch-delete", { ids: itemIds })
+  check("infra 字典项 batch-delete → success", (dibd.body?.data?.successIds ?? []).length === itemIds.length)
+}
+await call(admin.token, "POST", "/api/infra/dict/types/batch-delete", { ids: [t2Id] }) // 自清
 
 /* ---------- 14. 工作流平台（oa-module-workflow / Flowable） ---------- */
 const TS = Date.now()

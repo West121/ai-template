@@ -1,5 +1,6 @@
 package com.xingchen.oa.infra.service;
 
+import com.xingchen.oa.common.core.BatchResult;
 import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.common.security.CurrentUserHolder;
@@ -212,6 +213,33 @@ public class FileService {
         SysFile file = getOrThrow(id);
         storageService.delete(file.getObjectKey());
         fileRepository.delete(file);
+    }
+
+    /**
+     * 批量删除文件（统一协议）：逐条删存储对象 + 记录。幂等：已不存在计 success；
+     * 单条存储/删除异常记 failed，不影响其余（每条独立）。
+     */
+    @Transactional
+    public BatchResult batchDelete(List<Long> ids) {
+        BatchResult result = new BatchResult();
+        List<Long> targets = ids == null ? List.of()
+                : ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        for (Long id : targets) {
+            Optional<SysFile> fileOpt = fileRepository.findById(id);
+            if (fileOpt.isEmpty()) {
+                result.success(id); // 幂等
+                continue;
+            }
+            try {
+                SysFile file = fileOpt.get();
+                storageService.delete(file.getObjectKey());
+                fileRepository.delete(file);
+                result.success(id);
+            } catch (Exception e) {
+                result.fail(id, "删除失败: " + e.getMessage());
+            }
+        }
+        return result;
     }
 
     // ------------------------------------------------------------------

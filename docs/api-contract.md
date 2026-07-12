@@ -103,13 +103,18 @@ RECEIVE status: TO_SIGN(待签收)/PROCESSING(办理中)/FINISHED(已办结)；S
 - PUT `/api/system/depts/{id}` 部分更新：仅覆盖请求中非 null 字段 {name?,sort?,code?,leaderId?,enabled?,parentId?}；leaderId=0 表示清空负责人，code 传空串表示清空编码；可单发 {enabled} 即时切换状态、{sort} 调整排序【P:system:dept:edit】
 - DELETE `/api/system/depts/{id}`（有子部门或任职→BusinessException）【P:system:dept:edit】
 - GET `/api/system/posts?keyword=&pageNum=` → {id,code,name,sort,userCount}
-- POST/PUT/DELETE `/api/system/posts...`【P:system:post:edit】
-- GET `/api/system/users?keyword=&deptId=&enabled=&pageNum=` → {id,username,name,empNo,phone,email,gender:MALE|FEMALE|UNKNOWN,birthday,hireDate,officeLocation,leaderId,leaderName,avatar,remark,enabled,createdAt,primaryDeptName,primaryPostName,roleNames[]}；keyword 匹配 name/username/empNo/phone；deptId 按**部门子树**过滤（含该部门 + 全部后代部门的用户，去重；复用 DEPT_AND_CHILD 的 ancestors 子树逻辑，点击父/公司部门可见其所有下级人员）；leaderName 由后端按 leaderId 一次 findAllById 组装（无 N+1）；GET `/{id}` 返回同样全字段
+- POST/PUT/DELETE `/api/system/posts...`【P:system:post:edit】；POST `/api/system/posts/batch-delete` {ids} → BatchResult（护栏：岗位下有任职人员→failed；幂等）
+- GET `/api/system/users?keyword=&deptId=&enabled=&includeSubDept=&pageNum=` → {id,username,name,empNo,phone,email,gender:MALE|FEMALE|UNKNOWN,birthday,hireDate,officeLocation,leaderId,leaderName,avatar,remark,enabled,createdAt,primaryDeptName,primaryPostName,roleNames[]}；keyword 匹配 name/username/empNo/phone；deptId 按部门过滤，**includeSubDept**（默认 **true**）控制是否含子部门：true=含该部门 + 全部后代部门的用户（去重，复用 DEPT_AND_CHILD 的 ancestors 子树递归，点击父/公司部门可见其所有下级人员；部门闭包/物化路径为 DP1 性能优化项，本批用现有部门树递归），false=仅该部门直属任职用户；leaderName 由后端按 leaderId 一次 findAllById 组装（无 N+1）；GET `/{id}` 返回同样全字段
 - POST `/api/system/users` {username,name,phone,password,deptId,postId,roleIds[],empNo?,email?,gender?,birthday?,hireDate?,officeLocation?,leaderId?,avatar?,remark?}（建主任职；empNo 缺省自动生成 XC+4 位递增，传入则查重、唯一约束 uk_sys_user_emp_no）【P:system:user:edit】
 - PUT `/api/system/users/{id}` {name,phone,email?,gender?,birthday?,hireDate?,officeLocation?,leaderId?,avatar?,remark?}（工号不可改；leaderId 不能为本人、须存在）；PUT `/{id}/enabled` {enabled}；POST `/{id}/reset-password`（B-12：重置为一次性随机初始密码，响应 `R<String>` data=新明文密码，供管理员转交用户；不再固定 admin123）；DELETE `/{id}`【P:system:user:edit】
 - GET `/api/system/users/{id}/assignments` → AssignmentInfo[]；POST `/api/system/users/{id}/assignments` {deptId,postId,roleIds[],primary:false} 添加兼任；DELETE `/api/system/assignments/{aid}`（主任职不可删）【P:system:user:edit】
+- **批量操作**（统一协议 `BatchResult`：请求 `{ids:number[], ...}` → 响应 `data:{successIds:number[], failed:[{id,reason}]}`；逐条独立、部分失败不整体回滚；幂等——删除类已不存在的 id 计 success）【P:system:user:edit】：
+  - POST `/api/system/users/batch-delete` {ids}——护栏：**不删当前登录用户 / 不删超级管理员（持 ADMIN 角色）**，各计入 failed 并给 reason
+  - POST `/api/system/users/batch-status` {ids,enabled}——批量启停；护栏同 batch-delete（排除本人+超管）；不存在计 failed
+  - POST `/api/system/users/batch-move-dept` {ids,deptId}——改各用户**主任职**部门（同步 SysUser.dept 冗余名）；目标部门非法→整体 400；已在目标部门幂等计 success
+  - POST `/api/system/users/batch-set-roles` {ids,roleIds}——全量替换各用户主任职角色集合（空=清空）；护栏：**跳过本人**（防自锁），允许调整他人（含其他管理员）
 - GET `/api/system/roles?pageNum=` → {id,code,name,dataScope,enabled,userCount,remark?,customDeptIds:number[]}
-- POST/PUT/DELETE `/api/system/roles...` {code,name,dataScope,remark,enabled?,customDeptIds?:number[]}【P:system:role:edit】。**customDeptIds 仅 dataScope=CUSTOM 生效**（自定义可见部门集，落 sys_role_dept，被 PermissionService CUSTOM 分支消费）：CUSTOM 时必填非空（空→400「请选择自定义可见部门」）且部门须存在；切换到非 CUSTOM 时自动清空该集合（避免脏数据）。Response.customDeptIds 供前端编辑回填。
+- POST/PUT/DELETE `/api/system/roles...` {code,name,dataScope,remark,enabled?,customDeptIds?:number[]}【P:system:role:edit】；POST `/api/system/roles/batch-delete` {ids} → BatchResult（护栏：**内置超级管理员角色 ADMIN 不可删** + 被任职引用→failed；幂等）。单条 DELETE 亦补 ADMIN 角色不可删护栏。**customDeptIds 仅 dataScope=CUSTOM 生效**（自定义可见部门集，落 sys_role_dept，被 PermissionService CUSTOM 分支消费）：CUSTOM 时必填非空（空→400「请选择自定义可见部门」）且部门须存在；切换到非 CUSTOM 时自动清空该集合（避免脏数据）。Response.customDeptIds 供前端编辑回填。
 - GET `/api/system/roles/{id}/permissions` → number[]；PUT `/api/system/roles/{id}/permissions` {permissionIds:number[]}【P:system:role:edit】
 - GET `/api/system/permissions/tree` → [{id,code,name,type:MENU|BUTTON,children[]}]
 
@@ -135,6 +140,7 @@ FileRecord = {id,originalName,ext,size,contentType,storageType:LOCAL|MINIO|S3,ob
   归属校验（B-04 IDOR 修复）：仅上传者本人 / 持有 system:file:list / 数据权限 ALL 可下载，其余 → 403
   业务放行（B-17）：在上述判定之后，追加「文件被当前用户可合法查看的业务对象引用」兜底放行（infra `FileAccessGrant` SPI，业务模块实现，端点/URL 不变）。当前 workflow 覆盖：① 电子章图片（被任一 wf_seal 引用→放行任意登录用户，印章为组织级登录可见资产）；② 审批操作附件（approve/reject 的 attachments，被当前用户可见实例——其发起/办理/抄送——的操作引用时放行）。**未覆盖(TODO)**：表单上传控件产生、存于 form_data 的文件（需写入时建 file↔实例关联表）。
 - DELETE `/api/infra/files/{id}`【P:system:file:edit】（同时删存储对象）
+- POST `/api/infra/files/batch-delete` {ids} → BatchResult（逐条删存储对象+记录；幂等；单条异常记 failed 不影响其余）【P:system:file:edit】
 - 分片上传/断点续传/秒传：
   - POST `/api/infra/files/chunk/init` {fileName,size,contentType,chunkSize,fileHash} → {uploadId,uploaded:number[],instant:boolean,file?:FileRecord}
     （fileHash 命中已有完整文件 → instant=true 秒传返回 file；否则返回已上传分片序号供续传）
@@ -144,9 +150,9 @@ FileRecord = {id,originalName,ext,size,contentType,storageType:LOCAL|MINIO|S3,ob
 
 ### 字典管理（字典项支持树形）
 DictType = {id,code,name,remark,enabled,itemCount}；DictItem = {id,typeId,parentId,label,value,sort,enabled,remark,children[]}
-- GET `/api/infra/dict/types?keyword=&pageNum=`；POST/PUT `/{id}`/DELETE `/{id}`（code 唯一；删除有字典项→400）【P:system:dict:edit】
+- GET `/api/infra/dict/types?keyword=&pageNum=`；POST/PUT `/{id}`/DELETE `/{id}`（code 唯一；删除有字典项→400）【P:system:dict:edit】；POST `/api/infra/dict/types/batch-delete` {ids} → BatchResult（含字典项→failed；幂等）
 - GET `/api/infra/dict/types/{typeId}/items` → 树形数组
-- POST `/api/infra/dict/items` {typeId,parentId?,label,value,sort}；PUT `/{id}`；DELETE `/{id}`（有子项→400）【P:system:dict:edit】
+- POST `/api/infra/dict/items` {typeId,parentId?,label,value,sort}；PUT `/{id}`；DELETE `/{id}`（有子项→400）【P:system:dict:edit】；POST `/api/infra/dict/items/batch-delete` {ids} → BatchResult（有子项→failed；幂等）
 - GET `/api/infra/dict/{code}/options` → 树形（业务侧取字典用，登录即可）
 - 种子：leave_type 请假类型（平铺）、education 学历（平铺）、region 行政区划（树形：广东省>广州/深圳>区，浙江省>杭州>区 两省示例）
 

@@ -1,8 +1,10 @@
 package com.xingchen.oa.system.controller;
 
+import com.xingchen.oa.common.core.BatchResult;
 import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.core.R;
 import com.xingchen.oa.common.log.OperLog;
+import com.xingchen.oa.system.dto.BatchIdsRequest;
 import com.xingchen.oa.system.dto.RolePermissionsRequest;
 import com.xingchen.oa.system.dto.RoleRequest;
 import com.xingchen.oa.system.dto.RoleResponse;
@@ -59,6 +61,13 @@ public class SysRoleController {
     public R<Void> delete(@PathVariable Long id) {
         roleService.delete(id);
         return R.ok();
+    }
+
+    @PostMapping("/batch-delete")
+    @PreAuthorize("hasAuthority('system:role:edit')")
+    @OperLog(module = "角色", action = "批量删除")
+    public R<BatchResult> batchDelete(@Valid @RequestBody BatchIdsRequest request) {
+        return R.ok(roleService.batchDelete(request.ids()));
     }
 
     @GetMapping("/{id}/permissions")

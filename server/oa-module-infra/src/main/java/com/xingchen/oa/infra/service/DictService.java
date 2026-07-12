@@ -1,5 +1,6 @@
 package com.xingchen.oa.infra.service;
 
+import com.xingchen.oa.common.core.BatchResult;
 import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.infra.dto.DictItemNode;
@@ -80,6 +81,28 @@ public class DictService {
         typeRepository.delete(type);
     }
 
+    /**
+     * 批量删除字典类型（统一协议）。护栏：类型下存在字典项不可删（计 failed）。幂等：已不存在计 success。
+     */
+    @Transactional
+    public BatchResult batchDeleteTypes(List<Long> ids) {
+        BatchResult result = new BatchResult();
+        for (Long id : distinctIds(ids)) {
+            var typeOpt = typeRepository.findById(id);
+            if (typeOpt.isEmpty()) {
+                result.success(id);
+                continue;
+            }
+            if (itemRepository.countByTypeId(id) > 0) {
+                result.fail(id, "该字典类型下存在字典项，无法删除");
+                continue;
+            }
+            typeRepository.delete(typeOpt.get());
+            result.success(id);
+        }
+        return result;
+    }
+
     private void apply(SysDictType type, DictTypeRequest request) {
         type.setCode(request.code());
         type.setName(request.name());
@@ -144,6 +167,35 @@ public class DictService {
             throw new BusinessException(400, "该字典项下存在子项，无法删除");
         }
         itemRepository.delete(item);
+    }
+
+    /**
+     * 批量删除字典项（统一协议）。护栏：字典项下存在子项不可删（计 failed）。幂等：已不存在计 success。
+     */
+    @Transactional
+    public BatchResult batchDeleteItems(List<Long> ids) {
+        BatchResult result = new BatchResult();
+        for (Long id : distinctIds(ids)) {
+            var itemOpt = itemRepository.findById(id);
+            if (itemOpt.isEmpty()) {
+                result.success(id);
+                continue;
+            }
+            if (itemRepository.countByParentId(id) > 0) {
+                result.fail(id, "该字典项下存在子项，无法删除");
+                continue;
+            }
+            itemRepository.delete(itemOpt.get());
+            result.success(id);
+        }
+        return result;
+    }
+
+    private static List<Long> distinctIds(List<Long> ids) {
+        if (ids == null) {
+            return List.of();
+        }
+        return ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
     }
 
     private void applyItem(SysDictItem item, DictItemRequest request) {

@@ -65,4 +65,13 @@ public interface SysUserAssignmentRepository extends JpaRepository<SysUserAssign
     @Query("select distinct a.userId from SysUserAssignment a "
             + "where a.dept.id = :deptId and a.enabled = true")
     List<Long> findUserIdsByDeptId(@Param("deptId") Long deptId);
+
+    /**
+     * 给定用户集合中，持有某角色编码（如超级管理员 ADMIN）的用户 id（去重）。
+     * 用于批量操作护栏：从待删除/停用集合中识别并排除超级管理员，不误伤。
+     */
+    @Query("select distinct a.userId from SysUserAssignment a join a.roles r "
+            + "where a.userId in :userIds and r.code = :roleCode")
+    List<Long> findUserIdsWithRoleCode(@Param("userIds") Collection<Long> userIds,
+                                       @Param("roleCode") String roleCode);
 }

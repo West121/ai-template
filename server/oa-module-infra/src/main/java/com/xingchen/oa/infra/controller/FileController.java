@@ -1,8 +1,10 @@
 package com.xingchen.oa.infra.controller;
 
+import com.xingchen.oa.common.core.BatchResult;
 import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.core.R;
 import com.xingchen.oa.common.log.OperLog;
+import com.xingchen.oa.infra.dto.BatchIdsRequest;
 import com.xingchen.oa.infra.dto.ChunkInitRequest;
 import com.xingchen.oa.infra.dto.ChunkInitResponse;
 import com.xingchen.oa.infra.dto.ChunkMergeRequest;
@@ -98,6 +100,13 @@ public class FileController {
     public R<Void> delete(@PathVariable Long id) {
         fileService.delete(id);
         return R.ok();
+    }
+
+    @PostMapping("/batch-delete")
+    @PreAuthorize("hasAuthority('system:file:edit')")
+    @OperLog(module = "文件", action = "批量删除")
+    public R<BatchResult> batchDelete(@Valid @RequestBody BatchIdsRequest request) {
+        return R.ok(fileService.batchDelete(request.ids()));
     }
 
     // ------------------------------------------------------------------

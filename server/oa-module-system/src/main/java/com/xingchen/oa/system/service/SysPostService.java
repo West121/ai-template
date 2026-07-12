@@ -1,5 +1,6 @@
 package com.xingchen.oa.system.service;
 
+import com.xingchen.oa.common.core.BatchResult;
 import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.system.dto.PostRequest;
@@ -15,6 +16,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+
+import java.util.List;
 
 /**
  * 岗位管理。
@@ -72,5 +75,29 @@ public class SysPostService {
             throw new BusinessException(400, "岗位下存在任职人员，无法删除");
         }
         postRepository.delete(post);
+    }
+
+    /**
+     * 批量删除岗位（统一协议）。护栏：岗位下存在任职人员不可删（计 failed）。幂等：已不存在计 success。
+     */
+    @Transactional
+    public BatchResult batchDelete(List<Long> ids) {
+        BatchResult result = new BatchResult();
+        List<Long> targets = ids == null ? List.of()
+                : ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        for (Long id : targets) {
+            var postOpt = postRepository.findById(id);
+            if (postOpt.isEmpty()) {
+                result.success(id); // 幂等
+                continue;
+            }
+            if (assignmentRepository.countByPostId(id) > 0) {
+                result.fail(id, "岗位下存在任职人员，无法删除");
+                continue;
+            }
+            postRepository.delete(postOpt.get());
+            result.success(id);
+        }
+        return result;
     }
 }

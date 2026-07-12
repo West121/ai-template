@@ -1,8 +1,10 @@
 package com.xingchen.oa.infra.controller;
 
+import com.xingchen.oa.common.core.BatchResult;
 import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.core.R;
 import com.xingchen.oa.common.log.OperLog;
+import com.xingchen.oa.infra.dto.BatchIdsRequest;
 import com.xingchen.oa.infra.dto.DictItemNode;
 import com.xingchen.oa.infra.dto.DictItemRequest;
 import com.xingchen.oa.infra.dto.DictTypeRequest;
@@ -66,6 +68,13 @@ public class DictController {
         return R.ok();
     }
 
+    @PostMapping("/types/batch-delete")
+    @PreAuthorize("hasAuthority('system:dict:edit')")
+    @OperLog(module = "字典", action = "批量删除类型")
+    public R<BatchResult> batchDeleteTypes(@Valid @RequestBody BatchIdsRequest request) {
+        return R.ok(dictService.batchDeleteTypes(request.ids()));
+    }
+
     // ---------- 字典项（树形） ----------
 
     @GetMapping("/types/{typeId}/items")
@@ -93,6 +102,13 @@ public class DictController {
     public R<Void> deleteItem(@PathVariable Long id) {
         dictService.deleteItem(id);
         return R.ok();
+    }
+
+    @PostMapping("/items/batch-delete")
+    @PreAuthorize("hasAuthority('system:dict:edit')")
+    @OperLog(module = "字典", action = "批量删除字典项")
+    public R<BatchResult> batchDeleteItems(@Valid @RequestBody BatchIdsRequest request) {
+        return R.ok(dictService.batchDeleteItems(request.ids()));
     }
 
     // ---------- 业务取值（登录即可） ----------

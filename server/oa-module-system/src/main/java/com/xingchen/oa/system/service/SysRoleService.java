@@ -1,5 +1,6 @@
 package com.xingchen.oa.system.service;
 
+import com.xingchen.oa.common.core.BatchResult;
 import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.system.dto.RoleRequest;
@@ -103,10 +104,48 @@ public class SysRoleService {
     public void delete(Long id) {
         SysRole role = roleRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(404, "角色不存在"));
+        if (PermissionService.SUPER_ADMIN_ROLE.equals(role.getCode())) {
+            throw new BusinessException(400, "内置超级管理员角色不可删除");
+        }
         if (assignmentRepository.countByRoleId(id) > 0) {
             throw new BusinessException(400, "角色已被任职引用，无法删除");
         }
         roleRepository.delete(role);
+    }
+
+    /**
+     * 批量删除角色（统一协议）。护栏：内置超级管理员角色（ADMIN）不可删、被任职引用不可删（各计 failed）。
+     * 幂等：已不存在的 id 计 success。
+     */
+    @Transactional
+    public BatchResult batchDelete(List<Long> ids) {
+        BatchResult result = new BatchResult();
+        for (Long id : distinctIds(ids)) {
+            var roleOpt = roleRepository.findById(id);
+            if (roleOpt.isEmpty()) {
+                result.success(id); // 幂等
+                continue;
+            }
+            SysRole role = roleOpt.get();
+            if (PermissionService.SUPER_ADMIN_ROLE.equals(role.getCode())) {
+                result.fail(id, "内置超级管理员角色不可删除");
+                continue;
+            }
+            if (assignmentRepository.countByRoleId(id) > 0) {
+                result.fail(id, "角色已被任职引用，无法删除");
+                continue;
+            }
+            roleRepository.delete(role);
+            result.success(id);
+        }
+        return result;
+    }
+
+    private static List<Long> distinctIds(List<Long> ids) {
+        if (ids == null) {
+            return List.of();
+        }
+        return ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
     }
 
     @Transactional(readOnly = true)

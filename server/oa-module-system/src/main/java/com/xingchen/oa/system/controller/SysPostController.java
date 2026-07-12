@@ -1,8 +1,10 @@
 package com.xingchen.oa.system.controller;
 
+import com.xingchen.oa.common.core.BatchResult;
 import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.core.R;
 import com.xingchen.oa.common.log.OperLog;
+import com.xingchen.oa.system.dto.BatchIdsRequest;
 import com.xingchen.oa.system.dto.PostRequest;
 import com.xingchen.oa.system.dto.PostResponse;
 import com.xingchen.oa.system.service.SysPostService;
@@ -57,5 +59,12 @@ public class SysPostController {
     public R<Void> delete(@PathVariable Long id) {
         postService.delete(id);
         return R.ok();
+    }
+
+    @PostMapping("/batch-delete")
+    @PreAuthorize("hasAuthority('system:post:edit')")
+    @OperLog(module = "岗位", action = "批量删除")
+    public R<BatchResult> batchDelete(@Valid @RequestBody BatchIdsRequest request) {
+        return R.ok(postService.batchDelete(request.ids()));
     }
 }
