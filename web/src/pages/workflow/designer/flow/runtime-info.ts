@@ -135,6 +135,30 @@ export function predictedEdgeIds(
 }
 
 /**
+ * 反向可达祖先集合（含种子本身）：从 seed 节点沿边**反向 BFS** 回溯所有祖先。
+ * 用于钉钉盒式图「走过路径」判定——结构节点(dot/branch/merge) id 不在 highlight，无法直接命中，
+ * 以"已到达节点(completed/active)"为种子反查：条件分支只回溯命中支（有已到达子节点的那支），
+ * 未命中支不入集；并行汇聚多个父支都回溯到（都走过）。
+ */
+export function reachableAncestors(edges: Array<{ source: string; target: string }>, seedIds: string[]): Set<string> {
+  const rev = new Map<string, string[]>()
+  for (const e of edges) {
+    const a = rev.get(e.target)
+    if (a) a.push(e.source)
+    else rev.set(e.target, [e.source])
+  }
+  const out = new Set<string>()
+  const st = [...seedIds]
+  while (st.length) {
+    const n = st.pop() as string
+    if (out.has(n)) continue
+    out.add(n)
+    for (const s of rev.get(n) ?? []) if (!out.has(s)) st.push(s)
+  }
+  return out
+}
+
+/**
  * 回放某一步的边推导：走到 steps[i] 时，模型里 steps[i-1]→steps[i] 的边即"正在走过"的流光边。
  * 返回该边 id（无则 null）。
  */

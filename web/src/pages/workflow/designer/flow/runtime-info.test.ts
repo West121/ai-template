@@ -2,7 +2,7 @@
  * 流程图预览增强 · 纯映射层用例（① 节点办理信息 / ② 回放序 / ③ 预测边）。
  */
 import { describe, expect, it } from "vitest"
-import { buildNodeInfo, buildReplaySteps, predictedEdgeIds, replayFlowEdgeId, stripHtml } from "./runtime-info"
+import { buildNodeInfo, buildReplaySteps, predictedEdgeIds, reachableAncestors, replayFlowEdgeId, stripHtml } from "./runtime-info"
 import type { WfTimelineItem } from "@/types/workflow"
 
 const item = (o: Partial<WfTimelineItem>): WfTimelineItem => ({ action: "APPROVE", ...o })
@@ -67,6 +67,46 @@ describe("buildReplaySteps（时间序回放）", () => {
     ]
     expect(buildReplaySteps(tl)).toEqual(["start", "n1", "n2"])
     expect(buildReplaySteps(undefined)).toEqual([])
+  })
+})
+
+describe("reachableAncestors（钉钉盒式图走过路径：条件分支只亮命中支）", () => {
+  // 真实 leave_approval 拓扑：start→mgr→cond-split→{b_gt3→gm | b_default}→cond-merge→cc1→end
+  const edges = [
+    { source: "start", target: "mgr" },
+    { source: "mgr", target: "cond-split" },
+    { source: "cond-split", target: "b_gt3" },
+    { source: "b_gt3", target: "gm" },
+    { source: "cond-split", target: "b_default" },
+    { source: "gm", target: "cond-merge" },
+    { source: "b_default", target: "cond-merge" },
+    { source: "cond-merge", target: "cc1" },
+    { source: "cc1", target: "end" },
+  ]
+  it("gm(active) 处：命中支 b_gt3 走过，未命中支 b_default 不走过", () => {
+    // 已到达锚点：start/mgr(completed) + gm(active)
+    const walked = reachableAncestors(edges, ["start", "mgr", "gm"])
+    expect([...walked].sort()).toEqual(["b_gt3", "cond-split", "gm", "mgr", "start"])
+    expect(walked.has("b_default")).toBe(false) // 未命中分支保持灰
+    expect(walked.has("cond-merge")).toBe(false) // 尚未汇聚
+    // 走过的边 = 两端都在集合内
+    const walkedEdge = (s: string, t: string) => walked.has(s) && walked.has(t)
+    expect(walkedEdge("cond-split", "b_gt3")).toBe(true) // 命中分支入线高亮
+    expect(walkedEdge("b_gt3", "gm")).toBe(true) // 进入 active 的入线高亮
+    expect(walkedEdge("cond-split", "b_default")).toBe(false) // 未命中分支入线保持灰
+  })
+  it("并行汇聚：合并节点已到达时两个父支都回溯到（都走过）", () => {
+    const par = [
+      { source: "fork", target: "a" },
+      { source: "fork", target: "b" },
+      { source: "a", target: "join" },
+      { source: "b", target: "join" },
+    ]
+    const walked = reachableAncestors(par, ["join"])
+    expect([...walked].sort()).toEqual(["a", "b", "fork", "join"])
+  })
+  it("空种子 → 空集", () => {
+    expect(reachableAncestors(edges, []).size).toBe(0)
   })
 })
 

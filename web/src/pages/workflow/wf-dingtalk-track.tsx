@@ -31,7 +31,7 @@ import { LEAF_STYLE } from "./designer/dingtalk/canvas"
 import { buildFlow } from "./designer/dingtalk/layout"
 import type { ApprovalStep, Branch, CcStep, LeafStep, StepNode } from "./designer/dingtalk/model"
 import { deserializeDingtalk, isBackendDesignerJson } from "./designer/dingtalk/serialize"
-import type { NodeRuntimeInfo, NodeRuntimeStatus } from "./designer/flow/runtime-info"
+import { reachableAncestors, type NodeRuntimeInfo, type NodeRuntimeStatus } from "./designer/flow/runtime-info"
 import type { FlowPredict } from "./designer/flow/flow-viewer"
 
 /** 运行时节点状态（highlight 的 completed/active + timeline 派生的 rejected/addSign） */
@@ -46,12 +46,16 @@ const TRACK_CSS = `
 .wf-dt-active-card { animation: wf-dt-pulse 1.6s ease-in-out infinite; }
 @keyframes wf-dt-predict-breathe { 0%,100% { outline-color: #60a5fa; } 50% { outline-color: color-mix(in srgb, #60a5fa 40%, transparent); } }
 .wf-dt-predicted-card { animation: wf-dt-predict-breathe 2s ease-in-out infinite; }
-@keyframes wf-dt-edge-flow-dash { to { stroke-dashoffset: -24; } }
+@keyframes wf-dt-edge-flow-dash { to { stroke-dashoffset: -20; } }
+/* 回放：走过的边单次流光扫过 */
 .wf-dt-track .wf-dt-edge-flow .react-flow__edge-path { stroke-dasharray: 8 4; animation: wf-dt-edge-flow-dash 0.6s linear 2; }
+/* 常态：已走过路径虚线持续流动（专业克制，慢速；reduce-motion 降级静态） */
+.wf-dt-track .wf-dt-edge-loop .react-flow__edge-path { animation: wf-dt-edge-flow-dash 1.1s linear infinite; }
 @media (prefers-reduced-motion: reduce) {
   .wf-dt-track .wf-dt-active-card,
   .wf-dt-track .wf-dt-predicted-card,
-  .wf-dt-track .wf-dt-edge-flow .react-flow__edge-path { animation: none; }
+  .wf-dt-track .wf-dt-edge-flow .react-flow__edge-path,
+  .wf-dt-track .wf-dt-edge-loop .react-flow__edge-path { animation: none; }
 }
 `
 
@@ -210,8 +214,8 @@ function StepNodeCard({ data }: NodeProps) {
         )}
       </div>
       <div className="px-3 py-2.5">{stepSummary(step)}</div>
-      {/* ③ 预测节点预计办理人 */}
-      {predicted && predictNames && predictNames.length > 0 && (
+      {/* ③ 预测节点/当前活动节点的预计办理人（无实际办理记录时补充展示） */}
+      {predictNames && predictNames.length > 0 && (
         <div className="flex items-center gap-1 border-t border-blue-400/30 bg-blue-50/60 px-3 py-1.5 text-[11px] text-blue-600 dark:bg-blue-950/30 dark:text-blue-300">
           <Sparkles className="size-3 shrink-0" />
           <span className="min-w-0 truncate">预计 {predictNames.join("、")}</span>
@@ -361,8 +365,31 @@ export function DingtalkTrack({
     }
 
     const built = buildFlow(parsedSteps)
+
+    /**
+     * 常态「走过路径」判定：钉钉盒式图有 dot/branch/merge 结构节点，其 id 不在 highlight（BPMN 口径），
+     * 故不能按节点/边 id 直接命中。改为**从已到达节点反向回溯祖先**：
+     *  - 已到达锚点 = statusOf 非空（completed/active/rejected/addSign）的（步骤）节点；
+     *  - 反向 BFS：条件分支只回溯命中支（有已到达子节点的那支），未命中支不入集 → 保持灰；
+     *  - 并行汇聚：合并节点的多个父支都会被回溯到 → 都高亮（符合并行都走过）。
+     * 走过的边 = source 与 target 均在 walkedNodes。
+     */
+    let walkedNodes = new Set<string>()
+    const activeNodeSet = new Set<string>()
+    let predictedEff = new Set<string>()
+    if (!replaying) {
+      const reached = built.nodes.filter((n) => statusOf(n.id)).map((n) => n.id)
+      walkedNodes = reachableAncestors(built.edges, reached)
+      for (const n of built.nodes) if (statusOf(n.id) === "active") activeNodeSet.add(n.id)
+      // 预测节点排除已到达（/predict 常把当前 active 节点当"下一步"返回，避免与进行中态冲突）
+      predictedEff = new Set([...predictedSet].filter((id) => !statusOf(id)))
+    }
+
     const outNodes: Node[] = built.nodes.map((n) => {
-      const predicted = !replaying && predictedSet.has(n.id)
+      // 蓝虚线环 + "预计"徽标：仅真·后续节点（predictedEff 已排除已到达，避免与进行中/已完成态冲突）
+      const predicted = !replaying && predictedEff.has(n.id)
+      // 预计办理人：预测路径上任意节点（含当前 active 节点，展示其预计办理人；active 节点尚无 timeline 办理记录）
+      const pNames = !replaying ? predict?.assignees?.[n.id] : undefined
       // 回放中：仅已揭示（walked/active）节点显办理信息
       const showInfo = replaying ? walked?.has(n.id) || n.id === activeStep : true
       return {
@@ -372,22 +399,24 @@ export function DingtalkTrack({
           status: statusOf(n.id),
           info: showInfo ? nodeInfo?.[n.id] : undefined,
           predicted,
-          predictNames: predicted ? predict?.assignees?.[n.id] ?? [] : undefined,
+          predictNames: pNames && pNames.length ? pNames : undefined,
         },
       }
     })
 
-    // 边着色：回放（流光/已走绿）> 预测（蓝虚线）> 源节点状态（绿/蓝）> 常态
+    // 边着色：回放（流光/已走绿）> 预测（蓝虚线）> 常态走过路径（绿/进行中主题色 + 虚线流动）> 灰
     const edgeDeco = (src: string, tgt: string): { style: React.CSSProperties; className?: string } => {
       if (replaying) {
         if (replay > 0 && src === replaySeq[replay - 1]) return { style: { stroke: "var(--primary)", strokeWidth: 2.5 }, className: "wf-dt-edge-flow" }
         if (walked?.has(src)) return { style: { stroke: "#10b981", strokeWidth: 2 } }
         return { style: { stroke: "var(--border)", strokeWidth: 1.5 } }
       }
-      if (predictedSet.has(tgt) || predictedSet.has(src)) return { style: { stroke: "#60a5fa", strokeWidth: 2, strokeDasharray: "6 4" } }
-      const ss = statusOf(src)
-      if (ss === "completed") return { style: { stroke: "#10b981", strokeWidth: 2 } }
-      if (ss === "active") return { style: { stroke: "var(--primary)", strokeWidth: 2 } }
+      if (predictedEff.has(tgt) || predictedEff.has(src)) return { style: { stroke: "#60a5fa", strokeWidth: 2, strokeDasharray: "6 4" } }
+      if (walkedNodes.has(src) && walkedNodes.has(tgt)) {
+        // 进入进行中节点的入线用主题色（呼应 active），其余已完成路径绿；均虚线持续流动
+        const stroke = activeNodeSet.has(tgt) ? "var(--primary)" : "#10b981"
+        return { style: { stroke, strokeWidth: 2.5, strokeDasharray: "6 4" }, className: "wf-dt-edge-loop" }
+      }
       return { style: { stroke: "var(--border)", strokeWidth: 1.5 } }
     }
     const outEdges: Edge[] = built.edges.map((e) => {
