@@ -6,13 +6,72 @@
  */
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { ArrowRight, ChevronLeft, ChevronRight, ListChecks, Loader2 } from "lucide-react"
+import { ArrowRight, ChevronLeft, ChevronRight, ListChecks, Loader2, Pencil, Plus, Sparkles } from "lucide-react"
 import { toast } from "sonner"
+import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { fetchDataset } from "../api"
-import { parseAiSummary, resolveFeaturePath } from "../protocol"
-import type { AiListCard, AiListRow } from "../types"
+import { useAiChatActions } from "../chat-actions"
+import { parseAiSummary, resolveFeaturePath, ulid, type AiMessagePart } from "../protocol"
+import type { AiListCard, AiListRow, AiManageActionItem } from "../types"
 import { AiSummaryBlock } from "./ai-summary"
+
+/**
+ * 管理操作快捷入口（管理框架M1）：manage_list_actions 卡 → 一排可点 chip；
+ * 点击 → POST /api/ai/manage/prepare {actionCode} → 拿回 manage_form 卡 → appendAssistantParts 挂进对话
+ * （与 LLM 驱动出的 manage_form 卡走同一 ManageFormPart 渲染）。权限后端已按 requiredAuthority 过滤，
+ * 前端只渲染返回的（不造白名单）。空/非数组不渲染；prepare 失败 toast，不白屏。
+ */
+function ManageActionsCard({ title, actions }: { title: string; actions: AiManageActionItem[] }) {
+  const chatActions = useAiChatActions()
+  const [busy, setBusy] = useState<string | null>(null)
+  const list = Array.isArray(actions) ? actions.filter((a) => a && typeof a.actionCode === "string" && a.actionCode) : []
+  if (list.length === 0) return null
+
+  const run = (a: AiManageActionItem) => {
+    void (async () => {
+      setBusy(a.actionCode)
+      try {
+        const cardPayload = await api<Record<string, unknown>>("/api/ai/manage/prepare", { method: "POST", body: JSON.stringify({ actionCode: a.actionCode }) })
+        const part: AiMessagePart = { partId: `pt_${ulid()}`, partType: "manage_form", schemaVersion: 1, sequenceNo: 1, payload: cardPayload }
+        if (chatActions) chatActions.appendAssistantParts(`已为你准备「${a.label}」表单，请填写后提交：`, [part])
+        else toast.info("请在对话面板内使用该操作")
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "准备表单失败")
+      } finally {
+        setBusy(null)
+      }
+    })()
+  }
+
+  return (
+    <div className="w-full min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm">
+      <div className="flex items-center gap-2 border-b px-3.5 py-2.5">
+        <Sparkles className="size-4 text-primary" />
+        <p className="text-sm font-semibold">{title || "我可以帮你做的管理操作"}</p>
+      </div>
+      <div className="flex flex-wrap gap-1.5 p-3">
+        {list.map((a) => {
+          const Icon = a.action === "UPDATE" ? Pencil : Plus
+          return (
+            <button
+              key={a.actionCode}
+              type="button"
+              disabled={busy !== null}
+              onClick={() => run(a)}
+              title={a.actionCode}
+              className="inline-flex items-center gap-1 rounded-full border bg-background px-2.5 py-1 text-xs transition-colors hover:border-primary/40 hover:bg-accent disabled:opacity-50"
+            >
+              {busy === a.actionCode ? <Loader2 className="size-3 animate-spin" /> : <Icon className="size-3 text-primary" />}
+              {a.label}
+            </button>
+          )
+        })}
+      </div>
+      <p className="px-3.5 pb-2.5 text-[11px] text-muted-foreground">点选直接开始填写，提交后需二次确认才会执行。</p>
+    </div>
+  )
+}
 
 export function ListCard({ card }: { card: AiListCard }) {
   const navigate = useNavigate()
@@ -42,6 +101,11 @@ export function ListCard({ card }: { card: AiListCard }) {
   }
 
   const morePath = card.moreLink ?? (card.moreFeatureCode ? resolveFeaturePath(card.moreFeatureCode) : null)
+
+  // 管理框架M1：带 manageActions 的 list 卡 → 专渲染成可点快捷入口 chips（hooks 已全部调用，可安全早返回）
+  if (Array.isArray(card.manageActions) && card.manageActions.length > 0) {
+    return <ManageActionsCard title={card.title} actions={card.manageActions} />
+  }
 
   return (
     <div className="w-full min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm">

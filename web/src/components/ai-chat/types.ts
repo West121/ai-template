@@ -73,6 +73,16 @@ export interface AiListRow {
   aiSummary?: AiSummary
 }
 
+/** 受控管理操作快捷入口项（manage_list_actions 卡 payload.manageActions） */
+export interface AiManageActionItem {
+  actionCode: string
+  label: string
+  module?: string
+  entityLabel?: string
+  /** CREATE | UPDATE */
+  action?: string
+}
+
 export interface AiListCard {
   type: "list"
   title: string
@@ -84,6 +94,8 @@ export interface AiListCard {
   /** V2 批C：数据集分页（有值时卡内分页，GET /api/ai/datasets/{id}?pageNum=） */
   datasetId?: string
   page?: { current: number; size: number; total: number }
+  /** 管理框架M1：有值时该 list 卡专渲染成「可点管理操作 chips」（点击 → prepare → manage_form 卡） */
+  manageActions?: AiManageActionItem[]
 }
 
 export interface AiChartSeries {
