@@ -15,6 +15,7 @@ import type { AiCitation } from "../types"
 import { CardRouter } from "./card-router"
 import { FlowDraftPart, FormDraftPart, TemplateDraftPart } from "./draft-cards"
 import { KnowledgeSavePart } from "./knowledge-save-card"
+import { ManageFormPart } from "./manage-form-card"
 
 /** 降级组件（§16.3：未知 schemaVersion / partType） */
 function UnknownPart({ part, reason }: { part: AiMessagePart; reason: string }) {
@@ -264,6 +265,8 @@ export function PartRouter({ part }: { part: AiMessagePart }) {
       return <FormDraftPart part={part} />
     case "knowledgeSave":
       return <KnowledgeSavePart part={part} />
+    case "manage_form":
+      return <ManageFormPart part={part} />
     case "navigate":
     case "form":
     case "confirm":
