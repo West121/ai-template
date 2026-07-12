@@ -2107,6 +2107,71 @@ async function mkProcFull(code, designer, extra = {}) {
   check("DP2 自清完成(部门/用户/交接单删除)", true)
 }
 
+// --- DP3 转岗 transfer 治理（磐石：转岗封装/旧部门数据保留期/权限即时生效/待办保留/LEADER 随新部门） ---
+{
+  const { execFileSync: ex3 } = await import("node:child_process")
+  const psql3 = (q) => ex3("docker", ["exec", process.env.OA_PG_CONTAINER ?? "oa-postgres", "psql", "-U", "oa", "-d", "oa_platform", "-t", "-A", "-c", q], { stdio: ["ignore", "pipe", "pipe"] }).toString().trim()
+  const postId3 = (await call(admin.token, "GET", "/api/system/posts?pageNum=1&pageSize=5")).body?.data?.list?.[0]?.id
+  const titlesOf = async (token) => (await call(token, "GET", "/api/office/approvals?pageNum=1&pageSize=500")).body?.data?.list?.map((a) => a.title) ?? []
+  // 造：部门 A/B（B 负责人=王经理 供 LEADER 验证）、DEPT 数据范围角色、用户 U(在 A)
+  const aId = (await call(admin.token, "POST", "/api/system/depts", { name: `DP3部门A_${TS}`, parentId: 1, sort: 98 })).body?.data?.id
+  const bId = (await call(admin.token, "POST", "/api/system/depts", { name: `DP3部门B_${TS}`, parentId: 1, sort: 98 })).body?.data?.id
+  await call(admin.token, "PUT", `/api/system/depts/${bId}`, { leaderId: MANAGER })
+  const dp3r = await call(admin.token, "POST", "/api/system/roles", { code: `DP3R_${TS}`, name: "DP3转岗角色", dataScope: "DEPT" })
+  const dp3rId = dp3r.body?.data?.id ?? dp3r.body?.data
+  await call(admin.token, "PUT", `/api/system/roles/${dp3rId}/permissions`, { permissionIds: [1, 2, 3, 4] })
+  const uId = (await call(admin.token, "POST", "/api/system/users", { username: `dp3u_${TS}`, name: "dp3u", password: "admin123", deptId: aId, postId: postId3, roleIds: [dp3rId] })).body?.data?.id
+  check("DP3 造测试数据(A/B/角色/U)", !!(aId && bId && dp3rId && uId), JSON.stringify({ aId, bId, dp3rId, uId }))
+  // 种子审批：A/B 各一单（applicant=admin 非 U → U 可见性纯按部门维）
+  psql3(`INSERT INTO oa_approval (title, type, applicant, status, dept_id, applicant_id) VALUES ('DP3A单-${TS}','OTHER','系统管理员','PENDING',${aId},1),('DP3B单-${TS}','OTHER','系统管理员','PENDING',${bId},1)`)
+  // U 登录 + 一个待办（含 U 为办理人的实例）+ 一条历史单（验 applicant 不变）
+  let uTok = (await call(null, "POST", "/api/auth/login", { username: `dp3u_${TS}`, password: "admin123" })).body?.data?.token
+  const uHist = await call(uTok, "POST", "/api/office/approvals", { title: `DP3U历史单-${TS}`, type: "OTHER", reason: "历史归属" })
+  const uHistId = uHist.body?.data?.id
+  const taskTitle = `DP3待办-${TS}`
+  const dp3proc = await mkProc(`dp3proc_${TS}`, [approvalNode("ap", "U办理", uId, "ANY")])
+  await call(admin.token, "POST", "/api/wf/instances", { defCode: dp3proc, title: taskTitle, formData: {} })
+  check("DP3 转岗前待办存在(U)", !!(await findTodo(uTok, taskTitle)))
+  // 转岗前：U(DEPT 范围, 在 A) 见 DP3A单, 不见 DP3B单
+  const before = await titlesOf(uTok)
+  check("DP3 转岗前 U 见旧部门A单, 不见新部门B单",
+    before.includes(`DP3A单-${TS}`) && !before.includes(`DP3B单-${TS}`), JSON.stringify(before.filter((t) => t.startsWith("DP3"))))
+  // ① 转岗 A→B（保留期 7 天）
+  const tr = await call(admin.token, "POST", `/api/system/users/${uId}/transfer`, { deptId: bId, postId: postId3, roleIds: [dp3rId], retentionDays: 7 })
+  check("DP3 转岗封装成功(返回 oldDeptId/retentionUntil)",
+    tr.body?.code === 0 && tr.body?.data?.oldDeptId === aId && !!tr.body?.data?.retentionUntil, JSON.stringify(tr.body?.data))
+  // 权限/数据范围即时生效（现有 token 下次装配即生效；此处重登换新 token 更直观）
+  uTok = (await call(null, "POST", "/api/auth/login", { username: `dp3u_${TS}`, password: "admin123" })).body?.data?.token
+  const afterTransfer = await titlesOf(uTok)
+  check("DP3 转岗后即时生效：见新部门B单（数据权限按新任职）", afterTransfer.includes(`DP3B单-${TS}`), JSON.stringify(afterTransfer.filter((t) => t.startsWith("DP3"))))
+  check("DP3 旧部门数据保留期内仍见旧部门A单", afterTransfer.includes(`DP3A单-${TS}`), JSON.stringify(afterTransfer.filter((t) => t.startsWith("DP3"))))
+  // ④ 进行中待办转岗后保留（不改派）
+  check("DP3 转岗后待办保留(仍在 U 名下,不改派)", !!(await findTodo(uTok, taskTitle)))
+  // ⑥/③ 历史 applicant 不变
+  const histRow3 = (await call(admin.token, "GET", "/api/office/approvals?pageNum=1&pageSize=500")).body?.data?.list?.find((a) => a.id === uHistId)
+  check("DP3 历史数据 applicant 归属不变(U 历史单仍归 U)", histRow3?.applicantId === uId, JSON.stringify({ applicantId: histRow3?.applicantId, uId }))
+  // ⑤ 直属上级转岗后按新部门经理：U(现在 B) 发起 LEADER 流程 → 落到 B 部门负责人(王经理)
+  const leadProc = await mkProc(`dp3lead_${TS}`, [{ id: "ap", type: "approval", name: "直属上级审", assigneeRules: [{ kind: "LEADER", level: 1 }], multiMode: "ANY", emptyStrategy: "TO_ADMIN" }])
+  const leadTitle = `DP3直属上级-${TS}`
+  await call(uTok, "POST", "/api/wf/instances", { defCode: leadProc, title: leadTitle, formData: {} })
+  check("DP3 转岗后 LEADER 随新部门解析(落到新部门B负责人王经理)", !!(await findTodo(manager.token, leadTitle)))
+  // ② 保留期过期 → 收敛：模拟过期后 U 不再见旧部门A单
+  psql3(`UPDATE sys_dept_retention SET expire_at = now() - interval '1 day' WHERE user_id=${uId}`)
+  uTok = (await call(null, "POST", "/api/auth/login", { username: `dp3u_${TS}`, password: "admin123" })).body?.data?.token
+  const afterExpire = await titlesOf(uTok)
+  check("DP3 保留期过期→收敛：仍见新部门B单, 不再见旧部门A单",
+    afterExpire.includes(`DP3B单-${TS}`) && !afterExpire.includes(`DP3A单-${TS}`), JSON.stringify(afterExpire.filter((t) => t.startsWith("DP3"))))
+  // 自清（转岗/保留期测试复原）
+  const inst3a = (await call(admin.token, "GET", "/api/wf/instances/my?pageNum=1&pageSize=200")).body?.data?.list?.find((r) => r.title === taskTitle)
+  if (inst3a) await call(admin.token, "POST", `/api/wf/instances/${inst3a.id}/cancel`)
+  psql3(`DELETE FROM oa_approval WHERE title LIKE 'DP3%-${TS}'; DELETE FROM sys_dept_retention WHERE user_id=${uId}`)
+  await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [uId] })
+  await call(admin.token, "DELETE", `/api/system/depts/${aId}`)
+  await call(admin.token, "DELETE", `/api/system/depts/${bId}`)
+  await call(admin.token, "DELETE", `/api/system/roles/${dp3rId}`)
+  check("DP3 自清完成(部门/角色/用户/审批/保留期删除)", true)
+}
+
 // --- 办理选项 candidate → 认领（等价 CLAIM） ---
 {
   const P_CAND = await mkProc(`p2cand_${TS}`, [{

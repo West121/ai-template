@@ -5,13 +5,16 @@ import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.common.security.CurrentUserHolder;
 import com.xingchen.oa.common.security.UserContext;
+import com.xingchen.oa.system.config.TransferProperties;
 import com.xingchen.oa.system.datadim.DataDimensionService;
 import com.xingchen.oa.system.dto.AssignmentCreateRequest;
 import com.xingchen.oa.system.dto.AssignmentInfo;
 import com.xingchen.oa.system.dto.UserCreateRequest;
+import com.xingchen.oa.system.dto.TransferRequest;
 import com.xingchen.oa.system.dto.UserResponse;
 import com.xingchen.oa.system.dto.UserUpdateRequest;
 import com.xingchen.oa.system.entity.SysDept;
+import com.xingchen.oa.system.entity.SysDeptRetention;
 import com.xingchen.oa.system.entity.SysPost;
 import com.xingchen.oa.system.entity.SysRole;
 import com.xingchen.oa.system.entity.SysUser;
@@ -20,6 +23,7 @@ import com.xingchen.oa.system.entity.SysUserLeader;
 import com.xingchen.oa.system.repository.SysDeptRepository;
 import com.xingchen.oa.system.repository.SysPostRepository;
 import com.xingchen.oa.system.repository.SysRoleRepository;
+import com.xingchen.oa.system.repository.SysDeptRetentionRepository;
 import com.xingchen.oa.system.repository.SysUserAssignmentRepository;
 import com.xingchen.oa.system.repository.SysUserLeaderRepository;
 import com.xingchen.oa.system.repository.SysUserRepository;
@@ -35,9 +39,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -68,6 +74,8 @@ public class SysUserService {
     private final PasswordEncoder passwordEncoder;
     private final PermissionService permissionService;
     private final DataDimensionService dataDimensionService;
+    private final SysDeptRetentionRepository deptRetentionRepository;
+    private final TransferProperties transferProperties;
 
     @Transactional(readOnly = true)
     public PageResult<UserResponse> page(String keyword, Long deptId, Boolean enabled,
@@ -193,6 +201,59 @@ public class SysUserService {
     }
 
     /**
+     * 转岗（DP3）：原地变更<b>主任职</b>的部门/岗位/角色（同一 assignment id → 现有 token 下次装配即生效，
+     * 无需重登；权限/数据范围复用 loadUserContext 每请求重解析）。历史数据 applicant_id 不动。
+     * <b>旧部门数据保留期</b>：启用且换了部门时，写 sys_dept_retention（旧 deptId + 到期时间），
+     * 保留期内旧部门数据仍可见（折入 PermissionService 部门维），过期自动收敛。失效数据权限缓存。
+     */
+    @Transactional
+    public Map<String, Object> transfer(Long userId, TransferRequest req) {
+        SysUser user = requireUser(userId);
+        if (SysUser.STATUS_RESIGNED.equals(user.getStatus())) {
+            throw new BusinessException(400, "离职用户不可转岗");
+        }
+        SysUserAssignment primary = primaryAssignment(userId);
+        if (primary == null) {
+            throw new BusinessException(400, "用户无主任职，无法转岗");
+        }
+        Long oldDeptId = primary.getDept() != null ? primary.getDept().getId() : null;
+        SysDept newDept = requireDept(req.deptId());
+        SysPost newPost = requirePost(req.postId());
+        primary.setDept(newDept);
+        primary.setPost(newPost);
+        primary.setRoles(resolveRoles(req.roleIds()));
+        assignmentRepository.save(primary);
+        user.setDept(newDept.getName());
+        user.setPost(newPost.getName());
+        userRepository.save(user);
+
+        // 旧部门数据保留期（可配置：全局默认 + 单次覆盖；retentionDays=0 显式关闭）
+        LocalDateTime retentionUntil = null;
+        int days = req.retentionDays() != null ? req.retentionDays() : transferProperties.getRetention().getDays();
+        boolean retain = transferProperties.getRetention().isEnabled()
+                && (req.retentionDays() == null || req.retentionDays() > 0)
+                && days > 0 && oldDeptId != null && !oldDeptId.equals(req.deptId());
+        if (retain) {
+            retentionUntil = LocalDateTime.now().plusDays(days);
+            deptRetentionRepository.deleteByUserIdAndDeptId(userId, oldDeptId); // upsert：先删后插
+            deptRetentionRepository.flush();
+            SysDeptRetention r = new SysDeptRetention();
+            r.setUserId(userId);
+            r.setDeptId(oldDeptId);
+            r.setExpireAt(retentionUntil);
+            deptRetentionRepository.save(r);
+        }
+        dataDimensionService.evictUser(userId); // 数据权限即时失效
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("assignmentId", primary.getId());
+        out.put("oldDeptId", oldDeptId);
+        out.put("newDeptId", req.deptId());
+        out.put("retentionUntil", retentionUntil);
+        return out;
+    }
+
+    /**
      * 重置密码为一次性随机初始密码（B-12）。
      * 不再使用可预测的固定常量；库中仅存 BCrypt 摘要，明文仅本次调用返回给管理员转交用户。
      *
@@ -225,6 +286,7 @@ public class SysUserService {
         assignmentRepository.deleteAll(assignmentRepository.findByUserId(id));
         userLeaderRepository.deleteByUserId(id);   // 其直属上级配置
         userLeaderRepository.deleteByLeaderId(id);  // 以其为上级的悬挂引用
+        deptRetentionRepository.deleteByUserId(id); // 旧部门数据保留期
         userRepository.delete(user);
     }
 
@@ -259,6 +321,7 @@ public class SysUserService {
             assignmentRepository.deleteAll(assignmentRepository.findByUserId(id));
             userLeaderRepository.deleteByUserId(id);
             userLeaderRepository.deleteByLeaderId(id);
+            deptRetentionRepository.deleteByUserId(id);
             userRepository.delete(userOpt.get());
             result.success(id);
         }

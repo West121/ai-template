@@ -10,6 +10,7 @@ import com.xingchen.oa.system.dto.BatchIdsRequest;
 import com.xingchen.oa.system.dto.BatchMoveDeptRequest;
 import com.xingchen.oa.system.dto.BatchSetRolesRequest;
 import com.xingchen.oa.system.dto.BatchStatusRequest;
+import com.xingchen.oa.system.dto.TransferRequest;
 import com.xingchen.oa.system.dto.UserCreateRequest;
 import com.xingchen.oa.system.dto.UserEnabledRequest;
 import com.xingchen.oa.system.dto.UserResponse;
@@ -29,6 +30,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 用户管理 + 用户任职（兼任）。查询仅要求登录，写操作需 system:user:edit。
@@ -75,6 +77,13 @@ public class SysUserController {
     public R<Void> updateEnabled(@PathVariable Long id, @Valid @RequestBody UserEnabledRequest request) {
         userService.updateEnabled(id, request.enabled());
         return R.ok();
+    }
+
+    @PostMapping("/{id}/transfer")
+    @PreAuthorize("hasAuthority('system:user:edit')")
+    @OperLog(module = "用户", action = "转岗")
+    public R<Map<String, Object>> transfer(@PathVariable Long id, @Valid @RequestBody TransferRequest request) {
+        return R.ok(userService.transfer(id, request));
     }
 
     @PostMapping("/{id}/reset-password")

@@ -134,6 +134,10 @@ RECEIVE status: TO_SIGN(待签收)/PROCESSING(办理中)/FINISHED(已办结)；S
 - POST `/api/system/handovers/{id}/execute` → `{doneIds:number[], failed:[{itemId,reason}]}`【P:system:user:edit】。逐项**幂等**执行（DONE/SKIPPED 跳过，失败保持 PENDING 可重试）；全部非 PENDING → 交接单 DONE。
 - 交接项处理器可插拔（`HandoverItemProvider` SPI，system 定义，workflow/office 实现，不反向依赖）：**WF_TASK**（未办待办→批量转办继任者）、**DEPT_LEADER**（部门负责人→换继任者）已交付；KB_SPACE_OWNER/DATA_OWNER/WF_NODE_ASSIGNEE(显式未来节点重写) 为 DP2b。历史数据（applicant_id/办理记录）**不变**。
 
+### 转岗 transfer 治理（DP3，oa-module-system）
+- POST `/api/system/users/{id}/transfer` `{deptId, postId, roleIds?, retentionDays?}` → `{assignmentId, oldDeptId, newDeptId, retentionUntil}`【P:system:user:edit】。**原地变更主任职**的部门/岗位/角色（同一 assignment id）→ 权限/数据范围**下次请求装配即生效，无需重登**（loadUserContext 每请求重解析；复用现有机制）。历史 applicant_id 不变；进行中待办**保留不改派**（区别于离职）；直属上级 LEADER 转岗后按新部门经理（动态解析，已覆盖）。
+- **旧部门数据保留期**（DP3 主要新增，可配置）：转岗换部门时写 `sys_dept_retention(user_id, dept_id=旧部门, expire_at)`，保留期内旧部门数据仍可见（折入 `PermissionService` 部门维可见集），过期自动收敛（查询按 `expire_at>now` 过滤，无需清理任务）。配置 `oa.transfer.retention.enabled`(默认 true)/`oa.transfer.retention.days`(默认 7，env `OA_TRANSFER_RETENTION_*`)；单次 `retentionDays` 覆盖（0=不保留）。可选 TRANSFER 交接（复用 DP2 sys_handover type=TRANSFER）为 DP3b。
+
 ## 新增权限码与角色授权（V3 种子，B1 负责写入）
 新权限码：office:document:list/edit、office:announcement:publish、system:dept:edit、system:post:edit、system:user:edit、system:role:edit
 授权：ADMIN=全部；DEPT_MANAGER 增加 office:document:list/edit、office:announcement:publish；EMPLOYEE/FINANCE 增加 office:document:list。

@@ -44,6 +44,7 @@ public class PermissionService {
     private final SysUserAssignmentRepository assignmentRepository;
     private final SysDeptRepository deptRepository;
     private final SysPermissionRepository permissionRepository;
+    private final com.xingchen.oa.system.repository.SysDeptRetentionRepository deptRetentionRepository;
 
     /**
      * 装配用户上下文。
@@ -175,6 +176,9 @@ public class PermissionService {
                 }
             }
         }
+        // DP3 旧部门数据保留期：把该用户仍在保留期内的旧部门 id 并入部门维可见集（过期自动排除→收敛）。
+        // 未 ALL 时生效（ALL 已提前 return）；无保留记录则不影响原行为（向后兼容）。
+        deptIds.addAll(deptRetentionRepository.findActiveDeptIds(userId, java.time.LocalDateTime.now()));
         if (!deptIds.isEmpty()) {
             return DataScope.depts(deptIds, userId);
         }
