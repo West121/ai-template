@@ -8,7 +8,7 @@
  *  GET  /api/system/handovers/{id}     → Handover（含 items[]）。
  *  PUT  /api/system/handovers/{id}/items/{itemId}  {successorId?, status?:"SKIPPED"|"PENDING"}（DONE 项不可改）。
  *  POST /api/system/handovers/{id}/execute  → {doneIds:number[], failed:[{itemId,reason}]}（item 级可重试、幂等）。
- *  权限：system:user:edit。itemType：WF_TASK→待办转办、DEPT_LEADER→部门负责人变更、未知→原值兜底。
+ *  权限：system:user:edit。itemType：WF_TASK→待办转办、DEPT_LEADER→部门负责人变更、KB_SPACE_OWNER→知识空间归属、未知→原值兜底。
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { api, ApiError, NetworkError } from "@/lib/api"
@@ -58,7 +58,7 @@ export interface DpResult<T> {
 const BASE = "/api/system"
 
 /** itemType 人话标签（未知 → 原值兜底，不炸） */
-const ITEM_TYPE_LABEL: Record<string, string> = { WF_TASK: "待办转办", DEPT_LEADER: "部门负责人变更" }
+const ITEM_TYPE_LABEL: Record<string, string> = { WF_TASK: "待办转办", DEPT_LEADER: "部门负责人变更", KB_SPACE_OWNER: "知识空间归属" }
 export function itemTypeLabel(t: string): string {
   return ITEM_TYPE_LABEL[t] ?? t
 }
