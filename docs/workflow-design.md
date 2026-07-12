@@ -497,3 +497,36 @@ interface WfInstanceDetailP3 extends WfInstanceDetail {
   预测虚线层+播放;instance-detail 接线(传 nodeInfo=timeline 映射、predict 数据)。四门+渲染冒烟。
 - 后端:预计无需改(timeline 已带办理人/时间/taskKey,predict 已带预计办理人);若 timeline item 缺
   nodeId 映射键,叫磐石在 timeline DTO 补 nodeId(小改)。
+
+## 流程预测增强:完整链路视图(用户认可驳回方案 2026-07-12)
+
+现状 predict(仅 DINGTALK)从当前往后走、跳过 completed,只输出后续审批节点+办理人,处理排他/包容
+网关。增强为**从头到尾完整链路**,并处理驳回/并行/并签/特殊节点。
+
+### 契约(PredictResponse.PredictNode 增字段)
+- `status`: "done"(已完成) | "current"(当前) | "future"(后续)
+- `nodeType`: approval | cc | condition | parallel | subprocess | ...(如实输出)
+- `canReject`: boolean(审批节点是否可驳回);`rejectTo`: {nodeId,name}?(驳回回退目标)
+- `multiMode`: "ALL"会签 | "ANY"或签 | "SEQUENCE"顺序 | null(approval 并签模式)
+- `parallelGroup`: string?(并行网关分组;同组前端并排)
+
+### 后端算法改造(磐石)
+- **完整链路**:从流程起点走全程,不跳过 completed——completed 集合→done、当前活动节点→current、
+  其余→future(status 标注);已结束实例全 done。
+- **驳回(用户方案)**:审批节点标 canReject + rejectTo(读驳回策略:回发起人/回上一审批节点);
+  **只标"可驳回点",不画多次回退路径**(静态图预知不了驳回次数)——真实驳回轨迹由 ②回放(timeline
+  真实历史)如实还原,无论几次。
+- **条件网关**:按当前表单值走命中分支(正向主链路);default 兜底(用户选"当前主链路为主")。
+- **并行网关**:多路分支都纳入,标 parallelGroup(前端并排,现在只走一条)。
+- **并签**:approval 节点读 multiMode(会签/或签/顺序)+ 全部办理人。
+- **抄送/子流程等**:如实输出 nodeType。
+
+### 前端展示(疾风)
+- 完整链路:done 绿实线 / current 呼吸灯 / future 蓝虚线,从头到尾一张图。
+- 审批节点「⟲ 可驳回」小标记 + 悬浮"驳回将回到 X"(rejectTo);不画回退连线。
+- 并行网关:parallelGroup 同组并排;并签:标会签模式+全部办理人;特殊节点按 nodeType 图标。
+- 与 ②回放协同:预测=正向未来+可驳回点;回放=真实历史(含所有驳回)。
+
+### 派单时序
+后端 predict 算法等磐石表单预填单收口(:8081 串行);前端展示等 nodeInfo bug 修好(id 匹配是完整
+链路展示的前提)。BPMN 专业模式静态预测仍不支持(现状,给 note)。
