@@ -15,6 +15,7 @@ import com.xingchen.oa.office.entity.ApprovalLog;
 import com.xingchen.oa.office.repository.ApprovalCcRepository;
 import com.xingchen.oa.office.repository.ApprovalLogRepository;
 import com.xingchen.oa.office.repository.ApprovalRepository;
+import com.xingchen.oa.office.support.DataScopeSupport;
 import com.xingchen.oa.office.support.DeptNameResolver;
 import com.xingchen.oa.office.support.SecuritySupport;
 import jakarta.persistence.OptimisticLockException;
@@ -42,27 +43,32 @@ public class ApprovalService {
 
     private static final List<String> DONE_ACTIONS = List.of(ApprovalLog.ACTION_APPROVE, ApprovalLog.ACTION_REJECT);
 
+    /** Approval 实体声明的业务数据维度 → 过滤列（DP1 多维；dept/self 仍由 SecuritySupport 内建处理）。 */
+    private static final Map<String, String> DATA_DIMENSIONS =
+            Map.of("costCenter", "costCenterId", "project", "projectId");
+
     private final ApprovalRepository approvalRepository;
     private final ApprovalLogRepository logRepository;
     private final ApprovalCcRepository ccRepository;
     private final DeptNameResolver deptNameResolver;
+    private final DataScopeSupport dataScopeSupport;
 
     /**
-     * 分页查询：status 条件 + 当前用户数据权限（DataScope）过滤。
+     * 分页查询：status 条件 + 当前用户<b>多维</b>数据权限过滤（部门维 AND 成本中心/项目维）。
      */
     public PageResult<ApprovalResponse> page(String status, int pageNum, int pageSize) {
         Page<Approval> page = approvalRepository.findAll(
-                statusSpec(status).and(SecuritySupport.dataScope("deptId", "applicantId")),
+                statusSpec(status).and(dataScopeSupport.multiDim("deptId", "applicantId", DATA_DIMENSIONS)),
                 pageable(pageNum, pageSize));
         return toPageResult(page);
     }
 
     /**
-     * 待办数量：同样走数据权限，status = PENDING。
+     * 待办数量：同样走多维数据权限，status = PENDING。
      */
     public long pendingCount() {
         return approvalRepository.count(
-                statusSpec(Approval.STATUS_PENDING).and(SecuritySupport.dataScope("deptId", "applicantId")));
+                statusSpec(Approval.STATUS_PENDING).and(dataScopeSupport.multiDim("deptId", "applicantId", DATA_DIMENSIONS)));
     }
 
     /**

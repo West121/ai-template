@@ -5,6 +5,7 @@ import com.xingchen.oa.common.core.PageResult;
 import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.common.security.CurrentUserHolder;
 import com.xingchen.oa.common.security.UserContext;
+import com.xingchen.oa.system.datadim.DataDimensionService;
 import com.xingchen.oa.system.dto.AssignmentCreateRequest;
 import com.xingchen.oa.system.dto.AssignmentInfo;
 import com.xingchen.oa.system.dto.UserCreateRequest;
@@ -66,6 +67,7 @@ public class SysUserService {
     private final SysRoleRepository roleRepository;
     private final PasswordEncoder passwordEncoder;
     private final PermissionService permissionService;
+    private final DataDimensionService dataDimensionService;
 
     @Transactional(readOnly = true)
     public PageResult<UserResponse> page(String keyword, Long deptId, Boolean enabled,
@@ -412,6 +414,7 @@ public class SysUserService {
         assignment.setEnabled(true);
         assignment.setRoles(resolveRoles(request.roleIds()));
         assignmentRepository.save(assignment);
+        dataDimensionService.evictUser(userId); // 任职变更 → 失效多维可见范围缓存
         return assignments(userId);
     }
 
@@ -425,7 +428,9 @@ public class SysUserService {
         if (Boolean.TRUE.equals(assignment.getPrimaryFlag())) {
             throw new BusinessException(400, "主任职不可删除");
         }
+        Long userId = assignment.getUserId();
         assignmentRepository.delete(assignment);
+        dataDimensionService.evictUser(userId); // 任职变更 → 失效多维可见范围缓存
     }
 
     // ------------------------------------------------------------

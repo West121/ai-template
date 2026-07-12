@@ -119,6 +119,13 @@ RECEIVE status: TO_SIGN(待签收)/PROCESSING(办理中)/FINISHED(已办结)；S
 - GET `/api/system/roles/{id}/permissions` → number[]；PUT `/api/system/roles/{id}/permissions` {permissionIds:number[]}【P:system:role:edit】
 - GET `/api/system/permissions/tree` → [{id,code,name,type:MENU|BUTTON,children[]}]
 
+### 多维数据权限（DP1，oa-module-system）
+- GET `/api/system/data-dimensions` → `[{code,label,entity?,enabled}]`（已注册**业务维度**，不含内建 dept/self；元数据落 `sys_data_dimension`，可插拔 `DataDimensionProvider`）
+- GET `/api/system/data-dimensions/{code}/options` → `[{id,label}]`（该维 CUSTOM 可选值，泛化端点，委托 provider；未注册维度→400 白名单红线）
+- GET|PUT `/api/system/roles/{id}/data-dimensions`、GET|PUT `/api/system/users/{id}/data-dimensions` → `[{dimension,scope:"ALL"|"CUSTOM",values:number[]}]`（PUT 全量替换，写需 system:role:edit / system:user:edit）
+- 语义：未配维度=不限；ALL=不限；CUSTOM=仅 values 集内（空集=什么都看不到，默认更严）。维度白名单在后端（注册才可配，取值范围校验）。多维**维度间 AND**；内建 dept 维仍走既有 5 档 role.dataScope（**向后兼容：只有 dept 维的实体行为完全不变**）。
+- 性能：用户各维可见 id 集**预计算 → Redis 缓存**（`dp:dims:{userId}`，TTL 30min + 授权/任职变更主动失效），查询侧直接取集拼 `col IN (集)`，不 join 授权表；ALL 短路不拼谓词。基础数据 `sys_cost_center`/`biz_project`；示例实体 oa_approval 接入 costCenter(cost_center_id)/project(project_id) 维度。
+
 ## 新增权限码与角色授权（V3 种子，B1 负责写入）
 新权限码：office:document:list/edit、office:announcement:publish、system:dept:edit、system:post:edit、system:user:edit、system:role:edit
 授权：ADMIN=全部；DEPT_MANAGER 增加 office:document:list/edit、office:announcement:publish；EMPLOYEE/FINANCE 增加 office:document:list。

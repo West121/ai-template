@@ -56,6 +56,18 @@ public class Approval {
     @Column(name = "applicant_id")
     private Long applicantId;
 
+    /**
+     * 成本中心 id（DP1 多维数据权限 costCenter 维度过滤列，可空=不参与该维过滤）。
+     */
+    @Column(name = "cost_center_id")
+    private Long costCenterId;
+
+    /**
+     * 项目 id（DP1 多维数据权限 project 维度过滤列，可空）。
+     */
+    @Column(name = "project_id")
+    private Long projectId;
+
     @Column(name = "start_date")
     private LocalDate startDate;
 

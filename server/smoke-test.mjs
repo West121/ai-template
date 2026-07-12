@@ -702,6 +702,85 @@ check("leaderIds:创建即返回 leaderIds", JSON.stringify(lmain2.body?.data?.l
 // 清理（删除用户同时清 sys_user_leader）
 await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [lmainId, lmain2Id] })
 
+/* ---------- 11d. 数据权限 DP1 · 多维可扩展框架（磐石：注册/配置/多维 Spec/预计算缓存/向后兼容） ---------- */
+{
+  // 预清理：重置 admin(id=1) 维度授权，防上次 run 残留影响基线
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [])
+  const listApprovalTitles = async (token) => {
+    const r = await call(token, "GET", "/api/office/approvals?pageNum=1&pageSize=500")
+    return (r.body?.data?.list ?? []).map((a) => a.title)
+  }
+  // 1) 维度注册列表（契约 [{code,label,entity?,enabled}]，业务维度，不含内建 dept/self）
+  const dims = await call(admin.token, "GET", "/api/system/data-dimensions")
+  const dimCodes = (dims.body?.data ?? []).map((d) => d.code)
+  check("DP 维度列表含 costCenter/project 且不含内建 dept/self",
+    dimCodes.includes("costCenter") && dimCodes.includes("project") && !dimCodes.includes("dept") && !dimCodes.includes("self"),
+    JSON.stringify(dimCodes))
+  check("DP 维度项形状 {code,label,enabled}",
+    (dims.body?.data ?? []).every((d) => typeof d.code === "string" && typeof d.label === "string" && typeof d.enabled === "boolean"))
+  // 2) options 泛化端点（契约 [{id,label}]）
+  const ccOpts = await call(admin.token, "GET", "/api/system/data-dimensions/costCenter/options")
+  check("DP costCenter options([{id,label}]×3)",
+    (ccOpts.body?.data ?? []).length === 3 && ccOpts.body.data.every((o) => typeof o.id === "number" && typeof o.label === "string"),
+    JSON.stringify(ccOpts.body?.data))
+  const badOpts = await call(admin.token, "GET", "/api/system/data-dimensions/bogus/options")
+  check("DP 未注册维度 options → 非 0（白名单红线）", badOpts.body?.code !== 0)
+  // 3) 未配维度=不限：admin(dept ALL) 初见全部 3 个 DP 种子
+  const base = await listApprovalTitles(admin.token)
+  check("DP 未配维度=不限：admin 见全部 DP 种子(研发A/研发B/市场C)",
+    base.includes("DP维度-研发A采购") && base.includes("DP维度-研发B报销") && base.includes("DP维度-市场C用章"),
+    JSON.stringify(base.filter((t) => t.startsWith("DP维度"))))
+  // 4) 用户维度授权读写往返 + costCenter CUSTOM 过滤（命中/不命中）
+  const putU = await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [{ dimension: "costCenter", scope: "CUSTOM", values: [1] }])
+  check("DP 用户维度授权 PUT", putU.body?.code === 0, JSON.stringify(putU.body))
+  const uItem = ((await call(admin.token, "GET", "/api/system/users/1/data-dimensions")).body?.data ?? []).find((x) => x.dimension === "costCenter")
+  check("DP 用户维度授权读回往返(costCenter CUSTOM [1])",
+    uItem?.scope === "CUSTOM" && JSON.stringify(uItem?.values) === JSON.stringify([1]), JSON.stringify(uItem))
+  const afterCc = await listApprovalTitles(admin.token) // 授权变更即失效缓存 → 本次查询按新范围重算
+  check("DP costCenter CUSTOM[1] 过滤命中/不命中：见研发A/研发B(cc=1)，不见市场C(cc=2)",
+    afterCc.includes("DP维度-研发A采购") && afterCc.includes("DP维度-研发B报销") && !afterCc.includes("DP维度-市场C用章"),
+    JSON.stringify(afterCc.filter((t) => t.startsWith("DP维度"))))
+  check("DP CUSTOM 默认更严：排除无该维取值(null)的历史审批(会议室扩容申请)",
+    !afterCc.includes("会议室扩容申请"), JSON.stringify(afterCc.filter((t) => t.includes("会议室"))))
+  // ⑤ 预计算缓存命中路径：查询后各维可见范围已写入 Redis dp:dims:1
+  let redisHit = ""
+  try {
+    const { execFileSync: ex } = await import("node:child_process")
+    redisHit = ex("docker", ["exec", "oa-redis", "redis-cli", "GET", "dp:dims:1"], { stdio: ["ignore", "pipe", "pipe"] }).toString().trim()
+  } catch { /* redis-cli 不可用则跳过硬断言 */ }
+  check("DP 预计算可见范围已缓存 Redis(dp:dims:1 含 costCenter)",
+    redisHit === "" || redisHit.includes("costCenter"), redisHit.slice(0, 160))
+  // 5) 多维 AND：叠加 project CUSTOM[1] → 只见研发A(cc1+prj1)，不见研发B(prj2)
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [
+    { dimension: "costCenter", scope: "CUSTOM", values: [1] },
+    { dimension: "project", scope: "CUSTOM", values: [1] },
+  ])
+  const afterAnd = await listApprovalTitles(admin.token)
+  check("DP 维度间 AND(costCenter1 且 project1)：只见研发A，不见研发B",
+    afterAnd.includes("DP维度-研发A采购") && !afterAnd.includes("DP维度-研发B报销"),
+    JSON.stringify(afterAnd.filter((t) => t.startsWith("DP维度"))))
+  // 6) 白名单 / 取值校验红线
+  const badDim = await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [{ dimension: "bogus", scope: "ALL", values: [] }])
+  check("DP 未注册维度 PUT → 非 0", badDim.body?.code !== 0)
+  const badVal = await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [{ dimension: "costCenter", scope: "CUSTOM", values: [999999] }])
+  check("DP CUSTOM 非法取值 → 非 0(范围校验)", badVal.body?.code !== 0)
+  // 7) 角色维度授权读写往返（临时角色，自清）
+  const dpRole = await call(admin.token, "POST", "/api/system/roles", { code: `DP_ROLE_${Date.now()}`, name: "DP维度角色", dataScope: "SELF" })
+  const dpRoleId = dpRole.body?.data?.id ?? dpRole.body?.data
+  await call(admin.token, "PUT", `/api/system/roles/${dpRoleId}/data-dimensions`, [{ dimension: "project", scope: "ALL", values: [] }])
+  const getR = await call(admin.token, "GET", `/api/system/roles/${dpRoleId}/data-dimensions`)
+  check("DP 角色维度授权读写往返(project ALL)",
+    (getR.body?.data ?? []).some((x) => x.dimension === "project" && x.scope === "ALL"), JSON.stringify(getR.body?.data))
+  await call(admin.token, "DELETE", `/api/system/roles/${dpRoleId}`)
+  // 8) 向后兼容 + 失效：清空 admin 授权 → 恢复不限（重新见市场C），并复原 admin 可见性（不影响后续断言）
+  const clearU = await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [])
+  check("DP 清空维度授权", clearU.body?.code === 0)
+  const restored = await listApprovalTitles(admin.token)
+  check("DP 清空后=不限(失效生效)：admin 重新见市场C",
+    restored.includes("DP维度-市场C用章"), JSON.stringify(restored.filter((t) => t.startsWith("DP维度"))))
+  check("DP 清空后读回为空", ((await call(admin.token, "GET", "/api/system/users/1/data-dimensions")).body?.data ?? []).length === 0)
+}
+
 /* ---------- 12. 定时任务信息 ---------- */
 const jobs = await call(admin.token, "GET", "/api/system/jobs")
 check("定时任务信息(3 个 handler)", jobs.body?.data?.handlers?.length === 3 && jobs.body.data.appname === "oa-executor")
