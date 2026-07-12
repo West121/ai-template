@@ -20,6 +20,8 @@ const AssistantPanel = lazy(() => import("./assistant-panel"))
 /** API/协议层（SSE 客户端/解析器/mock）随首次使用懒加载——主包只留 FAB 与会话壳（分片纪律） */
 const loadApi = () => import("./api")
 const loadProtocol = () => import("./protocol")
+/** localStorage 键：最近会话 id（下次打开面板默认恢复） */
+const LAST_SESSION_KEY = "ai-last-session"
 
 export function AiAssistant() {
   const offline = useAuthStore((s) => s.offline)
@@ -40,6 +42,8 @@ export function AiAssistant() {
   const lastSentRef = useRef<{ text: string; attachments: AiAttachment[]; clientMessageId: string } | null>(null)
   const fabRef = useRef<HTMLButtonElement>(null)
   const [focusSignal, setFocusSignal] = useState(0)
+  /** 面板首次打开时恢复上次会话（只做一次，之后保持当前会话） */
+  const restoredRef = useRef(false)
 
   /* ---- V2 模型档案（§4.3）：FAST/STANDARD/REASONING/VISION；端点 404 回退旧凭据；会话内记忆 ---- */
   const [models, setModels] = useState<AiModelChoice[]>([])
@@ -63,6 +67,16 @@ export function AiAssistant() {
     },
     [sessionId],
   )
+
+  // 记住当前会话，供下次打开面板恢复（隐私模式 localStorage 不可用则静默）
+  useEffect(() => {
+    if (!sessionId) return
+    try {
+      localStorage.setItem(LAST_SESSION_KEY, sessionId)
+    } catch {
+      /* localStorage 不可用 */
+    }
+  }, [sessionId])
 
   /* ---- 批D 亮点⑤ 主动晨报：每日首次打开面板拉取，置顶简报卡（当日关闭次日恢复） ---- */
   const [briefing, setBriefing] = useState<AiBriefing | null>(null)
@@ -270,6 +284,28 @@ export function AiAssistant() {
     }
   }, [])
 
+  /** 面板首次打开：恢复上次会话（localStorage lastSessionId 优先，否则最近一个）；无历史 → 空新会话（欢迎态）。 */
+  const restoreLastSession = useCallback(async () => {
+    if (restoredRef.current) return // 只在首次打开恢复，之后保持当前会话
+    restoredRef.current = true
+    try {
+      const [api, panel] = await Promise.all([loadApi(), import("./panel-logic")])
+      const res = await api.fetchSessions()
+      const list = Array.isArray(res.data) ? res.data : []
+      setSessions(list)
+      let last: string | null = null
+      try {
+        last = localStorage.getItem(LAST_SESSION_KEY)
+      } catch {
+        /* localStorage 不可用 */
+      }
+      const target = panel.pickRestoreTarget(list, last)
+      if (target) await openSession(target) // 无历史 → target null → 保持空新会话
+    } catch {
+      /* 拉取失败 → 保持空新会话，不阻断使用 */
+    }
+  }, [openSession])
+
   const removeSession = useCallback(
     async (id: string) => {
       try {
@@ -288,6 +324,8 @@ export function AiAssistant() {
   const openPanel = () => {
     setOpen(true)
     setFocusSignal((n) => n + 1)
+    // 首次打开恢复上次会话（有历史→最近会话；无历史→空新会话）
+    void restoreLastSession()
   }
   const closePanel = useCallback(() => {
     setOpen(false)

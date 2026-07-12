@@ -18,6 +18,12 @@ export default defineConfig({
         target: "http://localhost:8081",
         changeOrigin: true,
       },
+      // 知识库实时协同 WebSocket（批4b，§10）：ws 升级代理到后端
+      "/ws/kb": {
+        target: "ws://localhost:8081",
+        ws: true,
+        changeOrigin: true,
+      },
     },
   },
 })

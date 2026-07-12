@@ -2,6 +2,7 @@
  * 批D 面板纯逻辑用例：斜杠命令过滤（亮点⑥）+ 晨报当日关闭/汇总（亮点⑤）。
  */
 import { describe, expect, it } from "vitest"
+import { pickRestoreTarget } from "./panel-logic"
 import {
   SLASH_COMMANDS,
   briefingSummary,
@@ -68,5 +69,24 @@ describe("briefingSummary（晨报汇总行）", () => {
   it("全 0 → 空串（组件走空态文案）", () => {
     expect(briefingSummary({ urgentCount: 0, meetingCount: 0, unreadCount: 0 })).toBe("")
     expect(briefingSummary({})).toBe("")
+  })
+})
+
+describe("pickRestoreTarget（打开面板恢复上次会话）", () => {
+  const list = [{ id: "s3" }, { id: "s2" }, { id: "s1" }] // 最近在前
+
+  it("无历史（空列表）→ null（新会话·欢迎态）", () => {
+    expect(pickRestoreTarget([], "s2")).toBeNull()
+    expect(pickRestoreTarget(null, null)).toBeNull()
+    expect(pickRestoreTarget(undefined, "sX")).toBeNull()
+  })
+
+  it("lastId 仍在列表 → 精确恢复上次会话", () => {
+    expect(pickRestoreTarget(list, "s2")).toBe("s2")
+  })
+
+  it("无 lastId / lastId 已失效 → 最近一个（list[0]）", () => {
+    expect(pickRestoreTarget(list, null)).toBe("s3")
+    expect(pickRestoreTarget(list, "已删除的会话")).toBe("s3")
   })
 })

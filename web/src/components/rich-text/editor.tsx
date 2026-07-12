@@ -14,6 +14,7 @@
 import { useCallback, useEffect, type CSSProperties } from "react"
 import { toast } from "sonner"
 import { EditorContent, useEditor, type Editor } from "@tiptap/react"
+import type { AnyExtension } from "@tiptap/core"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth-store"
 import {
@@ -49,6 +50,12 @@ export interface RichTextEditorProps {
   className?: string
   /** 拿到底层 TipTap 编辑器实例（如知识库 AI 写作辅助：选区/插入/替换）；卸载回传 null。传稳定引用（useCallback）。 */
   onEditorReady?: (editor: Editor | null) => void
+  /**
+   * 协同编辑（可选，backward-compatible）：由调用方注入**预构建**的协同扩展
+   * （Collaboration + CollaborationCaret，绑定 ydoc/provider）。rich-text 不引 yjs/y-websocket。
+   * 传入即进协同模式：关 StarterKit 撤销重做（history 交给 Collaboration）、内容由 ydoc 提供（不做受控回写）。
+   */
+  collaboration?: { extensions: AnyExtension[] }
 }
 
 /** 后端文件上传响应（对齐 file-uploader 的 UploadedFile） */
@@ -80,13 +87,17 @@ export function RichTextEditor({
   showCount,
   className,
   onEditorReady,
+  collaboration,
 }: RichTextEditorProps) {
-  const resolved = resolveFeatures(preset, features)
+  const collab = collaboration ?? null
+  // 协同模式：撤销重做交给 Collaboration（关掉 StarterKit 自带 history，避免冲突）
+  const resolved = collab ? resolveFeatures(preset, features).filter((f) => f !== "undoRedo") : resolveFeatures(preset, features)
   const editable = !readOnly && !disabled
 
   const editor = useEditor({
-    extensions: buildExtensions(resolved, { placeholder, maxLength }),
-    content: value || "",
+    extensions: collab ? [...buildExtensions(resolved, { placeholder, maxLength }), ...collab.extensions] : buildExtensions(resolved, { placeholder, maxLength }),
+    // 协同模式内容由 ydoc 提供，勿设初始 content（否则与协同文档重复）
+    content: collab ? undefined : value || "",
     editable,
     editorProps: {
       attributes: { class: "rt-content", role: "textbox", "aria-multiline": "true" },
@@ -95,12 +106,12 @@ export function RichTextEditor({
     onUpdate: ({ editor }) => onChange(editor.isEmpty ? "" : editor.getHTML()),
   })
 
-  // 受控同步：外部 value 与现值不一致才回写（emitUpdate:false 防回环/光标跳动）
+  // 受控同步：外部 value 与现值不一致才回写（emitUpdate:false 防回环/光标跳动）；协同模式不做受控回写
   useEffect(() => {
-    if (!editor) return
+    if (!editor || collab) return
     const current = editor.isEmpty ? "" : editor.getHTML()
     if ((value || "") !== current) editor.commands.setContent(value || "", { emitUpdate: false })
-  }, [value, editor])
+  }, [value, editor, collab])
 
   // readOnly / disabled 切换
   useEffect(() => {

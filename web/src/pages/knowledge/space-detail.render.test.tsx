@@ -13,6 +13,8 @@ import SpaceDetail from "./space-detail"
 
 beforeAll(() => {
   useAuthStore.setState({ offline: true, permissions: null, userId: null, token: null })
+  // 无 WebSocket → 协同 hook 立即降级单人（测试确定性，不发真实 WS）
+  vi.stubGlobal("WebSocket", undefined)
   vi.stubGlobal("ResizeObserver", class {
     observe() {}
     unobserve() {}

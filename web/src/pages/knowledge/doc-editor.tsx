@@ -20,6 +20,8 @@ import { KbAiAssist } from "./kb-ai-assist"
 import { VersionHistory } from "./version-history"
 import { DocComments } from "./comments"
 import { DocMeta } from "./doc-meta"
+import { CollabPresence } from "./collab-presence"
+import { useKbCollab } from "./use-kb-collab"
 import { DOC_STATUS_META, type KbDocDetail } from "./types"
 
 export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | null; canEdit: boolean; onDocChanged?: () => void }) {
@@ -33,6 +35,8 @@ export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | nu
   const [editor, setEditor] = useState<Editor | null>(null)
   const onEditorReady = useCallback((e: Editor | null) => setEditor(e), [])
   const reqRef = useRef(0)
+  // REST 载入的正文（协同播种用；不被空协同编辑器的 onChange("") 覆盖）
+  const restHtmlRef = useRef("")
 
   const reload = useCallback(() => {
     if (docId == null) {
@@ -53,7 +57,9 @@ export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | nu
         }
         setDetail(r.data)
         setTitle(r.data.title)
-        setHtml(jsonToHtml(r.data.contentJson))
+        const h = jsonToHtml(r.data.contentJson)
+        restHtmlRef.current = h
+        setHtml(h)
         setDirty(false)
       })
       .catch((e: unknown) => {
@@ -68,6 +74,18 @@ export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | nu
   }, [docId])
 
   useEffect(() => reload(), [reload])
+
+  // 实时协同（批4b）：仅 DOC + 可编时连；连不上/无 WS → degraded 单人（红线）
+  const collabDocId = detail && detail.type === "DOC" && canEdit ? detail.id : null
+  const collab = useKbCollab(collabDocId, canEdit)
+  const seededRef = useRef<number | null>(null)
+  // 协同连上且 ydoc 为空（从未协同过的文档）→ 用 REST 正文播种一次
+  useEffect(() => {
+    if (collab.status === "connected" && editor && detail && seededRef.current !== detail.id) {
+      if (editor.isEmpty && restHtmlRef.current) editor.commands.setContent(restHtmlRef.current)
+      seededRef.current = detail.id
+    }
+  }, [collab.status, editor, detail])
 
   const save = async () => {
     if (!detail) return
@@ -173,8 +191,9 @@ export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | nu
           {statusMeta?.label}
         </Badge>
         <span className="shrink-0 text-xs text-muted-foreground">v{detail.version}</span>
-        {/* 协作：历史版本 / 评论（全部用户可看，编辑动作按 canEdit 门控） */}
+        {/* 协作：在线状态 + 历史版本 / 评论（全部用户可看，编辑动作按 canEdit 门控） */}
         <div className="flex shrink-0 items-center gap-1.5">
+          {canEdit && <CollabPresence status={collab.status} users={collab.users} className="mr-0.5" />}
           <VersionHistory
             docId={detail.id}
             currentVersion={detail.version}
@@ -211,10 +230,31 @@ export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | nu
       {/* AI 摘要 + 标签（批3；磐石后端保存后生成，空则不显示） */}
       <DocMeta summary={detail.summary} tags={detail.tags} />
 
-      {/* 正文 */}
+      {/* 正文：VIEWER 只读；协同连上→协同编辑器；连接中→只读预览；降级→单人编辑器 */}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {canEdit ? (
+        {!canEdit ? (
+          <RichTextViewer html={html} />
+        ) : collab.status === "connecting" ? (
+          <div className="opacity-70">
+            <RichTextViewer html={html} />
+          </div>
+        ) : collab.status === "connected" ? (
           <RichTextEditor
+            key={`collab-${detail.id}`}
+            value=""
+            onChange={(next) => {
+              setHtml(next)
+              setDirty(true)
+            }}
+            preset="full"
+            placeholder="开始协同编辑…"
+            minHeight={360}
+            onEditorReady={onEditorReady}
+            collaboration={{ extensions: collab.extensions ?? [] }}
+          />
+        ) : (
+          <RichTextEditor
+            key={`single-${detail.id}`}
             value={html}
             onChange={(next) => {
               setHtml(next)
@@ -225,8 +265,6 @@ export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | nu
             minHeight={360}
             onEditorReady={onEditorReady}
           />
-        ) : (
-          <RichTextViewer html={html} />
         )}
       </div>
 

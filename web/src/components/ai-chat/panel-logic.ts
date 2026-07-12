@@ -55,6 +55,19 @@ export function shouldShowBriefing(dismissedDate: string | null | undefined, tod
 /** localStorage 键：晨报「今日不再显示」记录的自然日 */
 export const BRIEFING_DISMISS_KEY = "ai-briefing-dismissed"
 
+/**
+ * 打开面板时恢复哪个会话（纯，可测）：
+ *  - 空列表 → null（新用户/无历史 → 空新会话·欢迎态）
+ *  - lastId 仍在列表 → 它（精确恢复"上次的会话"）
+ *  - 否则 → 最近一个 list[0]
+ */
+export function pickRestoreTarget(sessions: { id: string }[] | null | undefined, lastId: string | null): string | null {
+  const list = Array.isArray(sessions) ? sessions : []
+  if (list.length === 0) return null
+  if (lastId && list.some((s) => s.id === lastId)) return lastId
+  return list[0].id
+}
+
 /** 晨报计数汇总行文案（只列非零项）：如「今日 3 件急事 · 2 个会议 · 5 条待阅」；全 0 → 空串 */
 export function briefingSummary(counts: { urgentCount?: number; meetingCount?: number; unreadCount?: number }): string {
   const parts: string[] = []
