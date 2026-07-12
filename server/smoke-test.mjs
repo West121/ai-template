@@ -3642,11 +3642,14 @@ async function hlCompleted(token, iid) {
 
   // 8) 晨报（当日首次生成 + 当日缓存）
   const brief1 = await call(admin.token, "GET", "/api/ai/briefing")
-  check("aiV2D briefing 形状(date/urgent/meetings/unreadCc/unreadCount)",
-    brief1.body?.code === 0 && !!brief1.body?.data?.date && Array.isArray(brief1.body?.data?.urgent) &&
-      Array.isArray(brief1.body?.data?.meetings) && Array.isArray(brief1.body?.data?.unreadCc) &&
-      typeof brief1.body?.data?.unreadCount === "number" && typeof brief1.body?.data?.cached === "boolean",
-    JSON.stringify({ date: brief1.body?.data?.date, cached: brief1.body?.data?.cached }))
+  const bd = brief1.body?.data
+  check("aiV2D briefing 形状(date/greeting/三计数/items[title,kind,featureCode,routeParams])",
+    brief1.body?.code === 0 && !!bd?.date && typeof bd?.greeting === "string" &&
+      typeof bd?.urgentCount === "number" && typeof bd?.meetingCount === "number" && typeof bd?.unreadCount === "number" &&
+      Array.isArray(bd?.items) &&
+      bd.items.every((it) => !!it.title && !!it.kind && !!it.featureCode && !!it.routeParams &&
+        ["待办", "会议", "待阅"].includes(it.kind)),
+    JSON.stringify({ date: bd?.date, greeting: bd?.greeting, counts: [bd?.urgentCount, bd?.meetingCount, bd?.unreadCount], n: (bd?.items ?? []).length, s: (bd?.items ?? [])[0] }))
   // 当日缓存：连取两次，第二次必为缓存命中（cached=true；同进程当日缓存跨 run 保持，故不断言首取 false）
   const brief2 = await call(admin.token, "GET", "/api/ai/briefing")
   check("aiV2D briefing 当日缓存(再取 cached=true)", brief2.body?.data?.cached === true, JSON.stringify(brief2.body?.data?.cached))

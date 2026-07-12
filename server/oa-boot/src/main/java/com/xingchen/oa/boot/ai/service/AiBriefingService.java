@@ -61,47 +61,61 @@ public class AiBriefingService {
         return payload;
     }
 
-    /** 强制生成（不读缓存）——定时编排接入点。 */
+    /**
+     * 强制生成（不读缓存）——定时编排接入点。前端契约形状：
+     * {@code {date, greeting?, urgentCount, meetingCount, unreadCount,
+     * items:[{title, kind, featureCode?, routeParams?, path?, meta?}]}}——items 合并急事+会议+待阅，
+     * 每项带 featureCode+routeParams 供前端 route-registry 跳转（急事/待阅→WORKFLOW_TASKS，会议→MEETING_MY）。
+     */
     public Map<String, Object> generate() {
         LocalDate today = LocalDate.now();
+        UserContext user = CurrentUserHolder.get();
+        List<Map<String, Object>> items = new ArrayList<>();
+        int urgentCount = 0;
+        int meetingCount = 0;
+        int unreadCount = 0;
 
-        // 急事 Top-N（服务端确定性排序，LLM 只呈现）
-        List<Map<String, Object>> urgent;
+        // 急事 Top-N（待办部分；服务端确定性排序，LLM 只呈现）→ WORKFLOW_TASKS
         try {
-            List<Map<String, Object>> items = urgentService.urgentItems();
-            urgent = items.size() > URGENT_TOP_N ? new ArrayList<>(items.subList(0, URGENT_TOP_N)) : items;
+            for (Map<String, Object> u : urgentService.urgentItems()) {
+                if (!"待办".equals(u.get("kind"))) {
+                    continue; // 会议由下方今日会议单独汇总，避免重复
+                }
+                if (urgentCount >= URGENT_TOP_N) {
+                    break;
+                }
+                urgentCount++;
+                items.add(item(str(u.get("title")), "待办", "WORKFLOW_TASKS",
+                        Map.of(), str(u.get("link")), str(u.get("reason"))));
+            }
         } catch (Exception e) {
             log.warn("晨报急事汇总失败: {}", e.getMessage());
-            urgent = List.of();
         }
 
-        // 今日会议
-        List<Map<String, Object>> meetings = new ArrayList<>();
+        // 今日会议 → MEETING_MY
         try {
             PageResult<MeetingResponse> my = meetingService.my(1, 50);
             for (MeetingResponse m : my.getList()) {
                 if (today.equals(m.date()) && !"CANCELED".equals(m.status())) {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    row.put("subject", m.subject());
-                    row.put("room", m.roomName());
-                    row.put("time", m.startHour() + ":00-" + m.endHour() + ":00");
-                    meetings.add(row);
+                    meetingCount++;
+                    items.add(item(m.subject(), "会议", "MEETING_MY",
+                            m.id() == null ? Map.of() : Map.of("meetingId", m.id()), "/meeting/my",
+                            nz(m.roomName()) + " " + m.startHour() + ":00-" + m.endHour() + ":00"));
                 }
             }
         } catch (Exception e) {
             log.warn("晨报会议汇总失败: {}", e.getMessage());
         }
 
-        // 未读待阅（抄送我且未读）
-        List<Map<String, Object>> unreadCc = new ArrayList<>();
+        // 未读待阅（抄送我且未读）→ WORKFLOW_TASKS
         try {
             PageResult<ApprovalCcResponse> cc = approvalService.cc(1, 50);
             for (ApprovalCcResponse c : cc.getList()) {
                 if (!Boolean.TRUE.equals(c.readFlag())) {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    row.put("title", c.title());
-                    row.put("applicant", c.applicant());
-                    unreadCc.add(row);
+                    unreadCount++;
+                    items.add(item(c.title(), "待阅", "WORKFLOW_TASKS",
+                            c.id() == null ? Map.of() : Map.of("approvalId", c.id()), "/workflow/tasks",
+                            "抄送人 " + nz(c.applicant())));
                 }
             }
         } catch (Exception e) {
@@ -110,14 +124,46 @@ public class AiBriefingService {
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("date", today.toString());
+        payload.put("greeting", greeting(user));
         payload.put("generatedAt", java.time.OffsetDateTime.now().toString());
-        payload.put("urgent", urgent);
-        payload.put("urgentCount", urgent.size());
-        payload.put("meetings", meetings);
-        payload.put("meetingCount", meetings.size());
-        payload.put("unreadCc", unreadCc);
-        payload.put("unreadCount", unreadCc.size());
+        payload.put("urgentCount", urgentCount);
+        payload.put("meetingCount", meetingCount);
+        payload.put("unreadCount", unreadCount);
+        payload.put("items", items);
         payload.put("cached", false);
         return payload;
+    }
+
+    /** 简报项：featureCode+routeParams 供前端 route-registry 跳转；path 兜底；meta 放原因/明细。 */
+    private Map<String, Object> item(String title, String kind, String featureCode,
+                                     Map<String, Object> routeParams, String path, String meta) {
+        Map<String, Object> o = new LinkedHashMap<>();
+        o.put("title", title);
+        o.put("kind", kind);
+        o.put("featureCode", featureCode);
+        o.put("routeParams", routeParams == null ? Map.of() : routeParams);
+        if (path != null) {
+            o.put("path", path);
+        }
+        if (meta != null) {
+            o.put("meta", meta);
+        }
+        return o;
+    }
+
+    /** 时段问候 + 用户名。 */
+    private String greeting(UserContext user) {
+        int h = java.time.LocalTime.now().getHour();
+        String g = h < 6 ? "凌晨好" : h < 12 ? "上午好" : h < 14 ? "中午好" : h < 18 ? "下午好" : "晚上好";
+        String name = user == null ? null : (user.getName() != null ? user.getName() : user.getUsername());
+        return name != null ? g + "，" + name : g;
+    }
+
+    private String str(Object v) {
+        return v == null ? null : String.valueOf(v);
+    }
+
+    private String nz(String s) {
+        return s == null ? "" : s;
     }
 }
