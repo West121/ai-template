@@ -335,6 +335,8 @@ export function ChatView({
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const [stickBottom, setStickBottom] = useState(true)
+  // 拖拽到输入卡的高亮态（拖拽/粘贴/选择都复用 ingestFiles，零新校验）
+  const [dragging, setDragging] = useState(false)
 
   /* ---- 斜杠命令面板（亮点⑥） ---- */
   const slashCommands = useMemo(() => filterSlashCommands(value), [value])
@@ -381,10 +383,8 @@ export function ChatView({
     setPending((prev) => prev.map((a) => (a.localId === localId ? { ...a, ...patch } : a)))
   }, [])
 
-  /* ---- 附件选择：就地校验 → dataURL 预览 → 上传得 attachmentId（fileId 化，失败回退 dataUrl） ---- */
-  const onPickFiles = async (e: ChangeEvent<HTMLInputElement>) => {
-    const files = [...(e.target.files ?? [])]
-    e.target.value = ""
+  /* ---- 附件入库（选择/拖拽/粘贴 三处复用）：就地校验 → dataURL 预览 → 上传得 attachmentId（fileId 化，失败回退 dataUrl） ---- */
+  const ingestFiles = async (files: File[]) => {
     let count = pending.length
     for (const file of files) {
       if (count >= MAX_ATTACHMENTS) {
@@ -417,6 +417,12 @@ export function ChatView({
           toast.warning(`「${file.name}」上传失败，将以内嵌方式随消息发送`)
         })
     }
+  }
+  /** file input 选择 → 清值后入库（清值保证可重复选同一文件仍触发 change） */
+  const onPickFiles = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = [...(e.target.files ?? [])]
+    e.target.value = ""
+    await ingestFiles(files)
   }
 
   /** 去掉本地态字段 → 发送用 AiAttachment（已上传只带 attachmentId，未上传回退 dataUrl 由 toWireAttachment 处理） */
@@ -483,6 +489,14 @@ export function ChatView({
     }
   }
 
+  /** "命令"chip：把 "/" 填入并聚焦，唤起斜杠面板（再加一个唤起入口，键控/面板逻辑不变） */
+  const insertSlash = () => {
+    if (offline || sending) return
+    setValue((v) => (v.startsWith("/") ? v : `/${v}`))
+    setSlashDismissed(false)
+    inputRef.current?.focus()
+  }
+
   /* ---- 语音输入：切换录音；识别结果拼到当前文本；失败 toast 降级 ---- */
   const voiceBaseRef = useRef("")
   const stopVoice = useCallback(() => {
@@ -517,10 +531,10 @@ export function ChatView({
   // 组件卸载/关闭面板时停止录音，避免麦克风悬挂
   useEffect(() => () => speechRef.current?.stop(), [])
 
-  // textarea 自增高（1~5 行）
+  // textarea 自增高（~5 行，上限对齐卡内 max-h-40=160px）
   const autoGrow = (el: HTMLTextAreaElement) => {
     el.style.height = "auto"
-    el.style.height = `${Math.min(el.scrollHeight, 128)}px`
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }
   // 程序化改文本（语音/斜杠回填）后同步高度
   useEffect(() => {
@@ -590,121 +604,184 @@ export function ChatView({
         </div>
       )}
 
-      {/* 输入区 */}
-      <div className="shrink-0 space-y-2 border-t p-3">
-        {/* §11 模型选择器（会话内记忆；👁=支持视觉） */}
-        {!offline && models.length > 0 && (
-          <div className="flex items-center gap-2">
-            <Select value={modelId ?? "default"} onValueChange={(v) => onModelChange(v === "default" ? null : v)}>
-              <SelectTrigger size="sm" className="h-7 w-fit gap-1.5 border-dashed text-xs text-muted-foreground">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="default">默认档案</SelectItem>
-                {models.map((m) => (
-                  <SelectItem key={m.id} value={m.id} title={m.description}>
-                    <span className="flex items-center gap-1.5">
-                      {m.name}
-                      {m.description && <span className="text-[10px] text-muted-foreground">· {m.description}</span>}
-                      {m.supportsVision && <Eye className="size-3 text-emerald-500" aria-label="支持视觉" />}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {selectedModel?.supportsVision && (
-              <span className="flex items-center gap-1 text-[10px] text-emerald-600">
-                <Eye className="size-3" /> 支持图片理解
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* 附件预览 + 视觉能力提示 */}
-        {pending.length > 0 && (
-          <AttachmentStrip items={pending} onRemove={(i) => setPending((prev) => prev.filter((_, x) => x !== i))} />
-        )}
-        {visionWarn && (
-          <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-xs text-amber-600 dark:text-amber-400">
-            <AlertTriangle className="size-3.5 shrink-0" />
-            当前模型档案不支持图片，请在上方切换支持视觉（👁）的档案后再发送。
-          </div>
-        )}
-
+      {/* 输入区：一体化输入卡（附件 / 输入 / 工具栏 竖三层，focus-within 主色描边=激活即高级） */}
+      <div className="shrink-0 border-t p-3">
         <div className="relative">
-          {/* 亮点⑥ 斜杠命令面板：输入框上方（"/" 唤起） */}
+          {/* 亮点⑥ 斜杠命令面板：卡上方（"/" 唤起） */}
           {!offline && slashOpen && (
             <SlashPalette commands={slashCommands} activeIndex={slashIndex} onPick={pickSlash} onHover={setSlashIndex} />
           )}
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            accept="image/png,image/jpeg,image/webp,.txt,.md,.csv,.json,.log,.pdf,.doc,.docx"
+            className="hidden"
+            onChange={(e) => void onPickFiles(e)}
+          />
+          {/* 输入卡 */}
           <div
+            role="group"
+            aria-label="消息输入"
+            data-dragging={dragging || undefined}
+            onDragOver={(e) => {
+              if (offline || sending) return
+              if (e.dataTransfer.types.includes("Files")) {
+                e.preventDefault()
+                setDragging(true)
+              }
+            }}
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false)
+            }}
+            onDrop={(e) => {
+              e.preventDefault()
+              setDragging(false)
+              if (offline || sending) return
+              void ingestFiles([...e.dataTransfer.files])
+            }}
             className={cn(
-              "flex items-end gap-2 rounded-xl border bg-background px-3 py-2",
-              "focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
+              "group relative flex flex-col rounded-2xl border bg-card transition-colors motion-reduce:transition-none",
+              "focus-within:border-primary/50 focus-within:ring-[3px] focus-within:ring-ring/30 focus-within:shadow-sm",
               recording && "border-destructive/60 ring-[3px] ring-destructive/20",
+              "data-[dragging=true]:border-primary data-[dragging=true]:ring-[3px] data-[dragging=true]:ring-primary/30",
             )}
           >
-            <input
-              ref={fileRef}
-              type="file"
-              multiple
-              accept="image/png,image/jpeg,image/webp,.txt,.md,.csv,.json,.log,.pdf,.doc,.docx"
-              className="hidden"
-              onChange={(e) => void onPickFiles(e)}
-            />
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="shrink-0 text-muted-foreground"
-              aria-label="添加附件（图片/文本文件）"
-              disabled={offline || sending}
-              onClick={() => fileRef.current?.click()}
-            >
-              <Paperclip className="size-4" />
-            </Button>
+            {/* 拖拽覆盖层（仅 dragging 显，pointer-events-none 不挡 drop） */}
+            {dragging && (
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary bg-primary/5 text-xs font-medium text-primary">
+                <Paperclip className="mr-1.5 size-4" /> 松开以添加附件
+              </div>
+            )}
+
+            {/* ① 附件预览 + 视觉能力提示（收进卡内顶部） */}
+            {(pending.length > 0 || visionWarn) && (
+              <div className="flex flex-col gap-2 px-3 pt-3">
+                {pending.length > 0 && (
+                  <div className="flex flex-col gap-1">
+                    <AttachmentStrip items={pending} onRemove={(i) => setPending((prev) => prev.filter((_, x) => x !== i))} />
+                    <span className="self-end text-[10px] text-muted-foreground">
+                      {pending.length}/{MAX_ATTACHMENTS}
+                    </span>
+                  </div>
+                )}
+                {visionWarn && (
+                  <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-xs text-amber-600 dark:text-amber-400">
+                    <AlertTriangle className="size-3.5 shrink-0" />
+                    当前模型档案不支持图片，请切换支持视觉（👁）的档案后再发送。
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ② 输入层（无边框融入卡；focus 视觉由卡承载） */}
             <textarea
               ref={inputRef}
               rows={1}
               value={value}
               disabled={offline || sending}
               placeholder={
-                offline ? "离线模式暂不可用" : recording ? "正在聆听…（再次点击麦克风结束）" : "问问星辰助手…（/ 唤起命令 · Enter 发送）"
+                offline ? "离线模式暂不可用" : recording ? "正在聆听…（再次点击麦克风结束）" : "问问星辰助手…（/ 唤起命令 · Enter 发送 · Shift+Enter 换行）"
               }
               onChange={(e) => {
                 setValue(e.target.value)
                 autoGrow(e.target)
               }}
               onKeyDown={onKeyDown}
-              className="max-h-32 min-h-6 flex-1 resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground disabled:opacity-60"
+              onPaste={(e) => {
+                // 粘贴含图片文件 → 进附件（走 ingestFiles 复用校验）；无图片则不拦截，正常粘贴文本
+                const files = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"))
+                if (files.length) {
+                  e.preventDefault()
+                  void ingestFiles(files)
+                }
+              }}
+              className="max-h-40 min-h-[2.75rem] w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-sm outline-none placeholder:text-muted-foreground disabled:opacity-60"
             />
-            {/* 亮点⑥ 语音输入：仅浏览器支持时出现；录音态红点动画 */}
-            {speechSupported && (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className={cn("relative shrink-0", recording ? "text-destructive" : "text-muted-foreground")}
-                aria-label={recording ? "结束语音输入" : "语音输入"}
-                aria-pressed={recording}
-                disabled={offline || sending}
-                onClick={toggleVoice}
-              >
-                {recording ? (
-                  <>
-                    <Square className="size-3.5 fill-current" />
-                    <span className="absolute right-1 top-1 size-1.5 animate-pulse rounded-full bg-destructive motion-reduce:animate-none" />
-                  </>
-                ) : (
-                  <Mic className="size-4" />
+
+            {/* ③ 底部工具栏：左=内容动作（附件/语音/命令） 右=模型器+圆形发送键 */}
+            <div className="flex items-center gap-1 px-2 pb-2 pt-0.5">
+              <div className="flex min-w-0 items-center gap-0.5">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="text-muted-foreground"
+                  aria-label="添加附件（图片/文本文件）"
+                  disabled={offline || sending}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  <Paperclip className="size-4" />
+                </Button>
+                {/* 语音输入：仅浏览器支持时出现；录音态红点动画 */}
+                {speechSupported && (
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className={cn("relative", recording ? "text-destructive" : "text-muted-foreground")}
+                    aria-label={recording ? "结束语音输入" : "语音输入"}
+                    aria-pressed={recording}
+                    disabled={offline || sending}
+                    onClick={toggleVoice}
+                  >
+                    {recording ? (
+                      <>
+                        <Square className="size-3.5 fill-current" />
+                        <span className="absolute right-0.5 top-0.5 size-1.5 animate-pulse rounded-full bg-destructive motion-reduce:animate-none" />
+                      </>
+                    ) : (
+                      <Mic className="size-4" />
+                    )}
+                  </Button>
                 )}
-              </Button>
-            )}
-            <Button
-              size="icon-sm"
-              disabled={(!value.trim() && pending.length === 0) || sending || offline || uploading}
-              aria-label={uploading ? "附件上传中" : "发送"}
-              onClick={send}
-            >
-              {sending || uploading ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
-            </Button>
+                {/* "命令"chip：再加一个斜杠唤起入口（窄屏隐藏文字保图标操作） */}
+                <button
+                  type="button"
+                  onClick={insertSlash}
+                  disabled={offline || sending}
+                  className="ml-0.5 hidden items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-accent disabled:opacity-50 sm:inline-flex"
+                  aria-label="斜杠命令"
+                >
+                  <Slash className="size-3" /> 命令
+                </button>
+              </div>
+
+              <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                {/* §11 模型档案选择器（会话内记忆）：精简无边框 chip，👁 前缀=支持视觉 */}
+                {!offline && models.length > 0 && (
+                  <Select value={modelId ?? "default"} onValueChange={(v) => onModelChange(v === "default" ? null : v)}>
+                    <SelectTrigger
+                      size="sm"
+                      className="h-7 max-w-[9rem] gap-1 border-none bg-transparent px-2 text-xs text-muted-foreground hover:bg-accent focus:ring-0"
+                    >
+                      {selectedModel?.supportsVision && <Eye className="size-3 shrink-0 text-emerald-500" aria-label="支持视觉" />}
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">默认档案</SelectItem>
+                      {models.map((m) => (
+                        <SelectItem key={m.id} value={m.id} title={m.description}>
+                          <span className="flex items-center gap-1.5">
+                            {m.name}
+                            {m.description && <span className="text-[10px] text-muted-foreground">· {m.description}</span>}
+                            {m.supportsVision && <Eye className="size-3 text-emerald-500" aria-label="支持视觉" />}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {/* 发送键：唯一实心强调，圆形主色；空态淡禁用，发送/上传中转 loading */}
+                <Button
+                  size="icon"
+                  className="size-8 shrink-0 rounded-full"
+                  disabled={(!value.trim() && pending.length === 0) || sending || offline || uploading}
+                  aria-label={uploading ? "附件上传中" : sending ? "发送中" : "发送"}
+                  onClick={send}
+                >
+                  {sending || uploading ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
