@@ -4,7 +4,7 @@
  *  - 左 <DeptTree> + 右 <DataTable> 同页挂载，在线 + stub fetch → 用户名与部门名同时渲染，不抛错。
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useAuthStore } from "@/stores/auth-store"
@@ -84,5 +84,20 @@ describe("用户管理左树右表渲染冒烟", () => {
     // 左树部门名（多处可能出现：树节点 + 表格部门列，用 findAll 兜底）
     await waitFor(() => expect(screen.getAllByText("研发中心").length).toBeGreaterThan(0))
     expect(screen.getByText("全部部门")).toBeTruthy()
+  })
+
+  it("新增用户表单：直属上级（多选）+ 默认部门负责人语义提示", async () => {
+    render(
+      <MemoryRouter>
+        <TooltipProvider>
+          <UserPage />
+        </TooltipProvider>
+      </MemoryRouter>,
+    )
+    await screen.findByText("张三")
+    fireEvent.click(screen.getByRole("button", { name: /新增用户/ }))
+    // 直属上级字段 + 语义文案（多选 + 留空默认部门负责人）
+    expect(await screen.findByText(/留空则默认取所在部门负责人/)).toBeTruthy()
+    expect(screen.getByText("点击选择直属上级（可多选）")).toBeTruthy()
   })
 })

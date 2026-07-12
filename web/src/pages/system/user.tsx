@@ -112,8 +112,12 @@ interface UserRow extends Record<string, unknown> {
   birthday?: string
   hireDate?: string
   officeLocation?: string
+  /** 旧单值直属上级（兼容旧列表返回）；新契约用 leaderIds */
   leaderId?: number
   leaderName?: string
+  /** 指定的直属上级 id 数组（有序，多选）；空/缺省=无指定→工作流回退部门负责人 */
+  leaderIds?: number[]
+  leaderNames?: string[]
   avatar?: string
   remark?: string
   enabled: boolean
@@ -319,9 +323,9 @@ export default function UserPage() {
     defaultValues: editDefaults,
   })
 
-  // 直属上级：RecordPicker 存 id、展示姓名（存储与展示分离）
-  const [createLeader, setCreateLeader] = useState<{ id: number; name: string } | null>(null)
-  const [editLeader, setEditLeader] = useState<{ id: number; name: string } | null>(null)
+  // 直属上级（多选，有序）：RecordPicker 存 id[]、展示姓名（存储与展示分离）
+  const [createLeaders, setCreateLeaders] = useState<{ id: number; name: string }[]>([])
+  const [editLeaders, setEditLeaders] = useState<{ id: number; name: string }[]>([])
   const [leaderPickerFor, setLeaderPickerFor] = useState<"create" | "edit" | null>(null)
 
   // 查看档案 Drawer
@@ -362,6 +366,14 @@ export default function UserPage() {
   }, [selectedDept, includeSub, statusFilter])
   const rows = data?.list ?? []
 
+  /** leaderIds（后端可能缺省/非数组）→ {id,name}[]；名称从当前列表解析，找不到用 #id（防白屏兜底） */
+  const leadersFromIds = (ids: unknown): { id: number; name: string }[] => {
+    const arr = Array.isArray(ids) ? ids : []
+    return arr
+      .filter((x): x is number => typeof x === "number")
+      .map((id) => ({ id, name: rows.find((r) => r.id === id)?.name ?? `#${id}` }))
+  }
+
   const loadOptions = useCallback(async () => {
     try {
       const [tree, posts, roles] = await Promise.all([
@@ -391,7 +403,7 @@ export default function UserPage() {
 
   const openCreate = () => {
     createForm.reset(createDefaults)
-    setCreateLeader(null)
+    setCreateLeaders([])
     setCreateOpen(true)
   }
 
@@ -413,7 +425,8 @@ export default function UserPage() {
           birthday: values.birthday || null,
           hireDate: values.hireDate || null,
           officeLocation: values.officeLocation || null,
-          leaderId: createLeader?.id ?? null,
+          // 新契约：指定直属上级 id 数组（有序，可空；后端 upsert sys_user_leader）
+          leaderIds: createLeaders.map((l) => l.id),
           remark: values.remark || null,
         }),
       })
@@ -427,7 +440,12 @@ export default function UserPage() {
 
   const openEdit = (row: UserRow) => {
     setEditing(row)
-    setEditLeader(row.leaderId != null ? { id: row.leaderId, name: row.leaderName ?? `#${row.leaderId}` } : null)
+    // 先用列表行 leaderIds 回填（容忍缺省），再拉用户详情精确回填
+    setEditLeaders(leadersFromIds(row.leaderIds))
+    // 详情返回 leaderIds（磐石随后加）→ 精确回填；后端未加字段/网络失败 → 容忍缺省，保持已回填
+    void api<UserRow>(`/api/system/users/${row.id}`)
+      .then((detail) => setEditLeaders(leadersFromIds(detail.leaderIds)))
+      .catch(() => undefined)
     editForm.reset({
       name: row.name,
       phone: row.phone ?? "",
@@ -454,7 +472,8 @@ export default function UserPage() {
           birthday: values.birthday || null,
           hireDate: values.hireDate || null,
           officeLocation: values.officeLocation || null,
-          leaderId: editLeader?.id ?? null,
+          // 新契约：指定直属上级 id 数组（有序，可空；后端 upsert sys_user_leader）
+          leaderIds: editLeaders.map((l) => l.id),
           avatar: values.avatar || null,
           remark: values.remark || null,
         }),
@@ -1183,11 +1202,13 @@ export default function UserPage() {
             <FormItem>
               <FormLabel>直属上级</FormLabel>
               <RecordPickerField
-                labels={createLeader ? [{ id: String(createLeader.id), label: createLeader.name }] : []}
-                placeholder="点击选择直属上级"
+                labels={createLeaders.map((l) => ({ id: String(l.id), label: l.name }))}
+                placeholder="点击选择直属上级（可多选）"
+                multiple
                 onOpen={() => setLeaderPickerFor("create")}
-                onRemove={() => setCreateLeader(null)}
+                onRemove={(id) => setCreateLeaders((prev) => prev.filter((l) => String(l.id) !== id))}
               />
+              <p className="text-xs text-muted-foreground">直属上级（多选）。留空则默认取所在部门负责人。</p>
             </FormItem>
             <FormField
               control={createForm.control}
@@ -1422,11 +1443,13 @@ export default function UserPage() {
             <FormItem>
               <FormLabel>直属上级</FormLabel>
               <RecordPickerField
-                labels={editLeader ? [{ id: String(editLeader.id), label: editLeader.name }] : []}
-                placeholder="点击选择直属上级"
+                labels={editLeaders.map((l) => ({ id: String(l.id), label: l.name }))}
+                placeholder="点击选择直属上级（可多选）"
+                multiple
                 onOpen={() => setLeaderPickerFor("edit")}
-                onRemove={() => setEditLeader(null)}
+                onRemove={(id) => setEditLeaders((prev) => prev.filter((l) => String(l.id) !== id))}
               />
+              <p className="text-xs text-muted-foreground">直属上级（多选）。留空则默认取所在部门负责人。</p>
             </FormItem>
             <FormField
               control={editForm.control}
@@ -1458,30 +1481,28 @@ export default function UserPage() {
         </Form>
       </Modal>
 
-      {/* 直属上级选择：RecordPicker 复用（存 id、展示姓名） */}
+      {/* 直属上级选择：RecordPicker 多选（存 id[]、展示姓名） */}
       <RecordPicker<UserRow>
         open={leaderPickerFor !== null}
         onOpenChange={(open) => !open && setLeaderPickerFor(null)}
-        title="选择直属上级"
-        description="从用户列表单选：存储用户 id，表单展示姓名"
+        title="选择直属上级（可多选）"
+        description="从用户列表多选：存储用户 id（有序），表单展示姓名。留空则默认取部门负责人。"
+        multiple
         data={leaderPickerFor === "edit" && editing ? rows.filter((r) => r.id !== editing.id) : rows}
         columns={leaderColumns}
         idField="id"
         labelField="name"
-        value={
-          leaderPickerFor === "edit"
-            ? editLeader
-              ? [String(editLeader.id)]
-              : []
-            : createLeader
-              ? [String(createLeader.id)]
-              : []
-        }
+        value={(leaderPickerFor === "edit" ? editLeaders : createLeaders).map((l) => String(l.id))}
         onConfirm={(_ids, selectedRows) => {
-          const row = selectedRows[0]
-          const leader = row ? { id: row.id, name: row.name } : null
-          if (leaderPickerFor === "edit") setEditLeader(leader)
-          else setCreateLeader(leader)
+          // 不允许把用户自己选为自己的直属上级（防御性过滤 + 提示）
+          const selfId = leaderPickerFor === "edit" ? editing?.id : undefined
+          const picked = selectedRows.filter((r) => r.id !== selfId)
+          if (selfId != null && picked.length !== selectedRows.length) {
+            toast.error("不能把用户自己设为其直属上级")
+          }
+          const leaders = picked.map((r) => ({ id: r.id, name: r.name }))
+          if (leaderPickerFor === "edit") setEditLeaders(leaders)
+          else setCreateLeaders(leaders)
         }}
         searchKeys={["name", "username", "empNo"]}
       />
@@ -1535,7 +1556,7 @@ export default function UserPage() {
               <ProfileItem label="生日" value={profileTarget.birthday} />
               <ProfileItem label="入职日期" value={profileTarget.hireDate} />
               <ProfileItem label="办公地点" value={profileTarget.officeLocation} />
-              <ProfileItem label="直属上级" value={profileTarget.leaderName} />
+              <ProfileItem label="直属上级" value={profileTarget.leaderNames?.length ? profileTarget.leaderNames.join("、") : profileTarget.leaderName} />
               <ProfileItem label="角色" value={profileTarget.roleNames.join("、")} />
               <ProfileItem label="创建时间" value={formatTime(profileTarget.createdAt)} />
               <div className="col-span-2 space-y-0.5">
