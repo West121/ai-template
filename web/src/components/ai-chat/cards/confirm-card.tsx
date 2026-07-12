@@ -7,7 +7,7 @@
  */
 import { Fragment, useReducer, useRef } from "react"
 import { useNavigate } from "react-router-dom"
-import { AlertTriangle, CheckCircle2, ExternalLink, RotateCw, ShieldCheck } from "lucide-react"
+import { AlertTriangle, ArrowRight, CheckCircle2, ExternalLink, GitBranch, RotateCw, ShieldCheck, UserRound } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -15,6 +15,35 @@ import { cancelActionV2, confirmActionV2 } from "../api"
 import { friendlyAiError, ulid } from "../protocol"
 import type { AiConfirmCard } from "../types"
 import { CONFIRM_INITIAL, confirmReducer } from "./confirm-machine"
+import { AiSummaryBlock } from "./ai-summary"
+
+/** 批E⑩ 流程预测链：通过后流转 签发(王经理)→用印→归档 */
+function PredictChain({ steps }: { steps: NonNullable<AiConfirmCard["predictChain"]> }) {
+  if (steps.length === 0) return null
+  return (
+    <div className="mb-3 rounded-lg border border-dashed bg-muted/30 p-2.5">
+      <p className="mb-1.5 flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
+        <GitBranch className="size-3 text-primary" /> 通过后流转
+      </p>
+      <div className="flex min-w-0 flex-wrap items-center gap-1">
+        {steps.map((s, i) => (
+          <span key={i} className="flex items-center gap-1">
+            <span className="inline-flex max-w-full items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 text-[11px]">
+              <span className="min-w-0 truncate font-medium">{s.stepName}</span>
+              {s.assigneeName && (
+                <span className="flex shrink-0 items-center gap-0.5 text-[9px] text-muted-foreground">
+                  <UserRound className="size-2.5" />
+                  {s.assigneeName}
+                </span>
+              )}
+            </span>
+            {i < steps.length - 1 && <ArrowRight className="size-3 shrink-0 text-muted-foreground/60" />}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 export function ConfirmCard({ card }: { card: AiConfirmCard }) {
   const navigate = useNavigate()
@@ -67,6 +96,9 @@ export function ConfirmCard({ card }: { card: AiConfirmCard }) {
       </div>
       {card.summary && <p className="mb-3 text-xs text-muted-foreground">{card.summary}</p>}
 
+      {/* 批E⑨ 审批 AI 摘要（3 行 + 风险点） */}
+      {card.aiSummary && <AiSummaryBlock data={card.aiSummary} className="mb-3" />}
+
       {card.params && card.params.length > 0 && (
         <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-lg bg-muted/50 p-2.5 text-xs">
           {card.params.map((p) => (
@@ -77,6 +109,9 @@ export function ConfirmCard({ card }: { card: AiConfirmCard }) {
           ))}
         </dl>
       )}
+
+      {/* 批E⑩ 通过后流转预测链（同意按钮上方） */}
+      {card.predictChain && card.predictChain.length > 0 && <PredictChain steps={card.predictChain} />}
 
       {/* 按钮区按状态机呈现 */}
       {s.state === "done" ? (

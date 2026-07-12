@@ -26,6 +26,9 @@ const DETAIL_ROUTES: Record<string, FeatureRoute> = {
   DOCUMENT_SEND_DETAIL: { path: "/document/send/{id}", params: ["id"], title: "发文办理单" },
   DOCUMENT_RECEIVE_DETAIL: { path: "/document/receive/{id}", params: ["id"], title: "收文办理单" },
   BIZDOC_RUN: { path: "/bizdoc/run/{defCode}", params: ["defCode"], title: "单据台账" },
+  // 批E 平台联动草稿卡去处（App.tsx 实际整页设计器路由）
+  AUTOMATION_DESIGNER: { path: "/automation/{code}/design", params: ["code"], title: "编排设计器" },
+  BIZDOC_TPL_DESIGNER: { path: "/bizdoc/tpl/t/{tplId}", params: ["tplId"], title: "单据模板设计器" },
 }
 
 /** 语义别名（批A/mock 使用过的编码）→ 规范码 */

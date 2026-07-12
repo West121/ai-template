@@ -13,6 +13,7 @@ import { mdToHtml } from "../markdown"
 import { partToCard, resolvePart, resolveFeaturePath, type AiMessagePart } from "../protocol"
 import type { AiCitation } from "../types"
 import { CardRouter } from "./card-router"
+import { FlowDraftPart, FormDraftPart, TemplateDraftPart } from "./draft-cards"
 
 /** 降级组件（§16.3：未知 schemaVersion / partType） */
 function UnknownPart({ part, reason }: { part: AiMessagePart; reason: string }) {
@@ -238,6 +239,12 @@ export function PartRouter({ part }: { part: AiMessagePart }) {
       return <ApprovalPart part={part} />
     case "plan":
       return <PlanPart part={part} />
+    case "flowDraft":
+      return <FlowDraftPart part={part} />
+    case "templateDraft":
+      return <TemplateDraftPart part={part} />
+    case "formDraft":
+      return <FormDraftPart part={part} />
     case "navigate":
     case "form":
     case "confirm":

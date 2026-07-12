@@ -12,11 +12,15 @@ import {
   friendlyAiError,
   legacyModelsToChoices,
   mergePart,
+  normalizeRisks,
   parseAiEvent,
+  parseAiSummary,
+  parsePredictChain,
   partToCard,
   reportResultToListPart,
   resolveFeaturePath,
   resolvePart,
+  riskTone,
   ulid,
   type AiMessagePart,
   type SseFrame,
@@ -91,6 +95,55 @@ describe("Part 协议：白名单 + schemaVersion 降级", () => {
     expect(resolvePart(null)).toEqual({ status: "degraded", reason: "malformed" })
     expect(resolvePart({ partType: "list" } as Partial<AiMessagePart>)).toEqual({ status: "degraded", reason: "malformed" })
   })
+
+  it("批E 草稿卡 partType v1 → ok（flowDraft/templateDraft/formDraft）", () => {
+    for (const t of ["flowDraft", "templateDraft", "formDraft"]) {
+      expect(resolvePart(part({ partType: t, payload: { draftId: "d1", name: "x" } }))).toEqual({ status: "ok", type: t })
+    }
+    // 未知草稿仍降级
+    expect(resolvePart(part({ partType: "bpmnDraft" }))).toEqual({ status: "degraded", reason: "unknown-type" })
+  })
+})
+
+/* ============================ 批E：审批摘要 / 流程预测链归一 ============================ */
+
+describe("riskTone / normalizeRisks / parseAiSummary（防白屏归一）", () => {
+  it("riskTone 容忍英文枚举与中文", () => {
+    expect(riskTone("HIGH")).toBe("high")
+    expect(riskTone("偏高")).toBe("high") // 含"高"子串 → high
+    expect(riskTone("高")).toBe("high")
+    expect(riskTone("MEDIUM")).toBe("medium")
+    expect(riskTone("中")).toBe("medium")
+    expect(riskTone("普通")).toBe("low") // 无高/中关键字 → low
+    expect(riskTone(undefined)).toBe("low")
+  })
+
+  it("normalizeRisks：string[] / 对象[] / 垃圾 → {level?,text}[]（空文案剔除）", () => {
+    expect(normalizeRisks(["超期", { level: "HIGH", text: "金额高" }, { text: "" }, 42, null])).toEqual([
+      { text: "超期" },
+      { level: "HIGH", text: "金额高" },
+    ])
+    expect(normalizeRisks("boom")).toEqual([])
+  })
+
+  it("parseAiSummary：需有 summary 或 risks，否则 undefined", () => {
+    expect(parseAiSummary({ summary: "三行摘要", risks: ["超期"] })).toEqual({ summary: "三行摘要", risks: [{ text: "超期" }] })
+    expect(parseAiSummary({ summary: "", risks: [] })).toBeUndefined()
+    expect(parseAiSummary(null)).toBeUndefined()
+    expect(parseAiSummary("boom")).toBeUndefined()
+  })
+})
+
+describe("parsePredictChain（流程预测链归一）", () => {
+  it("对象[] / string[] → {stepName,assigneeName?}[]；空 → undefined", () => {
+    expect(parsePredictChain([{ stepName: "签发", assigneeName: "王经理" }, { stepName: "归档" }])).toEqual([
+      { stepName: "签发", assigneeName: "王经理" },
+      { stepName: "归档" },
+    ])
+    expect(parsePredictChain(["用印", "归档"])).toEqual([{ stepName: "用印" }, { stepName: "归档" }])
+    expect(parsePredictChain([])).toBeUndefined()
+    expect(parsePredictChain("boom")).toBeUndefined()
+  })
 })
 
 /* ============================ 新旧协议适配 ============================ */
@@ -107,6 +160,34 @@ describe("cards ↔ parts 适配（兼容读旧消息 / mock 升级）", () => {
     const back = partToCard(p)
     expect(back).toMatchObject({ type: "confirm", actionId: "act_1", title: "同意审批", danger: true })
     expect((back as { params?: unknown[] }).params?.length).toBe(1)
+  })
+
+  it("批E⑨⑩ confirm 卡 aiSummary/predictChain 往返（part 透传 → 卡归一）", () => {
+    const p = cardToPart(
+      {
+        type: "confirm",
+        actionId: "act_2",
+        title: "同意审批",
+        aiSummary: { summary: "请假 3 天，余额充足", risks: [{ level: "MEDIUM", text: "里程碑周重叠" }] },
+        predictChain: [{ stepName: "HR 复核", assigneeName: "李经理" }, { stepName: "归档" }],
+      },
+      1,
+    )
+    expect((p.payload.predictChain as unknown[]).length).toBe(2)
+    const back = partToCard(p) as { aiSummary?: { summary: string }; predictChain?: unknown[] }
+    expect(back.aiSummary?.summary).toBe("请假 3 天，余额充足")
+    expect(back.predictChain?.length).toBe(2)
+  })
+
+  it("flowDraft/templateDraft/formDraft 卡 → part 通用透传（partType=type，payload 保 draftId）", () => {
+    const parts = cardsToParts([
+      { type: "flowDraft", draftId: "fd1", name: "每周统计", triggerDesc: "CRON", nodes: [{ type: "notify", label: "通知" }] },
+      { type: "templateDraft", draftId: "td1", name: "采购单模板", blocks: [{ type: "table", label: "明细" }] },
+      { type: "formDraft", draftId: "frm1", name: "报修表", fields: [{ label: "设备", type: "text" }] },
+    ])
+    expect(parts.map((x) => x.partType)).toEqual(["flowDraft", "templateDraft", "formDraft"])
+    expect(parts[0].payload.draftId).toBe("fd1")
+    expect(resolvePart(parts[0])).toEqual({ status: "ok", type: "flowDraft" })
   })
 
   it("navigate part：v2 featureCode 经受控映射；path 过渡期直通；未知 featureCode → null（降级）", () => {
@@ -191,6 +272,10 @@ describe("FeatureRouteRegistry（menu.ts 生成全量 + 详情页 + 别名）", 
     expect(resolveFeature("WORKFLOW_INSTANCE_DETAIL", { instanceId: 9 })).toBe("/workflow/instances/9")
     expect(resolveFeature("WORKFLOW_INSTANCE_DETAIL", {})).toBeNull()
     expect(resolveFeature("EVIL_CODE")).toBeNull()
+    // 批E 平台联动草稿卡去处（编排/模板设计器）
+    expect(resolveFeature("AUTOMATION_DESIGNER", { code: "ai_x" })).toBe("/automation/ai_x/design")
+    expect(resolveFeature("BIZDOC_TPL_DESIGNER", { tplId: "t9" })).toBe("/bizdoc/tpl/t/t9")
+    expect(resolveFeature("AUTOMATION_DESIGNER", {})).toBeNull()
   })
 
   it("featureCodeFromPath 反查（pageContext）：精确 / 参数模板 / 最长前缀 / 未知 null", () => {

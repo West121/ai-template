@@ -120,7 +120,49 @@ function mockReply(text: string, session: MockSession, opts?: ChatOpts): AiMessa
     return { role: "ASSISTANT", content: parts.join("\n\n"), createdAt: now() }
   }
 
-  if (has("待办", "todo", "要处理", "急")) {
+  // 批E 平台联动草稿卡（⑦⑧：永不直接发布，去设计器继续编辑）
+  if (has("每周", "定时", "周期", "自动统计", "自动生成", "自动跑", "编排一个", "自动化任务")) {
+    content = "我把它整理成了一条**自动化编排草稿**（未启用）。确认创建后可在设计器里微调再启用："
+    cards.push({
+      type: "flowDraft",
+      draftId: `fd_${Date.now()}`,
+      name: "每周审批统计并通知",
+      triggerDesc: "CRON 每周一 09:00",
+      nodes: [
+        { type: "trigger", label: "CRON 每周一" },
+        { type: "report", label: "查询本周审批统计" },
+        { type: "notify", label: "钉钉通知负责人" },
+      ],
+    })
+    session.lastTopic = null
+  } else if (has("单据模板", "台账模板", "套红", "模板草稿", "生成模板", "做个模板")) {
+    content = "已生成**单据模板草稿**，去设计器里继续排版（永不直接发布）："
+    cards.push({
+      type: "templateDraft",
+      draftId: `td_${Date.now()}`,
+      name: "物资采购申请单模板",
+      blocks: [
+        { type: "header", label: "红头标题" },
+        { type: "table", label: "采购明细表" },
+        { type: "sign", label: "审批落款" },
+      ],
+    })
+    session.lastTopic = null
+  } else if (has("生成表单", "表单草稿", "做个表单", "帮我建表单", "设计表单")) {
+    content = "已生成**表单草稿**，去表单设计器里继续完善字段与校验："
+    cards.push({
+      type: "formDraft",
+      draftId: `frmd_${Date.now()}`,
+      name: "设备报修申请表",
+      fields: [
+        { label: "设备名称", type: "text" },
+        { label: "故障类型", type: "select" },
+        { label: "紧急程度", type: "select" },
+        { label: "故障描述", type: "textarea" },
+      ],
+    })
+    session.lastTopic = null
+  } else if (has("待办", "todo", "要处理", "急")) {
     content = has("急")
       ? "按 **超时 48 小时未办、加急标记、催办** 打分排序，你现在最该处理这几件："
       : "这是你的待办列表（按到达时间倒序），点击行可直达办理页："
@@ -133,9 +175,31 @@ function mockReply(text: string, session: MockSession, opts?: ChatOpts): AiMessa
         { key: "arrivedAt", label: "到达" },
       ],
       rows: [
-        { title: "〔特急〕关于开展信息安全专项检查的通知 · 签发", node: "签发", arrivedAt: "2 天前", link: "/workflow/tasks" },
+        {
+          title: "〔特急〕关于开展信息安全专项检查的通知 · 签发",
+          node: "签发",
+          arrivedAt: "2 天前",
+          link: "/workflow/tasks",
+          // 批E⑨ AI 摘要 + 风险点
+          aiSummary: {
+            summary: "信息安全专项检查通知，需本周内签发并下发各部门执行。",
+            risks: [
+              { level: "HIGH", text: "已超期 1 天" },
+              { level: "MEDIUM", text: "涉及全公司，影响面大" },
+            ],
+          },
+        },
         { title: "张三的请假申请（3 天）", node: "部门主管审批", arrivedAt: "5 小时前", link: "/workflow/tasks" },
-        { title: "采购申请 · 金额 ¥42,000", node: "总经理审批", arrivedAt: "昨天", link: "/workflow/tasks" },
+        {
+          title: "采购申请 · 金额 ¥42,000",
+          node: "总经理审批",
+          arrivedAt: "昨天",
+          link: "/workflow/tasks",
+          aiSummary: {
+            summary: "研发中心服务器采购，含质保 3 年，金额 4.2 万元。",
+            risks: [{ level: "HIGH", text: "金额高于部门近月 90 分位" }],
+          },
+        },
       ],
       moreLink: "/workflow/tasks",
       // 批C：数据集分页演示（卡内翻页）
@@ -215,6 +279,16 @@ function mockReply(text: string, session: MockSession, opts?: ChatOpts): AiMessa
         { label: "节点", value: "部门主管审批" },
         { label: "意见", value: "同意" },
       ],
+      // 批E⑨ 审批 AI 摘要 + 风险点
+      aiSummary: {
+        summary: "张三申请年假 3 天（7/15–7/17），年假余额 6 天充足，已过部门主管审批。",
+        risks: [{ level: "MEDIUM", text: "与团队 v2 发版里程碑周重叠" }],
+      },
+      // 批E⑩ 通过后流转预测链
+      predictChain: [
+        { stepName: "HR 复核", assigneeName: "李经理" },
+        { stepName: "归档" },
+      ],
     })
   } else if (has("驳回", "拒绝", "删除")) {
     content = "这是一个**不可逆的危险操作**，请再次确认："
@@ -275,7 +349,10 @@ function mockReply(text: string, session: MockSession, opts?: ChatOpts): AiMessa
       "8. 「帮我做个统计计划」 — 计划卡逐步打勾（Plan-then-Execute）\n" +
       "9. 「查全公司的报销数据」 — 权限解释卡（缺失权限码/持有角色/申请引导）\n" +
       "10. 图表卡点击柱条/扇区 — 下钻出该维度明细 list 卡；待办列表卡内翻页（数据集）\n" +
-      "11. 「怎么请假」 — 引用溯源（正文角标 + 底部引用行可跳）"
+      "11. 「怎么请假」 — 引用溯源（正文角标 + 底部引用行可跳）\n" +
+      "12. 「每周自动统计并通知」 — 编排草稿卡（确认创建 → 跳设计器，草稿未启用）\n" +
+      "13. 「做个采购单据模板」/「生成设备报修表单」 — 模板/表单草稿卡（去设计器编辑）\n" +
+      "14. 「查我的待办」/「同意这条审批」 — 待办项与确认卡内含 AI 摘要 + 风险点 + 通过后流转预测"
   }
 
   return { role: "ASSISTANT", content, cards: cards.length ? cards : undefined, createdAt: now() }
@@ -642,9 +719,13 @@ async function runMockStream(req: ChatSendRequest, h: ChatStreamHandlers): Promi
         ? "正在调取表单定义"
         : kinds.has("confirm")
           ? "正在准备操作预览"
-          : req.attachments?.length
-            ? "正在解析附件"
-            : null
+          : kinds.has("flowDraft")
+            ? "正在编排自动化草稿"
+            : kinds.has("templateDraft") || kinds.has("formDraft")
+              ? "正在生成草稿"
+              : req.attachments?.length
+                ? "正在解析附件"
+                : null
   if (toolName) {
     const id = `tc_${ulid()}`
     h.onToolStatus?.({ id, displayName: toolName, state: "running" })
@@ -967,6 +1048,29 @@ export function fetchBriefing(): Promise<AiResult<AiBriefing>> {
     async () => {
       await new Promise((r) => setTimeout(r, 300))
       return mockBriefing()
+    },
+  )
+}
+
+/* ============================ V2 批E：编排草稿建流（亮点⑦） ============================ */
+
+/** POST /api/ai/flow-drafts/{draftId}/create 结果：建的是 DRAFT 未启用流，返回其 code 供跳设计器 */
+export interface FlowDraftCreateResult {
+  /** 新建流程 code（跳 /automation/{code}/design）；兼容 flowId */
+  flowCode?: string
+  flowId?: string
+}
+
+/**
+ * 确认建流（亮点⑦）：POST /api/ai/flow-drafts/{draftId}/create → 建 DRAFT 编排（未启用）。
+ * offline/404/网络不可用 → mock 返回演示 code（跳设计器演示）。业务错误（草稿失效等）按 §22 文案抛。
+ */
+export function createFlowFromDraft(draftId: string): Promise<AiResult<FlowDraftCreateResult>> {
+  return withMock(
+    () => api<FlowDraftCreateResult>(`/api/ai/flow-drafts/${encodeURIComponent(draftId)}/create`, { method: "POST", body: JSON.stringify({}) }),
+    async () => {
+      await new Promise((r) => setTimeout(r, 500))
+      return { flowCode: `ai_${draftId}` }
     },
   )
 }

@@ -3,7 +3,7 @@
  * 纯逻辑（无 React）：ULID、SSE 增量解析器、Part 白名单与 schemaVersion 降级判定、
  * 新旧协议适配（parts ↔ 旧 cards）、featureCode 受控导航映射（批C 全量，此处先落骨架）、错误码文案。
  */
-import type { AiCard } from "./types"
+import type { AiCard, AiPredictStep, AiRisk, AiSummary } from "./types"
 
 /* ============================ ULID（clientMessageId / Idempotency-Key） ============================ */
 
@@ -145,8 +145,22 @@ export interface AiMessagePart {
   sequenceNo: number
 }
 
-/** 卡片/内容白名单（§10.1 + text）：不在名单内一律降级组件 */
-export const PART_TYPES = ["text", "navigate", "form", "confirm", "list", "chart", "approval", "status", "error", "plan"] as const
+/** 卡片/内容白名单（§10.1 + text + 批E 草稿卡）：不在名单内一律降级组件 */
+export const PART_TYPES = [
+  "text",
+  "navigate",
+  "form",
+  "confirm",
+  "list",
+  "chart",
+  "approval",
+  "status",
+  "error",
+  "plan",
+  "flowDraft",
+  "templateDraft",
+  "formDraft",
+] as const
 export type KnownPartType = (typeof PART_TYPES)[number]
 
 /** 各 partType 当前支持的最高 schemaVersion（§16.3：更高版本走降级组件） */
@@ -161,6 +175,9 @@ export const PART_SCHEMA_SUPPORT: Record<KnownPartType, number> = {
   status: 1,
   error: 1,
   plan: 1,
+  flowDraft: 1,
+  templateDraft: 1,
+  formDraft: 1,
 }
 
 export type PartResolution =
@@ -189,6 +206,56 @@ export function resolveFeaturePath(featureCode: string | undefined, routeParams?
   return resolveFeature(featureCode, routeParams)
 }
 
+/* ============================ 批E：审批摘要 / 流程预测链归一（防白屏：容忍非法 payload） ============================ */
+
+/** 风险级 → 语义色（容忍英文枚举与中文"高/中/低"）：high→red / medium→amber / 其它→中性 */
+export function riskTone(level: string | undefined): "high" | "medium" | "low" {
+  const l = String(level ?? "").toUpperCase()
+  if (l === "HIGH" || l.includes("高") || l === "DANGER" || l === "CRITICAL") return "high"
+  if (l === "MEDIUM" || l.includes("中") || l === "WARN" || l === "WARNING") return "medium"
+  return "low"
+}
+
+/** 风险数组归一：容忍 string[] / {level,text}[] / 垃圾；产出 {level?,text}[]（空文案剔除） */
+export function normalizeRisks(raw: unknown): AiRisk[] {
+  if (!Array.isArray(raw)) return []
+  const out: AiRisk[] = []
+  for (const r of raw) {
+    if (typeof r === "string") {
+      if (r.trim()) out.push({ text: r })
+    } else if (r && typeof r === "object") {
+      const text = String((r as { text?: unknown }).text ?? "").trim()
+      if (text) out.push({ level: (r as { level?: string }).level, text })
+    }
+  }
+  return out
+}
+
+/** AI 摘要归一：需有非空 summary 或非空 risks，否则返回 undefined（组件不渲染空块） */
+export function parseAiSummary(raw: unknown): AiSummary | undefined {
+  if (!raw || typeof raw !== "object") return undefined
+  const o = raw as { summary?: unknown; risks?: unknown }
+  const summary = typeof o.summary === "string" ? o.summary.trim() : ""
+  const risks = normalizeRisks(o.risks)
+  if (!summary && risks.length === 0) return undefined
+  return { summary, risks }
+}
+
+/** 预测链归一：{stepName,assigneeName}[]；容忍 string[]（当步骤名）；空 → undefined */
+export function parsePredictChain(raw: unknown): AiPredictStep[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: AiPredictStep[] = []
+  for (const s of raw) {
+    if (typeof s === "string") {
+      if (s.trim()) out.push({ stepName: s })
+    } else if (s && typeof s === "object") {
+      const stepName = String((s as { stepName?: unknown }).stepName ?? "").trim()
+      if (stepName) out.push({ stepName, assigneeName: (s as { assigneeName?: string }).assigneeName })
+    }
+  }
+  return out.length ? out : undefined
+}
+
 /* ============================ 新旧协议适配（兼容读旧 cards / mock 升级） ============================ */
 
 /** 旧 AiCard → V2 Part（mock/兼容层用；link 卡无 v2 对应，保持 navigate 组合语义拆开） */
@@ -208,6 +275,9 @@ export function cardToPart(card: AiCard, sequenceNo: number): AiMessagePart {
         displayParams: c.params,
         riskLevel: c.danger ? "CONFIRM_REQUIRED" : "CONFIRM_REQUIRED",
         danger: c.danger,
+        // 批E⑨⑩：审批摘要 + 流程预测链随卡透传
+        aiSummary: c.aiSummary,
+        predictChain: c.predictChain,
       },
     }
   }
@@ -238,6 +308,9 @@ export function partToCard(part: AiMessagePart): AiCard | null {
         params,
         danger: p.danger === true,
         expiresAt: typeof p.expiresAt === "string" ? p.expiresAt : undefined,
+        // 批E⑨⑩：宽松透传，组件内再做健壮解析/兜底
+        aiSummary: parseAiSummary(p.aiSummary),
+        predictChain: parsePredictChain(p.predictChain),
       }
     }
     case "form":

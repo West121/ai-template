@@ -14,6 +14,23 @@ export interface AiNavigateCard {
   desc?: string
 }
 
+/** 批E 亮点⑨ 审批 AI 摘要：3 行摘要 + 风险点（红/黄标签）。"AI 生成仅供参考" */
+export interface AiRisk {
+  /** HIGH→红 / MEDIUM→黄 / 其它→中性（也容忍中文"高/中"） */
+  level?: "HIGH" | "MEDIUM" | "LOW" | (string & {})
+  text: string
+}
+export interface AiSummary {
+  summary: string
+  risks?: AiRisk[]
+}
+
+/** 批E 亮点⑩ 流程预测链：通过后流转（步骤名 + 预计办理人） */
+export interface AiPredictStep {
+  stepName: string
+  assigneeName?: string
+}
+
 export interface AiConfirmCard {
   type: "confirm"
   /** 服务端持久化的待确认动作 id（V2：ai_action_draft，过期/幂等/乐观锁在服务端） */
@@ -26,6 +43,10 @@ export interface AiConfirmCard {
   danger?: boolean
   /** V2：过期时间（展示） */
   expiresAt?: string
+  /** 批E⑨ 审批 AI 摘要（有则在参数区上方展示） */
+  aiSummary?: AiSummary
+  /** 批E⑩ 通过后流转预测链（有则在确认键上方展示） */
+  predictChain?: AiPredictStep[]
 }
 
 export interface AiFormCard {
@@ -43,6 +64,8 @@ export interface AiListRow {
   [key: string]: unknown
   /** 行级跳转（§10） */
   link?: string
+  /** 批E⑨ 该待办项的 AI 摘要 + 风险点（有则行内展示） */
+  aiSummary?: AiSummary
 }
 
 export interface AiListCard {
@@ -80,6 +103,37 @@ export interface AiLinkCard {
   items: { title: string; path: string }[]
 }
 
+/* ---------------- 批E 平台联动草稿卡（⑦⑧，永不直接发布，去设计器继续编辑） ---------------- */
+
+/** ⑦ 编排草稿卡：自然语言 → OrchModel 草稿（CRON/事件触发 + 报表/通知节点），确认后建 DRAFT 流并跳设计器 */
+export interface AiFlowDraftCard {
+  type: "flowDraft"
+  draftId: string
+  name: string
+  /** 触发描述，如 "CRON 每周一 09:00" */
+  triggerDesc?: string
+  /** 节点缩略（type=触发/动作/通知…；label=展示名） */
+  nodes?: { type: string; label: string }[]
+}
+
+/** ⑧ 单据模板草稿卡：自然语言 → BdTemplateV2 草稿，去模板设计器编辑（永不直接发布） */
+export interface AiTemplateDraftCard {
+  type: "templateDraft"
+  draftId: string
+  name: string
+  /** 版式块缩略（type=表头/表格/落款…） */
+  blocks?: { type: string; label: string }[]
+}
+
+/** ⑧ 表单草稿卡：自然语言 → 表单 widgets 草稿，去表单设计器编辑 */
+export interface AiFormDraftCard {
+  type: "formDraft"
+  draftId: string
+  name: string
+  /** 字段缩略（label + 控件类型） */
+  fields?: { label: string; type: string }[]
+}
+
 export type AiCard =
   | AiNavigateCard
   | AiConfirmCard
@@ -87,6 +141,9 @@ export type AiCard =
   | AiListCard
   | AiChartCard
   | AiLinkCard
+  | AiFlowDraftCard
+  | AiTemplateDraftCard
+  | AiFormDraftCard
 
 /** V2 批C 引用溯源（TextPart citations[]）：FEATURE 类可走 Registry 导航 */
 export interface AiCitation {

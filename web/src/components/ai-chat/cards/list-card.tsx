@@ -10,8 +10,9 @@ import { ArrowRight, ChevronLeft, ChevronRight, ListChecks, Loader2 } from "luci
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { fetchDataset } from "../api"
-import { resolveFeaturePath } from "../protocol"
+import { parseAiSummary, resolveFeaturePath } from "../protocol"
 import type { AiListCard, AiListRow } from "../types"
+import { AiSummaryBlock } from "./ai-summary"
 
 export function ListCard({ card }: { card: AiListCard }) {
   const navigate = useNavigate()
@@ -23,6 +24,8 @@ export function ListCard({ card }: { card: AiListCard }) {
 
   const totalPages = page ? Math.max(1, Math.ceil(page.total / Math.max(1, page.size))) : 1
   const pageable = !!card.datasetId && !!page && page.total > page.size
+  // 批E⑨：任一待办项含 AI 摘要 → 顶部标注"AI 生成仅供参考"
+  const hasSummary = rows.some((r) => parseAiSummary(r.aiSummary))
 
   const goPage = async (pageNum: number) => {
     if (!card.datasetId || loading) return
@@ -45,6 +48,7 @@ export function ListCard({ card }: { card: AiListCard }) {
       <div className="flex items-center gap-2 border-b px-3.5 py-2.5">
         <ListChecks className="size-4 text-primary" />
         <p className="text-sm font-semibold">{card.title}</p>
+        {hasSummary && <span className="text-[10px] text-muted-foreground">AI 生成仅供参考</span>}
         <span className="ml-auto text-xs text-muted-foreground">{page ? `${page.total} 项` : `${rows.length} 项`}</span>
       </div>
 
@@ -52,31 +56,40 @@ export function ListCard({ card }: { card: AiListCard }) {
         <div className="px-3.5 py-6 text-center text-xs text-muted-foreground">暂无数据</div>
       ) : (
         <ul className={cn("divide-y", loading && "opacity-50")}>
-          {rows.map((row, i) => (
-            <li key={i}>
-              <button
-                type="button"
-                disabled={!row.link}
-                onClick={() => row.link && navigate(String(row.link))}
-                className="flex w-full items-start gap-2 px-3.5 py-2.5 text-left enabled:hover:bg-accent/50 disabled:cursor-default"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className={cn("truncate text-sm font-medium", row.link && "text-primary")}>
-                    {String(row[primaryKey] ?? "—")}
-                  </p>
-                  {card.columns.length > 1 && (
-                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {card.columns
-                        .slice(1)
-                        .map((c) => `${c.label} ${String(row[c.key] ?? "—")}`)
-                        .join(" · ")}
+          {rows.map((row, i) => {
+            const summary = parseAiSummary(row.aiSummary)
+            return (
+              <li key={i}>
+                <button
+                  type="button"
+                  disabled={!row.link}
+                  onClick={() => row.link && navigate(String(row.link))}
+                  className="flex w-full items-start gap-2 px-3.5 py-2.5 text-left enabled:hover:bg-accent/50 disabled:cursor-default"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className={cn("truncate text-sm font-medium", row.link && "text-primary")}>
+                      {String(row[primaryKey] ?? "—")}
                     </p>
-                  )}
-                </div>
-                {row.link && <ChevronRight className="mt-0.5 size-4 shrink-0 text-muted-foreground" />}
-              </button>
-            </li>
-          ))}
+                    {card.columns.length > 1 && (
+                      <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                        {card.columns
+                          .slice(1)
+                          .map((c) => `${c.label} ${String(row[c.key] ?? "—")}`)
+                          .join(" · ")}
+                      </p>
+                    )}
+                  </div>
+                  {row.link && <ChevronRight className="mt-0.5 size-4 shrink-0 text-muted-foreground" />}
+                </button>
+                {/* 批E⑨ 该待办项 AI 摘要（行下方，不触发导航） */}
+                {summary && (
+                  <div className="px-3.5 pb-2.5">
+                    <AiSummaryBlock data={summary} />
+                  </div>
+                )}
+              </li>
+            )
+          })}
         </ul>
       )}
 
