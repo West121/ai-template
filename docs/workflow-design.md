@@ -530,3 +530,19 @@ interface WfInstanceDetailP3 extends WfInstanceDetail {
 ### 派单时序
 后端 predict 算法等磐石表单预填单收口(:8081 串行);前端展示等 nodeInfo bug 修好(id 匹配是完整
 链路展示的前提)。BPMN 专业模式静态预测仍不支持(现状,给 note)。
+
+## 直属上级审批:默认部门经理 + 可指定多选(用户需求 2026-07-12)
+
+痛点:每个用户都配 leaderId 太麻烦。改为**默认回退**:
+- **LEADER(直属上级)规则解析**(AssigneeResolver):
+  1. 用户**显式指定的上级**(支持**多选**)→ 优先用(多人=会签/或签按节点 multiMode)。
+  2. 未指定 → **回退到用户所在(主)部门的负责人(dept.leader_id,即部门经理)**。
+  3. 部门也无负责人 → 向上找父部门负责人(可选)/兜底发起人或空(不崩)。
+- **数据模型**:用户上级 单 leaderId → **多选**。方案:新增 `sys_user_leader`(user_id/leader_id/sort)关联表
+  (或 leader_id 保留+加关联表);兼容存量(单 leaderId 迁为一行)。takeLeader/level(第 N 级上级)规则同理:
+  多上级时按层级/或直接用配置的多上级。
+- **前端**:用户编辑"直属上级"改多选(OrgPicker 多选,可空=用部门经理);组织/通讯录展示。
+- **影响面**:leave_approval 等用 LEADER 规则的流程,zhangsan 未配上级→自动路由部门经理(=人事行政部
+  负责人王经理),与现有 smoke 依赖一致(部门经理兜底本就是期望)。
+- 分工:磐石(AssigneeResolver LEADER 多选+部门经理回退/sys_user_leader 迁移/用户 create/update 收多上级/
+  smoke:配多上级用指定、未配用部门经理、部门无负责人兜底)、疾风(用户编辑上级多选 UI)。**排管理框架批M1 后**。
