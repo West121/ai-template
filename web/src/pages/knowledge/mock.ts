@@ -109,6 +109,21 @@ const TAGS: KbTag[] = [
   { id: 403, name: "制度", color: "#10b981" },
 ]
 
+/** 文档标签（批3：AI 自动 + 手动混合），键=docId */
+const DOC_TAGS: Record<number, KbTag[]> = {
+  302: [
+    { id: 411, name: "编码规范", source: "MANUAL" },
+    { id: 412, name: "PR评审", source: "AI" },
+    { id: 413, name: "分支策略", source: "AI" },
+  ],
+  305: [
+    { id: 421, name: "架构", source: "MANUAL" },
+    { id: 422, name: "知识库", source: "AI" },
+    { id: 423, name: "分层设计", source: "AI" },
+  ],
+  311: [{ id: 431, name: "人事制度", source: "AI" }],
+}
+
 /** 版本历史（会话内可变），键=docId；VERSION_SNAP 键=`${docId}:${version}` */
 const VERSIONS: Record<number, KbDocVersion[]> = {
   302: [
@@ -309,7 +324,7 @@ export function fetchDoc(docId: number): Promise<KbResult<KbDocDetail | null>> {
       const doc = DOCS.find((x) => x.id === docId)
       if (!doc) return null
       const c = getContent(docId)
-      return { ...doc, contentJson: c.contentJson, contentText: c.contentText, tags: [] }
+      return { ...doc, contentJson: c.contentJson, contentText: c.contentText, tags: DOC_TAGS[docId] ?? [] }
     },
   )
 }

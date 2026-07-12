@@ -162,6 +162,7 @@ export const PART_TYPES = [
   "flowDraft",
   "templateDraft",
   "formDraft",
+  "knowledgeSave",
 ] as const
 export type KnownPartType = (typeof PART_TYPES)[number]
 
@@ -180,6 +181,7 @@ export const PART_SCHEMA_SUPPORT: Record<KnownPartType, number> = {
   flowDraft: 1,
   templateDraft: 1,
   formDraft: 1,
+  knowledgeSave: 1,
 }
 
 export type PartResolution =

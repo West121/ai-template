@@ -78,11 +78,12 @@ export interface KbTreeNode {
   children: KbTreeNode[]
 }
 
-/** 标签（kb_tag，批1 展示/手动，AI 自动标签在批3） */
+/** 标签（kb_tag）；source 区分来源：AI 自动生成 vs 手动（批3） */
 export interface KbTag {
   id: number
   name: string
   color?: string
+  source?: "AI" | "MANUAL"
 }
 
 /** 文档详情（GET /docs/{id}）：元信息 + 正文 JSON + 标签 */

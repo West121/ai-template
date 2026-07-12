@@ -842,16 +842,17 @@ export interface AiActionResult {
 
 /**
  * 确认执行（V2）：POST /api/ai/actions/{id}/confirm + **Idempotency-Key**（前端 ULID，
- * 同一动作重试沿用同一 key）；请求体为空对象（§7.3：执行参数以服务端草稿为准）。
+ * 同一动作重试沿用同一 key）；请求体默认空对象（§7.3：执行参数以服务端草稿为准）。
+ * `params` 可选：用户在确认卡内补选的执行参数（如 knowledge_save 的 {spaceId,title}），随体提交。
  * 404（新端点未实现）→ 回退旧 /api/ai/confirm → 仍不可用回 mock 演示。
  * 409/410/AI_ACTION_STALE 等业务错误按 §22 文案转结构化状态。
  */
-export async function confirmActionV2(actionId: string, idempotencyKey: string): Promise<AiResult<AiActionResult>> {
+export async function confirmActionV2(actionId: string, idempotencyKey: string, params?: Record<string, unknown>): Promise<AiResult<AiActionResult>> {
   try {
     const data = await api<AiActionResult>(`/api/ai/actions/${encodeURIComponent(actionId)}/confirm`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
-      body: JSON.stringify({}),
+      body: JSON.stringify(params ?? {}),
     })
     return { data, demo: false }
   } catch (err) {

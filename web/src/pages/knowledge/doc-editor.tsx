@@ -19,6 +19,7 @@ import { jsonToHtml, htmlToJson } from "./content-codec"
 import { KbAiAssist } from "./kb-ai-assist"
 import { VersionHistory } from "./version-history"
 import { DocComments } from "./comments"
+import { DocMeta } from "./doc-meta"
 import { DOC_STATUS_META, type KbDocDetail } from "./types"
 
 export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | null; canEdit: boolean; onDocChanged?: () => void }) {
@@ -206,6 +207,9 @@ export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | nu
           </div>
         )}
       </div>
+
+      {/* AI 摘要 + 标签（批3；磐石后端保存后生成，空则不显示） */}
+      <DocMeta summary={detail.summary} tags={detail.tags} />
 
       {/* 正文 */}
       <div className="min-h-0 flex-1 overflow-y-auto">
