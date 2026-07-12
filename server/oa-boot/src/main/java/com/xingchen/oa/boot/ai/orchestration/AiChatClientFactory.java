@@ -41,6 +41,7 @@ public class AiChatClientFactory {
     private final AiAdvisors.OutputSanitizationAdvisor outputSanitizationAdvisor;
 
     private final Map<String, ChatClient> cache = new ConcurrentHashMap<>();
+    private final Map<String, ChatClient> leanCache = new ConcurrentHashMap<>();
 
     /**
      * 取（或构建）该凭据的 ChatClient。apiKey 为已解密明文（解密失败在上游已转
@@ -50,6 +51,34 @@ public class AiChatClientFactory {
         String key = cred.getId() + "|" + cred.getBaseUrl() + "|" + cred.getModel()
                 + "|" + AiErrors.sha256(apiKey);
         return cache.computeIfAbsent(key, k -> build(cred, apiKey));
+    }
+
+    /**
+     * 无 Advisor / 无工具的精简 ChatClient（批3：AI 写作辅助流式生成 {@code .stream()} 用）。
+     * 写作辅助不需要会话记忆 / RAG / 工具循环 / 配额审计——单次「选区 → 生成」纯文本流；
+     * 避免默认 Advisor 链（含仅作用于 {@code .call()} 的 CallAdvisor）与工具管理器带来的意外行为。
+     */
+    public ChatClient leanClient(OrchCredential cred, String apiKey) {
+        String key = cred.getId() + "|" + cred.getBaseUrl() + "|" + cred.getModel()
+                + "|" + AiErrors.sha256(apiKey);
+        return leanCache.computeIfAbsent(key, k -> buildLean(cred, apiKey));
+    }
+
+    private ChatClient buildLean(OrchCredential cred, String apiKey) {
+        try {
+            OpenAiChatOptions defaultOptions = (OpenAiChatOptions) OpenAiChatOptions.builder()
+                    .baseUrl(trimTrailingSlash(cred.getBaseUrl()))
+                    .apiKey(apiKey)
+                    .model(cred.getModel())
+                    .build();
+            OpenAiChatModel model = OpenAiChatModel.builder()
+                    .options(defaultOptions)
+                    .build();
+            return ChatClient.create(model);
+        } catch (Exception e) {
+            log.warn("精简 ChatModel 构建失败 credential={}: {}", cred.getId(), e.getMessage());
+            throw AiErrors.e(503, AiErrors.MODEL_UNAVAILABLE, "模型客户端构建失败: " + e.getMessage());
+        }
     }
 
     private ChatClient build(OrchCredential cred, String apiKey) {

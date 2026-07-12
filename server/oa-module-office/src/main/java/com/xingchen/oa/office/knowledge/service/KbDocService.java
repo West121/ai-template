@@ -18,9 +18,11 @@ import com.xingchen.oa.office.knowledge.repository.KbDocRepository;
 import com.xingchen.oa.office.knowledge.repository.KbDocTagRepository;
 import com.xingchen.oa.office.knowledge.repository.KbSpaceRepository;
 import com.xingchen.oa.office.knowledge.repository.KbTagRepository;
+import com.xingchen.oa.office.knowledge.port.KbDocAiPort;
 import com.xingchen.oa.office.knowledge.support.KbAccess;
 import com.xingchen.oa.office.knowledge.support.KbNameResolver;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -28,12 +30,15 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.util.StringUtils;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -56,6 +61,11 @@ public class KbDocService {
     private final KbNameResolver nameResolver;
     private final KbEmbeddingService embeddingService;
     private final ObjectMapper objectMapper;
+    /**
+     * AI 自动处理端口（批3，boot 侧实现，可空）。ObjectProvider 惰性解析——打破装配环：
+     * 实现方 {@code KbDocAiAdapter} 反向注入本 Service 写回摘要/标签。切片测试/无实现时静默跳过。
+     */
+    private final ObjectProvider<KbDocAiPort> aiPortProvider;
 
     /** 空间下目录树（FOLDER/DOC）。须对空间可见。 */
     public List<DocTreeNode> tree(Long spaceId) {
@@ -224,22 +234,30 @@ public class KbDocService {
         docRepository.save(doc);
         // 批2：正文提交后重建分块向量（§3/§7）。放事务提交后执行——嵌入是增强不阻断保存，
         // 且提交后读到的正是本次正文；无嵌入凭据时 reindex 仅写 chunk_text（全文降级），毫秒级同步完成。
-        triggerReindex(id, req.contentText());
+        // 批3：同一 afterCommit 再触发 AI 自动处理（摘要 + 自动标签，boot 侧异步，失败不阻断）。
+        triggerAfterSave(id, doc.getTitle(), req.contentText());
         return detail(id);
     }
 
-    /** content_text 已在 req 中，直接透传；事务提交后重建（无 tx 同步则直接调）。 */
-    private void triggerReindex(Long docId, String contentText) {
+    /** content_text 已在 req 中，直接透传；事务提交后重建分块 + AI 自动处理（无 tx 同步则直接调）。 */
+    private void triggerAfterSave(Long docId, String title, String contentText) {
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    embeddingService.reindex(docId, contentText);
+                    afterSave(docId, title, contentText);
                 }
             });
         } else {
-            embeddingService.reindex(docId, contentText);
+            afterSave(docId, title, contentText);
         }
+    }
+
+    private void afterSave(Long docId, String title, String contentText) {
+        embeddingService.reindex(docId, contentText);
+        // 批3：AI 自动处理（摘要/标签）。实现方须自身异步 + 兜底，此处不 try/catch 也不阻断
+        // （onContentSaved 约定不外抛）；无实现（切片测试/未装配）→ ifAvailable 跳过。
+        aiPortProvider.ifAvailable(port -> port.onContentSaved(docId, title, contentText));
     }
 
     @Transactional
@@ -304,6 +322,131 @@ public class KbDocService {
                 .orElseThrow(() -> new BusinessException(404, "知识空间不存在"));
         access.requireEdit(space);
         docTagRepository.deleteByDocIdAndTagId(docId, tagId);
+    }
+
+    // ---------- 批3：AI 写作辅助 / 自动处理 / 对话固化 ----------
+
+    /**
+     * 校验当前用户对该文档所在空间可编辑（EDITOR/ADMIN）；不可编辑 → 403。
+     * AI 写作辅助（POST /api/kb/ai/assist）在 docId 提供时的越权红线闸口。
+     */
+    public void assertDocEditable(Long docId) {
+        KbDoc doc = docRepository.findById(docId)
+                .orElseThrow(() -> new BusinessException(404, "文档不存在"));
+        KbSpace space = spaceRepository.findById(doc.getSpaceId())
+                .orElseThrow(() -> new BusinessException(404, "知识空间不存在"));
+        access.requireEdit(space);
+    }
+
+    /**
+     * 校验当前用户对空间可编辑（EDITOR/ADMIN），返回空间名；否则 403。
+     * 对话固化 knowledge_save 的预检（红线：非成员空间不能固化入库）。
+     */
+    public String assertSpaceEditable(Long spaceId) {
+        KbSpace space = spaceRepository.findById(spaceId)
+                .orElseThrow(() -> new BusinessException(404, "知识空间不存在"));
+        access.requireEdit(space);
+        return space.getName();
+    }
+
+    /**
+     * 批3 · AI 自动处理写回（内部，供 boot 侧适配器在异步链路调用）：
+     * 写 summary（截断 1000）+ 自动标签（find-or-create + 去重打标）。<b>无功能/空间权限校验</b>——
+     * 系统级增强，权限已在保存正文时校验；文档已删则静默 no-op。摘要/标签任一为空则跳过对应部分。
+     */
+    @Transactional
+    public void applyAiSummaryAndTags(Long docId, String summary, List<String> tagNames) {
+        KbDoc doc = docRepository.findById(docId).orElse(null);
+        if (doc == null) {
+            return; // 文档已删（如保存后随空间级联删）→ 放弃写回
+        }
+        if (StringUtils.hasText(summary)) {
+            String s = summary.trim();
+            doc.setSummary(s.length() > 1000 ? s.substring(0, 1000) : s);
+            doc.setUpdatedAt(OffsetDateTime.now());
+            docRepository.save(doc);
+        }
+        if (tagNames != null) {
+            int applied = 0;
+            for (String raw : tagNames) {
+                if (!StringUtils.hasText(raw) || applied >= 8) {
+                    continue;
+                }
+                String name = raw.trim();
+                if (name.length() > 64) {
+                    name = name.substring(0, 64);
+                }
+                final String tagName = name;
+                KbTag tag = tagRepository.findByTenantIdAndName("default", tagName)
+                        .orElseGet(() -> {
+                            KbTag t = new KbTag();
+                            t.setName(tagName);
+                            return tagRepository.save(t);
+                        });
+                if (!docTagRepository.existsByDocIdAndTagId(docId, tag.getId())) {
+                    docTagRepository.save(new KbDocTag(docId, tag.getId()));
+                }
+                applied++;
+            }
+        }
+    }
+
+    /**
+     * 批3 · 对话固化：在指定空间新建<b>草稿</b>文档（DRAFT，红线不直接发布）+ 正文（纯文本转 TipTap 段落）。
+     * 校验空间可编辑（EDITOR/ADMIN）；由 knowledge_save 动作草稿确认执行器调用（确认者为当前用户）。
+     * 返回 {@code {docId, spaceId, title, status, designerPath}}。
+     */
+    @Transactional
+    public Map<String, Object> createAiDraft(Long spaceId, String title, String plainText) {
+        KbSpace space = spaceRepository.findById(spaceId)
+                .orElseThrow(() -> new BusinessException(404, "知识空间不存在"));
+        access.requireEdit(space);
+        Long userId = access.currentUser().getUserId();
+        KbDoc doc = new KbDoc();
+        doc.setSpaceId(spaceId);
+        doc.setParentId(null);
+        doc.setType(KbDoc.TYPE_DOC);
+        doc.setTitle(StringUtils.hasText(title) ? title.trim() : "未命名草稿");
+        doc.setSort(0);
+        doc.setStatus(KbDoc.STATUS_DRAFT); // 红线：固化只落草稿，人工二次确认后再发布
+        doc.setCreatorId(userId);
+        doc.setUpdaterId(userId);
+        doc.setVersion(1);
+        KbDoc saved = docRepository.save(doc);
+        String text = plainText == null ? "" : plainText;
+        KbDocContent content = new KbDocContent();
+        content.setDocId(saved.getId());
+        content.setContentJson(buildTipTapJson(text));
+        content.setContentText(text);
+        content.setUpdatedAt(OffsetDateTime.now());
+        contentRepository.save(content);
+        // 分块索引（可搜）+ AI 自动处理（草稿也生成摘要/标签），走 afterCommit 兜底
+        triggerAfterSave(saved.getId(), saved.getTitle(), text);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("docId", saved.getId());
+        out.put("spaceId", spaceId);
+        out.put("title", saved.getTitle());
+        out.put("status", saved.getStatus());
+        out.put("designerPath", "/knowledge/" + spaceId + "?doc=" + saved.getId());
+        return out;
+    }
+
+    /** 纯文本 → 最小 TipTap doc JSON（按换行拆段落，空行 → 空段落）。后端只存不渲染。 */
+    private String buildTipTapJson(String plainText) {
+        ObjectNode docNode = objectMapper.createObjectNode();
+        docNode.put("type", "doc");
+        ArrayNode paras = docNode.putArray("content");
+        String[] lines = plainText.isEmpty() ? new String[] {""} : plainText.split("\n", -1);
+        for (String line : lines) {
+            ObjectNode para = paras.addObject();
+            para.put("type", "paragraph");
+            if (StringUtils.hasText(line)) {
+                ObjectNode textNode = para.putArray("content").addObject();
+                textNode.put("type", "text");
+                textNode.put("text", line);
+            }
+        }
+        return docNode.toString();
     }
 
     // ---------- 辅助 ----------

@@ -4522,6 +4522,153 @@ async function hlCompleted(token, iid) {
     kbPsql(`DELETE FROM orch_credential WHERE name = '冒烟KB LLM ${KTS}'`)
   }
 
+  // ==================== 25.11 批3：AI 写作辅助（assist SSE）+ 自动处理（摘要/标签）+ 对话固化（knowledge_save） ====================
+  // 契约见 ai-knowledge-base.md §3/§7 批3。自带一个 mock LLM sink：body.stream → SSE 增量帧（assist 流式）；
+  // 非流式 → 结构化摘要/标签(自动处理) 或 knowledge_save tool_call(对话固化)。该 sink 凭据为最新启用 LLM → 系统默认。
+  {
+    const { createServer: createKb3Sink } = await import("node:http")
+    const kb3Sink = createKb3Sink((req, res) => {
+      let b = ""
+      req.on("data", (d) => (b += d))
+      req.on("end", () => {
+        if (req.url !== "/kb3/v1/chat/completions") { res.writeHead(404); res.end(); return }
+        const body = JSON.parse(b || "{}")
+        const model = body.model ?? "fake-kb3"
+        if (body.stream) {
+          // AI 写作辅助流式：OpenAI chat.completion.chunk（delta.content 增量）→ [DONE]
+          res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" })
+          const pieces = ["这是", "AI 写作助手", "生成的", "流式增量", "文本。"]
+          for (const p of pieces) {
+            res.write(`data: ${JSON.stringify({ id: "cc-kb3", object: "chat.completion.chunk", created: 1720000000, model, choices: [{ index: 0, delta: { content: p }, finish_reason: null }] })}\n\n`)
+          }
+          res.write(`data: ${JSON.stringify({ id: "cc-kb3", object: "chat.completion.chunk", created: 1720000000, model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`)
+          res.write("data: [DONE]\n\n")
+          res.end()
+          return
+        }
+        const msgs = body.messages ?? []
+        const hasTool = msgs.some((m) => m.role === "tool")
+        const rawUser = [...msgs].reverse().find((m) => m.role === "user")?.content ?? ""
+        const lastUser = Array.isArray(rawUser) ? rawUser.filter((p) => p.type === "text").map((p) => p.text).join("\n") : rawUser
+        const completion = (message, finish = "stop") => JSON.stringify({
+          id: "cc-kb3", object: "chat.completion", created: 1720000000, model,
+          choices: [{ index: 0, message, finish_reason: finish, logprobs: null }],
+          usage: { prompt_tokens: 12, completion_tokens: 7, total_tokens: 19 },
+        })
+        res.writeHead(200, { "Content-Type": "application/json" })
+        if (JSON.stringify(body).includes("关键词标签")) {
+          // AI 自动处理：结构化摘要 + 标签（BeanOutputConverter 解析 content JSON）
+          res.end(completion({ role: "assistant", content: JSON.stringify({ summary: `冒烟自动摘要_${KTS}`, tags: ["冒烟标签A", "冒烟标签B", "报销"] }) }))
+          return
+        }
+        if (!hasTool && lastUser.includes("固化")) {
+          // 对话固化：触发 knowledge_save（从话语解析目标空间 id）
+          const sm = lastUser.match(/空间(\d+)/)
+          const tool = { name: "knowledge_save", arguments: JSON.stringify({ spaceId: Number(sm?.[1] ?? 0), title: `冒烟固化文档_${KTS}`, content: "这是要固化到知识库的对话总结。\n第二段内容。" }) }
+          res.end(completion({ role: "assistant", content: null, tool_calls: [{ id: "kc1", type: "function", function: tool }] }, "tool_calls"))
+          return
+        }
+        res.end(completion({ role: "assistant", content: "好的，已处理。" }))
+      })
+    })
+    await new Promise((r) => kb3Sink.listen(0, "127.0.0.1", r))
+    const KB3 = `http://127.0.0.1:${kb3Sink.address().port}`
+    const kb3Cred = await call(admin.token, "POST", "/api/orch/credentials", {
+      name: `冒烟KB3 LLM ${KTS}`, type: "LLM", baseUrl: `${KB3}/kb3/v1`, apiKey: "sk-kb3", model: "fake-kb3", enabled: true,
+    })
+    const kb3CredId = kb3Cred.body?.data?.id
+    check("kb批3 建 assist/自动处理 测试凭据(→系统默认)", !!kb3CredId, JSON.stringify(kb3Cred.body?.code))
+
+    // assist SSE 读流 helper：POST /api/kb/ai/assist，逐 data: 行解析 {text} 帧；非 SSE(错误) 回 body
+    const assistSse = async (token, reqBody) => {
+      const res = await fetch(`${BASE}/api/kb/ai/assist`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(reqBody),
+      })
+      const ctype = res.headers.get("content-type") ?? ""
+      if (!ctype.includes("text/event-stream")) {
+        let j = null
+        try { j = await res.json() } catch { /* 非 JSON */ }
+        return { status: res.status, frames: [], body: j }
+      }
+      const text = await res.text()
+      const frames = []
+      for (const chunk of text.split("\n\n")) {
+        const dl = chunk.split("\n").find((l) => l.startsWith("data:"))
+        if (dl) { try { frames.push(JSON.parse(dl.slice(5).trim())) } catch { /* 非 JSON */ } }
+      }
+      return { status: res.status, frames, body: null }
+    }
+
+    // 1) 续写：owner zhangsan 带 docId=did（可编辑）→ 真流式（多个 text 增量帧，非阻塞兜底单帧）
+    const asCont = await assistSse(zhangsan.token, { action: "continue", selectedText: "星辰 OA 是一体化办公平台，", docId: did })
+    const asContFrames = asCont.frames.filter((f) => typeof f.text === "string")
+    const asContText = asContFrames.map((f) => f.text).join("")
+    check("kb批3 assist SSE 续写真流式(多 text 增量帧,对账点①)",
+      asContFrames.length >= 2 && asContText.length > 0, JSON.stringify({ n: asContFrames.length, t: asContText }))
+
+    // 2) 润色：无 docId（编辑自己选区，登录+kb:doc:edit 即可）→ 真流式 text 帧
+    const asPolFrames = (await assistSse(zhangsan.token, { action: "polish", selectedText: "这段文字需要润色的更专业一点。" }))
+      .frames.filter((f) => typeof f.text === "string")
+    const asPolText = asPolFrames.map((f) => f.text).join("")
+    check("kb批3 assist SSE 润色真流式返回文本(多帧)", asPolFrames.length >= 2 && asPolText.length > 0, JSON.stringify({ n: asPolFrames.length, t: asPolText }))
+
+    // 3) 红线：非法 action → 400（JSON 信封，非 SSE）
+    const asBad = await assistSse(zhangsan.token, { action: "nonsense", selectedText: "x" })
+    check("kb批3 assist 非法 action → 400", asBad.body?.code === 400 || asBad.status === 400, JSON.stringify({ s: asBad.status, c: asBad.body?.code }))
+
+    // 4) 红线：admin(非该 PRIVATE 空间编辑者) 带 docId=did → 403（越权闸口）
+    const asDeny = await assistSse(admin.token, { action: "polish", selectedText: "x", docId: did })
+    check("kb批3 红线:非编辑者(admin) 带 docId assist → 403", asDeny.body?.code === 403 || asDeny.status === 403, JSON.stringify({ s: asDeny.status, c: asDeny.body?.code }))
+
+    // 5) 自动处理：新建文档→保存正文→异步生成 summary + 自动标签（轮询等待）
+    const apDoc = await call(zhangsan.token, "POST", "/api/kb/docs", { spaceId, type: "DOC", title: "批3自动处理测试" })
+    const apId = apDoc.body?.data?.id
+    await call(zhangsan.token, "PUT", `/api/kb/docs/${apId}/content`, {
+      contentJson: { type: "doc", content: [] },
+      contentText: "本文档介绍公司报销制度与审批流程：员工报销须附发票并逐级审批，财务复核后打款。用于批3 AI 自动处理冒烟，正文足够长以触发摘要与关键词标签生成。",
+    })
+    let apDetail = null
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 500))
+      apDetail = await call(zhangsan.token, "GET", `/api/kb/docs/${apId}`)
+      if (apDetail.body?.data?.summary) break
+    }
+    check("kb批3 自动处理:保存正文后异步生成 summary(存 kb_doc.summary,非空)",
+      !!apDetail?.body?.data?.summary, JSON.stringify(apDetail?.body?.data?.summary))
+    check("kb批3 自动处理:生成自动标签(kb_tag/kb_doc_tag,GET 详情返回 tags)",
+      (apDetail?.body?.data?.tags ?? []).length >= 1, JSON.stringify((apDetail?.body?.data?.tags ?? []).map((t) => t.name)))
+
+    // 6) 对话固化：zhangsan(空间 ADMIN) 让助手固化 → knowledgeSaveDraft 确认卡 → 确认建 DRAFT 草稿
+    const ksChat = await call(zhangsan.token, "POST", "/api/ai/chat", { message: `请把这次讨论固化到空间${spaceId}存为知识库文档`, credentialId: kb3CredId })
+    const ksCard = (ksChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "knowledgeSaveDraft")
+    check("kb批3 对话固化:knowledge_save 产 knowledgeSaveDraft 确认卡(draftId+space+title+preview)",
+      !!ksCard?.draftId && ksCard.spaceId === spaceId && !!ksCard.title && !!ksCard.preview, JSON.stringify(ksCard))
+    const ksCreate = ksCard?.draftId
+      ? await call(zhangsan.token, "POST", `/api/kb/ai/knowledge-drafts/${ksCard.draftId}/create`)
+      : { body: {} }
+    const ksDoc = ksCreate.body?.data
+    check("kb批3 对话固化:确认后建 DRAFT 草稿文档(不直接发布,红线)",
+      ksCreate.body?.code === 0 && !!ksDoc?.docId && ksDoc.status === "DRAFT" && ksDoc.spaceId === spaceId, JSON.stringify(ksDoc))
+    // 回读确认草稿确为 DRAFT 且在目标空间
+    const ksDetail = ksDoc?.docId ? await call(zhangsan.token, "GET", `/api/kb/docs/${ksDoc.docId}`) : { body: {} }
+    check("kb批3 对话固化:草稿文档回读 status=DRAFT + 正文非空",
+      ksDetail.body?.data?.status === "DRAFT" && !!ksDetail.body?.data?.contentText, JSON.stringify(ksDetail.body?.data?.status))
+
+    // 7) 红线：admin(非成员) 固化到该 PRIVATE 空间 → tool 出 error 卡，不建草稿
+    const ksDeny = await call(admin.token, "POST", "/api/ai/chat", { message: `请把内容固化到空间${spaceId}`, credentialId: kb3CredId })
+    const ksDenyCards = ksDeny.body?.data?.messages?.[0]?.cards ?? []
+    check("kb批3 红线:非成员(admin) knowledge_save 出 error 卡且不产 knowledgeSaveDraft",
+      ksDenyCards.some((c) => c.type === "error") && !ksDenyCards.some((c) => c.type === "knowledgeSaveDraft"),
+      JSON.stringify(ksDenyCards.map((c) => c.type)))
+
+    await new Promise((r) => kb3Sink.close(r))
+    const { execFileSync: kb3Exec } = await import("node:child_process")
+    kb3Exec("docker", ["exec", process.env.OA_PG_CONTAINER ?? "oa-postgres", "psql", "-U", "oa", "-d", "oa_platform", "-c",
+      `DELETE FROM orch_credential WHERE name = '冒烟KB3 LLM ${KTS}'`], { stdio: ["ignore", "pipe", "pipe"] })
+  }
+
   // 25.10 自清：删测试空间（级联剩余文档/正文/标签关联/分块向量）+ 删测试标签
   const delSpace = await call(zhangsan.token, "DELETE", `/api/kb/spaces/${spaceId}`)
   check("kb 自清:删测试 PRIVATE 空间", delSpace.body?.code === 0)
