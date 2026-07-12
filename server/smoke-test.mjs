@@ -4677,6 +4677,46 @@ async function hlCompleted(token, iid) {
     kbPsql(`DELETE FROM orch_credential WHERE name = '冒烟KB LLM ${KTS}'`)
   }
 
+  // ==================== 25.9b 批5：统计（GET /api/kb/stats）+ 权限治理/审计（集成收尾） ====================
+  // 契约见 ai-knowledge-base.md §7 批5。此处 admin 仍非该 PRIVATE 空间成员（25.7 加的 VIEWER 已于 25.8 前移除）→
+  // 统计「可见空间口径」红线可测：zhangsan(owner) 计入 PRIVATE 空间及其文档(did/did2)，admin 一律不含。前端对账 KbStats 形状。
+  {
+    const { execFileSync: kb5Exec } = await import("node:child_process")
+    const kb5Psql = (q) => kb5Exec("docker",
+      ["exec", process.env.OA_PG_CONTAINER ?? "oa-postgres", "psql", "-U", "oa", "-d", "oa_platform", "-t", "-A", "-c", q],
+      { stdio: ["ignore", "pipe", "pipe"] }).toString().trim()
+
+    // 权限闸口：统计非公开，无 token → 401
+    const stAnon = await call(null, "GET", "/api/kb/stats")
+    check("kb批5 stats 未登录 401(权限闸口)", stAnon.status === 401, `status=${stAnon.status}`)
+
+    const zsSt = await call(zhangsan.token, "GET", "/api/kb/stats")
+    const zs = zsSt.body?.data
+    const admSt = await call(admin.token, "GET", "/api/kb/stats")
+    const adm = admSt.body?.data
+
+    // 形状对账（前端 KbStats：spaceCount/docCount/editableSpaceCount/tagCount + recentDocs[{docId,title,spaceId,spaceName,updatedAt}]）
+    const shapeOk = (s) => s && ["spaceCount", "docCount", "editableSpaceCount", "tagCount"].every((k) => typeof s[k] === "number") && Array.isArray(s.recentDocs)
+    check("kb批5 stats 形状(4 计数瓦片 + recentDocs 数组,前端 KbStats 对账)",
+      zsSt.body?.code === 0 && admSt.body?.code === 0 && shapeOk(zs) && shapeOk(adm), JSON.stringify({ zs, adm }))
+    const recShapeOk = (zs?.recentDocs ?? []).every((d) => typeof d.docId === "number" && typeof d.title === "string" && typeof d.spaceId === "number" && typeof d.spaceName === "string")
+    check("kb批5 stats recentDocs 项形状(docId/title/spaceId/spaceName)", recShapeOk, JSON.stringify(zs?.recentDocs))
+
+    // 可见空间口径红线：zhangsan(owner)计入 PRIVATE 空间+文档，admin(非成员)一律不含 → zhangsan 计数更大，且 admin 不泄漏
+    check("kb批5 stats 可见空间口径:zhangsan(见 PRIVATE) spaceCount > admin(不见)",
+      zs?.spaceCount > adm?.spaceCount, JSON.stringify({ zs: zs?.spaceCount, adm: adm?.spaceCount }))
+    check("kb批5 stats 红线:admin docCount 不含不可见空间文档(< zhangsan)",
+      adm?.docCount < zs?.docCount, JSON.stringify({ zs: zs?.docCount, adm: adm?.docCount }))
+    check("kb批5 stats 红线:admin recentDocs 不泄漏不可见 PRIVATE 空间文档",
+      !(adm?.recentDocs ?? []).some((d) => d.spaceId === spaceId), JSON.stringify((adm?.recentDocs ?? []).map((d) => d.spaceId)))
+    check("kb批5 stats editableSpaceCount:zhangsan 为 PRIVATE 空间 ADMIN(≥1)", zs?.editableSpaceCount >= 1, JSON.stringify(zs?.editableSpaceCount))
+    check("kb批5 stats 种子 PUBLIC 空间双方均可见(公司制度库→admin docCount≥3)", adm?.docCount >= 3, JSON.stringify(adm?.docCount))
+
+    // 审计留痕(@OperLog→sys_oper_log)：本 run 建 PRIVATE 空间(zhangsan)已同步落库(module=知识库,params 含空间编码)
+    const auditCreate = Number(kb5Psql(`SELECT count(*) FROM sys_oper_log WHERE module='知识库' AND action='创建空间' AND username='zhangsan' AND params LIKE '%smoke_kb_${KTS}%'`))
+    check("kb批5 审计:建空间落 sys_oper_log(module=知识库,username=zhangsan)", auditCreate >= 1, `rows=${auditCreate}`)
+  }
+
   // ==================== 25.11 批3：AI 写作辅助（assist SSE）+ 自动处理（摘要/标签）+ 对话固化（knowledge_save） ====================
   // 契约见 ai-knowledge-base.md §3/§7 批3。自带一个 mock LLM sink：body.stream → SSE 增量帧（assist 流式）；
   // 非流式 → 结构化摘要/标签(自动处理) 或 knowledge_save tool_call(对话固化)。该 sink 凭据为最新启用 LLM → 系统默认。

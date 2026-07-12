@@ -2,8 +2,10 @@ package com.xingchen.oa.office.knowledge.service;
 
 import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.common.security.UserContext;
+import com.xingchen.oa.office.knowledge.dto.KbDtos.KbStats;
 import com.xingchen.oa.office.knowledge.dto.KbDtos.MemberRequest;
 import com.xingchen.oa.office.knowledge.dto.KbDtos.MemberResponse;
+import com.xingchen.oa.office.knowledge.dto.KbDtos.RecentDoc;
 import com.xingchen.oa.office.knowledge.dto.KbDtos.SpaceRequest;
 import com.xingchen.oa.office.knowledge.dto.KbDtos.SpaceResponse;
 import com.xingchen.oa.office.knowledge.entity.KbDoc;
@@ -19,12 +21,14 @@ import com.xingchen.oa.office.knowledge.repository.KbSpaceRepository;
 import com.xingchen.oa.office.knowledge.support.KbAccess;
 import com.xingchen.oa.office.knowledge.support.KbNameResolver;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.OffsetDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -37,6 +41,9 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class KbSpaceService {
+
+    /** 统计「最近更新」取的文档条数（批5）。 */
+    private static final int RECENT_DOCS_TOP_N = 5;
 
     private static final Set<String> VISIBILITIES =
             Set.of(KbSpace.VIS_PUBLIC, KbSpace.VIS_INTERNAL, KbSpace.VIS_PRIVATE);
@@ -70,6 +77,37 @@ public class KbSpaceService {
                 .map(s -> toResponse(s, memberCounts.getOrDefault(s.getId(), 0L),
                         docRepository.countBySpaceId(s.getId())))
                 .toList();
+    }
+
+    /**
+     * 批5 · 知识库统计概览（集成收尾，ai-knowledge-base.md §7 批5）。
+     * <b>严格按当前用户可见空间口径</b>（{@link KbAccess#visibleSpaceSpec()}，红线：不含不可见空间的
+     * 空间/文档/标签——不为超管开后门）。recentDocs 取可见空间内最近更新 Top-N。
+     */
+    public KbStats stats() {
+        List<KbSpace> spaces = spaceRepository.findAll(
+                access.visibleSpaceSpec(), Sort.by(Sort.Order.asc("sort"), Sort.Order.asc("id")));
+        if (spaces.isEmpty()) {
+            return new KbStats(0L, 0L, 0L, 0L, List.of());
+        }
+        List<Long> spaceIds = spaces.stream().map(KbSpace::getId).toList();
+        Map<Long, String> nameById = new HashMap<>();
+        long editableSpaceCount = 0L;
+        for (KbSpace s : spaces) {
+            nameById.put(s.getId(), s.getName());
+            if (access.canEdit(s)) {
+                editableSpaceCount++;
+            }
+        }
+        long docCount = docRepository.countByTypeAndSpaceIdIn(KbDoc.TYPE_DOC, spaceIds);
+        long tagCount = docTagRepository.countDistinctTagInSpaces(spaceIds);
+        List<RecentDoc> recentDocs = docRepository
+                .findRecentDocs(KbDoc.TYPE_DOC, spaceIds, PageRequest.of(0, RECENT_DOCS_TOP_N)).stream()
+                .map(d -> new RecentDoc(d.getId(), d.getTitle(), d.getSpaceId(),
+                        nameById.get(d.getSpaceId()),
+                        d.getUpdatedAt() != null ? d.getUpdatedAt() : d.getCreatedAt()))
+                .toList();
+        return new KbStats(spaces.size(), docCount, editableSpaceCount, tagCount, recentDocs);
     }
 
     /** 空间详情（须可见）。 */

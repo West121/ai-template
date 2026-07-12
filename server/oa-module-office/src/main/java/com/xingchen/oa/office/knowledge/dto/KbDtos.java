@@ -152,4 +152,20 @@ public final class KbDtos {
             Long id, Long docId, Long parentId, Long userId, String userName, String content,
             String anchor, OffsetDateTime createdAt) {
     }
+
+    // ---------- 统计（批5 集成收尾，ai-knowledge-base.md §7 批5） ----------
+
+    /**
+     * 知识库统计概览（GET /api/kb/stats）。<b>严格按当前用户可见空间口径</b>（复用 KbAccess，
+     * 红线：不含不可见空间的空间/文档/标签）——不为超管开后门。前端瓦片 + 最近更新入口用。
+     */
+    public record KbStats(
+            long spaceCount, long docCount, long editableSpaceCount, long tagCount,
+            List<RecentDoc> recentDocs) {
+    }
+
+    /** 最近更新文档（stats.recentDocs，Top-N）。updatedAt = COALESCE(updated_at, created_at)，前端跳转用。 */
+    public record RecentDoc(
+            Long docId, String title, Long spaceId, String spaceName, OffsetDateTime updatedAt) {
+    }
 }

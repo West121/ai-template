@@ -5,6 +5,7 @@ import com.xingchen.oa.boot.ai.kb.KbAiAssistService.Prepared;
 import com.xingchen.oa.boot.ai.service.AiActionService;
 import com.xingchen.oa.boot.ai.support.AiExecutionContext;
 import com.xingchen.oa.common.core.R;
+import com.xingchen.oa.common.log.OperLog;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -95,6 +96,7 @@ public class KbAiAssistController {
      */
     @PostMapping("/knowledge-drafts/{draftId}/create")
     @PreAuthorize("hasAuthority('kb:doc:edit')")
+    @OperLog(module = "知识库", action = "AI固化建草稿")
     public R<Map<String, Object>> createKnowledgeDraft(
             @PathVariable Long draftId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
