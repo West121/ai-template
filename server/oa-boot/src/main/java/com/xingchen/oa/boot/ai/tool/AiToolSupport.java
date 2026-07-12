@@ -90,9 +90,19 @@ public class AiToolSupport {
         return c;
     }
 
-    /** §10：form 补 submitPath(CODE)；schema=在线表单 widgets。 */
+    /** §10：form 补 submitPath(CODE)；schema=在线表单 widgets。无预填时用此重载。 */
     public Map<String, Object> formCard(String defCode, String defName, String formType,
                                         Object schema, String submitPath) {
+        return formCard(defCode, defName, formType, schema, submitPath, null);
+    }
+
+    /**
+     * §8.1 对话式表单：form 补 submitPath(CODE)；schema=在线表单 widgets；prefill=已清洗的预填值
+     * {fieldKey:value}（后端从 LLM knownValues 提取并按 schema 校正——前端透传 FormRenderer initialValues，
+     * 契约：card.prefill，即 V2 part.payload.prefill）。空/无预填则省略该字段（前端可选读）。
+     */
+    public Map<String, Object> formCard(String defCode, String defName, String formType,
+                                        Object schema, String submitPath, Map<String, Object> prefill) {
         Map<String, Object> c = base("form");
         c.put("defCode", defCode);
         c.put("defName", defName);
@@ -102,6 +112,9 @@ public class AiToolSupport {
         }
         if (submitPath != null) {
             c.put("submitPath", submitPath);
+        }
+        if (prefill != null && !prefill.isEmpty()) {
+            c.put("prefill", prefill);
         }
         return c;
     }

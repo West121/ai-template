@@ -875,6 +875,9 @@ public class AiChatService {
                 + "（bizdoc_prepare_template / form_prepare_schema / orchestration_prepare_flow），"
                 + "不要只用 navigation_open 或 feature_get_user_capabilities 打开/介绍功能页。\n");
         sb.append("7. 办理审批（task_prepare_approve）前必须先用 task_query_my_tasks 拿到真实 taskId，不要编造 taskId。\n");
+        sb.append("8. 发起审批（workflow_prepare_start）时，凡用户已说明的字段（请假类型/天数/日期/事由/金额等）都必须提取进 "
+                + "knownValues 预填，键用表单字段 key、值按字段类型给（选项用选项值或文案、日期 yyyy-MM-dd、数字用数字），"
+                + "让用户只补缺失项、不要重复输入；用户没提的字段不要臆造。\n");
         sb.append("当前用户：").append(user.getName() != null ? user.getName() : user.getUsername());
         // 批C pageContext：服务端校验 featureCode 存在且当前用户可见后才注入（SERVER_CONTEXT 信任级）
         if (pageContext != null && StringUtils.hasText(pageContext.featureCode())) {

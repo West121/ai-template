@@ -2576,7 +2576,17 @@ async function hlCompleted(token, iid) {
           else if (lastUser.includes("打开")) tool = { name: "open_function", arguments: '{"query":"请假"}' }
           else if (lastUser.includes("功能")) tool = { name: "list_functions", arguments: "{}" }
           else if (lastUser.includes("待办")) tool = { name: "query_todo", arguments: "{}" }
-          else if (lastUser.includes("请假") && lastUser.includes("发起")) tool = { name: "start_approval", arguments: '{"defCode":"leave_approval"}' }
+          else if (lastUser.includes("请假") && lastUser.includes("发起")) {
+            // §8.1 对话式表单：从话语提取 knownValues（模拟 LLM 抽取；leaveType 故意给中文文案，验后端归一到选项 value）
+            const known = {}
+            const dm = lastUser.match(/(\d+)\s*天/)
+            if (dm) known.days = Number(dm[1])
+            if (lastUser.includes("年假")) known.leaveType = "年假"
+            else if (lastUser.includes("病假")) known.leaveType = "病假"
+            else if (lastUser.includes("事假")) known.leaveType = "事假"
+            const args = Object.keys(known).length ? { defCode: "leave_approval", knownValues: known } : { defCode: "leave_approval" }
+            tool = { name: "start_approval", arguments: JSON.stringify(args) }
+          }
           else if (lastUser.includes("统计") || lastUser.includes("报表")) tool = { name: "stats_report", arguments: '{"module":"approval","dimension":"status"}' }
           else if (lastUser.includes("急")) tool = { name: "query_urgent", arguments: "{}" }
           else if (lastUser.includes("同意") && lastUser.includes("任务")) tool = { name: "approve_task", arguments: '{"taskId":"' + (lastUser.match(/任务(\S+)/)?.[1] ?? "x") + '","decision":"APPROVE"}' }
@@ -3191,10 +3201,14 @@ async function hlCompleted(token, iid) {
   const urgentCard = (chat4.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "list")
   check("ai query_urgent 产急事 list 卡", !!urgentCard && (urgentCard.title ?? "").includes("急事"), JSON.stringify(urgentCard?.title))
 
-  // 发起审批 → form 卡
-  const chat5 = await call(admin.token, "POST", "/api/ai/chat", { sessionId, message: "我要发起请假申请" })
+  // 发起审批 → form 卡（含 §8.1 对话式表单预填：话语已明确类型/天数 → card.prefill 归一预填）
+  const chat5 = await call(admin.token, "POST", "/api/ai/chat", { sessionId, message: "帮我发起请假申请，请10天年假" })
   const formCard = (chat5.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "form")
   check("ai start_approval 产 form 卡(defCode+formType)", !!formCard && formCard.defCode === "leave_approval" && !!formCard.formType, JSON.stringify({ d: formCard?.defCode, t: formCard?.formType }))
+  // §8.1：knownValues→prefill 预填（days 原样数字；leaveType 中文文案"年假"归一到选项 value ANNUAL）；schema 仍为 widgets 数组
+  check("ai start_approval 预填 knownValues→prefill(天数+选项归一)",
+    !!formCard?.prefill && Number(formCard.prefill.days) === 10 && formCard.prefill.leaveType === "ANNUAL" && Array.isArray(formCard.schema),
+    JSON.stringify({ prefill: formCard?.prefill, schemaIsArray: Array.isArray(formCard?.schema) }))
 
   // confirm 二段式：建日程 → confirm 卡 → 不确认不生效 + 确认生效 + 一次性
   const chat6 = await call(admin.token, "POST", "/api/ai/chat", { sessionId, message: "帮我建个日程" })

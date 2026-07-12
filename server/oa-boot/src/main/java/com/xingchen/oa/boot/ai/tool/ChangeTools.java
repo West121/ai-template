@@ -7,6 +7,8 @@ import com.xingchen.oa.office.dto.MeetingCreateRequest;
 import com.xingchen.oa.office.dto.ScheduleCreateRequest;
 import com.xingchen.oa.office.service.MeetingService;
 import com.xingchen.oa.office.service.ScheduleService;
+import com.xingchen.oa.workflow.convert.FormManifestExtractor;
+import com.xingchen.oa.workflow.dto.FieldDescriptor;
 import com.xingchen.oa.workflow.dto.ProcessDefResponse;
 import com.xingchen.oa.workflow.dto.RejectRequest;
 import com.xingchen.oa.workflow.dto.TaskActionRequest;
@@ -23,6 +25,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -85,8 +88,13 @@ public class ChangeTools {
     }
 
     @AiToolDefinition(name = "workflow_prepare_start", aliases = {"start_approval"},
-            description = "发起一个审批流程：返回对话内表单卡（在线表单内嵌填写 / 代码表单跳转）。参数 defCode=流程编码（如 leave_approval）。",
-            paramsSchema = "{\"defCode\":{\"type\":\"string\",\"description\":\"流程定义编码，如 leave_approval\"}}",
+            description = "发起一个审批流程：返回对话内表单卡（在线表单内嵌填写 / 代码表单跳转）。参数 defCode=流程编码（如 leave_approval）。"
+                    + "【重要】务必从用户话语中提取所有已明确的字段值填入 knownValues 预填，让用户只补缺失字段、不必重复输入。",
+            paramsSchema = "{\"defCode\":{\"type\":\"string\",\"description\":\"流程定义编码，如 leave_approval\"},"
+                    + "\"knownValues\":{\"type\":\"object\",\"description\":\"从用户话语中提取的、表单里已明确的字段值，用于预填。"
+                    + "键必须是该流程表单字段的 key（schema widget 的 key/name，如 leaveType/days/reason），不要臆造键；"
+                    + "值按字段类型给：select/radio 用选项值或选项文案（如年假），date 用 yyyy-MM-dd，number 用数字，其余用文本；"
+                    + "用户未提到的字段一律不要放进来。示例：请10天年假 → {\\\"leaveType\\\":\\\"年假\\\",\\\"days\\\":10}\"}}",
             required = {"defCode"})
     public ToolResult startApproval(Map<String, Object> args) {
         String defCode = String.valueOf(args.get("defCode"));
@@ -94,6 +102,7 @@ public class ChangeTools {
         String formType = def.formType(); // 已归一化 ONLINE|CODE
         Object schema = null;
         String submitPath = null;
+        Map<String, Object> prefill = null;
         if (WfProcessExt.FORM_CODE.equals(formType)) {
             submitPath = def.formSubmitPath();
         } else if (StringUtils.hasText(def.formCode())) {
@@ -108,11 +117,74 @@ public class ChangeTools {
                 } catch (Exception ignored) {
                     // schema 解析失败 → 前端回退跳转发起页
                 }
+                // §8.1 对话式表单预填：清洗 LLM knownValues（仅留 schema 内真实字段 key，select 值归一到选项 value）
+                prefill = sanitizePrefill(args.get("knownValues"), form.getSchemaJson());
             }
         }
-        Map<String, Object> card = support.formCard(defCode, def.name(), formType, schema, submitPath);
+        Map<String, Object> card = support.formCard(defCode, def.name(), formType, schema, submitPath, prefill);
         return ToolResult.of(support.toJson(Map.of("defCode", defCode, "name", def.name(),
                 "formType", formType, "hint", "已在对话中展示表单卡，请填写后提交")), card);
+    }
+
+    /**
+     * §8.1 预填清洗：把 LLM 提取的 knownValues 收敛为可信 prefill——
+     * <ol>
+     *   <li>防幻觉键：仅保留 schema（form def widgets）里真实存在的字段 key（子表单列以 {@code 子表单key.列key}
+     *       计，与 {@link FormManifestExtractor} 同源）；未知键/空值一律丢弃；</li>
+     *   <li>选项归一：select/radio/checkbox 字段尽量把 LLM 给的选项文案(label)或值匹配到 option.value；
+     *       匹配不上则原样保留（前端 FormRenderer 容忍未知值）。</li>
+     * </ol>
+     * 无可用预填时返回 null（form 卡省略 prefill 字段）。
+     */
+    private Map<String, Object> sanitizePrefill(Object knownValuesRaw, String schemaJson) {
+        if (!(knownValuesRaw instanceof Map<?, ?> known) || known.isEmpty()) {
+            return null;
+        }
+        var fields = FormManifestExtractor.extract(schemaJson);
+        if (fields.isEmpty()) {
+            return null;
+        }
+        Map<String, FieldDescriptor> byKey = new LinkedHashMap<>();
+        for (FieldDescriptor f : fields) {
+            byKey.put(f.key(), f);
+        }
+        Map<String, Object> prefill = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> e : known.entrySet()) {
+            String key = String.valueOf(e.getKey());
+            Object value = e.getValue();
+            FieldDescriptor field = byKey.get(key);
+            if (field == null || value == null || String.valueOf(value).isBlank()) {
+                continue; // 幻觉键 / 空值 → 丢弃
+            }
+            prefill.put(key, matchOption(field, value));
+        }
+        return prefill.isEmpty() ? null : prefill;
+    }
+
+    /** 选项型字段：把标量/多选各元素尽量匹配到 option.value（按 value 或 label，宽松大小写）；非选项字段原样。 */
+    private Object matchOption(FieldDescriptor field, Object value) {
+        List<FieldDescriptor.FieldOption> options = field.options();
+        if (options == null || options.isEmpty()) {
+            return value;
+        }
+        if (value instanceof Iterable<?> coll) { // checkbox 多选
+            List<Object> mapped = new java.util.ArrayList<>();
+            for (Object item : coll) {
+                mapped.add(matchScalarOption(options, item));
+            }
+            return mapped;
+        }
+        return matchScalarOption(options, value);
+    }
+
+    private Object matchScalarOption(List<FieldDescriptor.FieldOption> options, Object value) {
+        String v = String.valueOf(value).trim();
+        for (FieldDescriptor.FieldOption o : options) {
+            if (v.equalsIgnoreCase(o.value()) || v.equalsIgnoreCase(o.label())) {
+                return o.value(); // 命中选项值或文案 → 归一到 value
+            }
+        }
+        return value; // 匹配不上原样（前端容忍）
     }
 
     @AiToolDefinition(name = "task_prepare_approve", aliases = {"approve_task"},
