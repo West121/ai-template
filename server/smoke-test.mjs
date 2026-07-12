@@ -2693,6 +2693,7 @@ async function hlCompleted(token, iid) {
           else if (lastUser.includes("伪造")) tool = { name: "hack_everything", arguments: "{}" }
           else if (lastUser.includes("打开")) tool = { name: "open_function", arguments: '{"query":"请假"}' }
           else if (lastUser.includes("功能")) tool = { name: "list_functions", arguments: "{}" }
+          else if (lastUser.includes("管理操作")) tool = { name: "manage_list_actions", arguments: "{}" }
           else if (lastUser.includes("待办")) tool = { name: "query_todo", arguments: "{}" }
           else if (lastUser.includes("请假") && lastUser.includes("发起")) {
             // §8.1 对话式表单：从话语提取 knownValues（模拟 LLM 抽取；leaveType 故意给中文文案，验后端归一到选项 value）
@@ -3571,6 +3572,110 @@ async function hlCompleted(token, iid) {
   // 10) ai_tool_call 审计落库（本会话工具调用 ≥1 行，risk 占位 READ_ONLY）
   const auditCount = psql(`SELECT count(*) FROM ai_tool_call WHERE session_id = ${Number(v2SessionId)} AND risk_level = 'READ_ONLY'`)
   check("aiV2 ai_tool_call 审计落库(≥1)", Number(auditCount) >= 1, auditCount)
+
+  /* ---- AI 受控管理操作框架 批M1（组织人事 create/update：注册表/3 工具/Gateway 反射/确认二段式）---- */
+
+  // 1) manage_list_actions 权限过滤：admin 有 system:*:edit → 见 user.create（8 个操作）；zhangsan 无 → 看不到（红线）
+  const mgAdminActions = await call(admin.token, "GET", "/api/ai/manage/actions")
+  const adminCodes = (mgAdminActions.body?.data ?? []).map((a) => a.actionCode)
+  check("manageM1 admin 可见组织人事操作(含 user.create/dept.update)",
+    mgAdminActions.body?.code === 0 && adminCodes.includes("system.user.create") && adminCodes.includes("system.dept.update"),
+    JSON.stringify(adminCodes))
+  const mgZsActions = await call(zhangsan.token, "GET", "/api/ai/manage/actions")
+  check("manageM1 zhangsan 无 system 权限→看不到 user.create(红线:无权不暴露)",
+    (mgZsActions.body?.data ?? []).every((a) => a.actionCode !== "system.user.create"),
+    JSON.stringify((mgZsActions.body?.data ?? []).map((a) => a.actionCode)))
+
+  // 2) manage_prepare 出用户表单卡（manage_form + formSchema + submitPath）
+  const mgPrep = await call(admin.token, "POST", "/api/ai/manage/prepare", { actionCode: "system.user.create" })
+  const prepCard = mgPrep.body?.data
+  const schemaKeys = (prepCard?.schema ?? []).map((w) => w.key)
+  check("manageM1 prepare 出用户表单卡(manage_form+schema+submitPath)",
+    prepCard?.type === "manage_form" && schemaKeys.includes("username") && schemaKeys.includes("password") &&
+      schemaKeys.includes("deptId") && prepCard?.submitPath === "/api/ai/manage/submit",
+    JSON.stringify(schemaKeys))
+
+  // 3) 新增用户：submit→确认卡→confirm→真建用户→能登录
+  const newUserName = `aiuser${TS}`
+  const mgSubmit = await call(admin.token, "POST", "/api/ai/manage/submit", {
+    actionCode: "system.user.create",
+    values: { username: newUserName, name: `AI建用户${TS}`, password: "aiuser123", deptId: 2, postId: 3, phone: "13800000000", gender: "MALE" },
+  })
+  const mgCard = mgSubmit.body?.data
+  check("manageM1 submit 出确认卡(actionId 数字 + 密码脱敏 ******)",
+    mgCard?.type === "confirm" && /^\d+$/.test(String(mgCard?.actionId)) && (mgCard?.params ?? []).some((p) => p.value === "******"),
+    JSON.stringify(mgCard))
+  const mgUserBefore = await call(admin.token, "GET", `/api/system/users?keyword=${newUserName}`)
+  check("manageM1 确认前用户未建", (mgUserBefore.body?.data?.list ?? []).length === 0)
+  const mgConfirm = await callH(admin.token, "POST", `/api/ai/actions/${mgCard?.actionId}/confirm`, {}, { "Idempotency-Key": `mg-${TS}` })
+  check("manageM1 确认执行→真建用户(走业务 Service)", mgConfirm.body?.code === 0 && mgConfirm.body?.data?.success === true, JSON.stringify(mgConfirm.body))
+  const newUserId = mgConfirm.body?.data?.data?.id
+  const newLogin = await call(null, "POST", "/api/auth/login", { username: newUserName, password: "aiuser123" })
+  check("manageM1 新建用户可登录", newLogin.body?.code === 0 && !!newLogin.body?.data?.token, JSON.stringify(newLogin.body?.code))
+
+  // 4) 编辑用户载现值（updateLoader 预填）+ 改名生效
+  const mgEditPrep = await call(admin.token, "POST", "/api/ai/manage/prepare", { actionCode: "system.user.update", targetId: String(newUserId) })
+  check("manageM1 编辑用户 prepare 载现值(prefill.name=现值)", mgEditPrep.body?.data?.prefill?.name === `AI建用户${TS}`, JSON.stringify(mgEditPrep.body?.data?.prefill))
+  const mgEditSubmit = await call(admin.token, "POST", "/api/ai/manage/submit", { actionCode: "system.user.update", targetId: String(newUserId), values: { name: `AI改名${TS}` } })
+  const mgEditConfirm = await callH(admin.token, "POST", `/api/ai/actions/${mgEditSubmit.body?.data?.actionId}/confirm`, {}, { "Idempotency-Key": `mge-${TS}` })
+  const editedUser = await call(admin.token, "GET", `/api/system/users/${newUserId}`)
+  check("manageM1 编辑用户生效(改名落库)", mgEditConfirm.body?.code === 0 && editedUser.body?.data?.name === `AI改名${TS}`, JSON.stringify(editedUser.body?.data?.name))
+
+  // 5) 权限二次校验：伪造/未注册 actionCode → 404；无权用户 submit → 403（权限继承）
+  const fakeAction = await call(admin.token, "POST", "/api/ai/manage/submit", { actionCode: "system.user.delete", values: {} })
+  check("manageM1 伪造/未注册 actionCode → 404 拒绝(白名单)", fakeAction.body?.code === 404, JSON.stringify(fakeAction.body?.code))
+  const zsSubmit = await call(zhangsan.token, "POST", "/api/ai/manage/submit", { actionCode: "system.user.create", values: { username: `x${TS}`, name: "x", password: "xxxxxx", deptId: 2, postId: 3 } })
+  check("manageM1 无权用户 submit → 403(二次校验)", zsSubmit.body?.code === 403, JSON.stringify(zsSubmit.body?.code))
+  // 校验兜底：多余字段/DTO 校验（缺 username → 400 由业务 DTO @NotBlank）
+  const mgBadVals = await call(admin.token, "POST", "/api/ai/manage/submit", { actionCode: "system.user.create", values: { name: "缺用户名" } })
+  const mgBadConfirm = mgBadVals.body?.data?.actionId
+    ? await callH(admin.token, "POST", `/api/ai/actions/${mgBadVals.body.data.actionId}/confirm`, {}, { "Idempotency-Key": `mgbad-${TS}` })
+    : { body: { code: 400 } }
+  check("manageM1 表单校验不绕过(缺必填→确认时 400)", mgBadConfirm.body?.code === 400, JSON.stringify(mgBadConfirm.body?.message))
+
+  // 6) 会话 manage_list_actions 走工具链 → ai_tool_call 审计；动作草稿落库
+  const mgChat = await call(admin.token, "POST", "/api/ai/chat", { message: "我能做哪些管理操作" })
+  const mgChatCard = (mgChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "list")
+  check("manageM1 会话 manage_list_actions 出 list 卡", !!mgChatCard, JSON.stringify((mgChat.body?.data?.messages?.[0]?.cards ?? []).map((c) => c.type)))
+  const mgToolAudit = psql(`SELECT count(*) FROM ai_tool_call WHERE tool_name = 'manage_list_actions'`)
+  check("manageM1 ai_tool_call 审计(manage_list_actions ≥1)", Number(mgToolAudit) >= 1, mgToolAudit)
+  const mgDraftAudit = psql(`SELECT count(*) FROM ai_action_draft WHERE tool_name = 'managed_action' AND status = 'SUCCEEDED'`)
+  check("manageM1 ai_action_draft 审计(managed_action SUCCEEDED ≥2)", Number(mgDraftAudit) >= 2, mgDraftAudit)
+
+  /* ---- 现状缺陷快修：角色 CUSTOM 数据权限可配自定义部门（RoleRequest/Response.customDeptIds）---- */
+
+  // a) 建 CUSTOM 角色带自定义部门(产品部3)，response 回填
+  const custRole = await call(admin.token, "POST", "/api/system/roles", { code: `CUST_${TS}`, name: `自定义角色${TS}`, dataScope: "CUSTOM", customDeptIds: [3] })
+  check("custom 建 CUSTOM 角色带自定义部门(response.customDeptIds=[3])",
+    custRole.body?.code === 0 && JSON.stringify(custRole.body?.data?.customDeptIds) === "[3]", JSON.stringify(custRole.body?.data))
+  const custRoleId = custRole.body?.data?.id
+  // 授予审批查询功能权限(id 3=office:approval:list)，以便该角色用户能列审批（数据权限验证前提）
+  await call(admin.token, "PUT", `/api/system/roles/${custRoleId}/permissions`, { permissionIds: [3] })
+  // b) CUSTOM 但空部门 → 400
+  const custEmpty = await call(admin.token, "POST", "/api/system/roles", { code: `CUSTE_${TS}`, name: `空自定义${TS}`, dataScope: "CUSTOM", customDeptIds: [] })
+  check("custom CUSTOM 空自定义部门 → 400 提示", custEmpty.body?.code === 400, JSON.stringify(custEmpty.body?.message))
+  // c) 建用户(财务部5)挂该角色 → 数据权限按 customDeptIds(产品部) 生效
+  const custUser = `custuser${TS}`
+  const cu = await call(admin.token, "POST", "/api/system/users", { username: custUser, name: `自定义用户${TS}`, password: "custuser123", deptId: 5, postId: 3, roleIds: [custRoleId] })
+  check("custom 建用户(财务部,挂自定义角色)", cu.body?.code === 0, JSON.stringify(cu.body?.code))
+  const custTok = (await call(null, "POST", "/api/auth/login", { username: custUser, password: "custuser123" })).body?.data?.token
+  const custAppr = await call(custTok, "GET", "/api/office/approvals?pageNum=1&pageSize=100")
+  const custDepts = new Set((custAppr.body?.data?.list ?? []).map((r) => r.deptName))
+  check("custom 数据权限按 customDeptIds 生效(仅见产品部,非空)",
+    (custAppr.body?.data?.list ?? []).length > 0 && [...custDepts].every((d) => d === "产品部"), [...custDepts].join(","))
+  // d) 编辑角色改自定义部门集为财务部(5) → 重登生效
+  const editRole = await call(admin.token, "PUT", `/api/system/roles/${custRoleId}`, { code: `CUST_${TS}`, name: `自定义角色${TS}`, dataScope: "CUSTOM", customDeptIds: [5] })
+  check("custom 编辑角色改部门集(response.customDeptIds=[5])",
+    editRole.body?.code === 0 && JSON.stringify(editRole.body?.data?.customDeptIds) === "[5]", JSON.stringify(editRole.body?.data?.customDeptIds))
+  const custTok2 = (await call(null, "POST", "/api/auth/login", { username: custUser, password: "custuser123" })).body?.data?.token
+  const custDepts2 = new Set(((await call(custTok2, "GET", "/api/office/approvals?pageNum=1&pageSize=100")).body?.data?.list ?? []).map((r) => r.deptName))
+  check("custom 改部门集后生效(仅见财务部,不见产品部)", custDepts2.has("财务部") && !custDepts2.has("产品部"), [...custDepts2].join(","))
+  // e) 切非 CUSTOM → 自定义部门集清空（response + sys_role_dept 库）
+  const switchRole = await call(admin.token, "PUT", `/api/system/roles/${custRoleId}`, { code: `CUST_${TS}`, name: `自定义角色${TS}`, dataScope: "DEPT", customDeptIds: [5] })
+  check("custom 切非CUSTOM→清空自定义部门(response.customDeptIds=[])",
+    switchRole.body?.code === 0 && JSON.stringify(switchRole.body?.data?.customDeptIds) === "[]", JSON.stringify(switchRole.body?.data?.customDeptIds))
+  const roleDeptCount = psql(`SELECT count(*) FROM sys_role_dept WHERE role_id = ${Number(custRoleId)}`)
+  check("custom 切非CUSTOM→sys_role_dept 清空", Number(roleDeptCount) === 0, roleDeptCount)
 
   /* ---- AI 助手 V2 批B（V34）：Spring AI ChatClient/Advisor 链/模型档案/工具风险 Gateway/计划卡/权限解释 ---- */
 

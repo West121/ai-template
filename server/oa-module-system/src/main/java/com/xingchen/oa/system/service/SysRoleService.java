@@ -6,6 +6,7 @@ import com.xingchen.oa.system.dto.RoleRequest;
 import com.xingchen.oa.system.dto.RoleResponse;
 import com.xingchen.oa.system.entity.SysPermission;
 import com.xingchen.oa.system.entity.SysRole;
+import com.xingchen.oa.system.repository.SysDeptRepository;
 import com.xingchen.oa.system.repository.SysPermissionRepository;
 import com.xingchen.oa.system.repository.SysRoleRepository;
 import com.xingchen.oa.system.repository.SysUserAssignmentRepository;
@@ -19,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 角色管理 + 角色权限分配（全量替换）。
@@ -30,6 +32,7 @@ public class SysRoleService {
     private final SysRoleRepository roleRepository;
     private final SysPermissionRepository permissionRepository;
     private final SysUserAssignmentRepository assignmentRepository;
+    private final SysDeptRepository deptRepository;
 
     @Transactional(readOnly = true)
     public PageResult<RoleResponse> page(int pageNum, int pageSize) {
@@ -50,6 +53,7 @@ public class SysRoleService {
         role.setName(request.name());
         role.setDataScope(request.dataScope());
         role.setEnabled(request.enabled() == null || request.enabled());
+        applyCustomDepts(role, request);
         roleRepository.save(role);
         return RoleResponse.of(role, 0);
     }
@@ -67,8 +71,32 @@ public class SysRoleService {
         if (request.enabled() != null) {
             role.setEnabled(request.enabled());
         }
+        applyCustomDepts(role, request);
         roleRepository.save(role);
         return RoleResponse.of(role, assignmentRepository.countByRoleId(id));
+    }
+
+    /**
+     * 落地自定义数据范围可见部门（sys_role_dept）：
+     * <ul>
+     *   <li>dataScope=CUSTOM：customDeptIds 必填非空（否则该角色什么都看不到，属配置错误），
+     *       且部门必须存在，写入自定义部门集；</li>
+     *   <li>其它数据范围：清空自定义部门集，避免残留脏数据（切回 CUSTOM 时不会误用旧集合）。</li>
+     * </ul>
+     */
+    private void applyCustomDepts(SysRole role, RoleRequest request) {
+        if (!SysRole.SCOPE_CUSTOM.equals(request.dataScope())) {
+            role.setCustomDeptIds(new HashSet<>());
+            return;
+        }
+        Set<Long> deptIds = request.customDeptIds();
+        if (deptIds == null || deptIds.isEmpty()) {
+            throw new BusinessException(400, "数据范围为自定义时，请选择自定义可见部门");
+        }
+        if (deptRepository.findAllById(deptIds).size() != deptIds.size()) {
+            throw new BusinessException(400, "存在无效的部门");
+        }
+        role.setCustomDeptIds(new HashSet<>(deptIds));
     }
 
     @Transactional

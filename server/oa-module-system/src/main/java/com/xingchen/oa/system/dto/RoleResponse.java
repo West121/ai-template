@@ -2,6 +2,8 @@ package com.xingchen.oa.system.dto;
 
 import com.xingchen.oa.system.entity.SysRole;
 
+import java.util.List;
+
 public record RoleResponse(
         Long id,
         String code,
@@ -9,7 +11,8 @@ public record RoleResponse(
         String dataScope,
         Boolean enabled,
         long userCount,
-        String remark
+        String remark,
+        List<Long> customDeptIds
 ) {
     public static RoleResponse of(SysRole role, long userCount) {
         return new RoleResponse(
@@ -19,7 +22,9 @@ public record RoleResponse(
                 role.getDataScope(),
                 role.getEnabled(),
                 userCount,
-                null
+                null,
+                role.getCustomDeptIds() == null ? List.of()
+                        : role.getCustomDeptIds().stream().sorted().toList()
         );
     }
 }
