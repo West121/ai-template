@@ -118,8 +118,9 @@ public class ChangeTools {
     @AiToolDefinition(name = "task_prepare_approve", aliases = {"approve_task"},
             authorities = {"office:approval:approve"}, risk = AiToolRisk.CONFIRM_REQUIRED, timeoutSeconds = 30,
             description = "办理一个待办审批任务（同意/驳回）。产出确认卡（内嵌 AI 摘要/风险 + 后续流转预测），用户确认后才真正办理。"
+                    + "【重要】调用前必须先用 task_query_my_tasks 查到真实 taskId，禁止编造或用 0 等占位 id。"
                     + "参数 taskId、decision(APPROVE|REJECT)、comment 可选。",
-            paramsSchema = "{\"taskId\":{\"type\":\"string\",\"description\":\"待办任务 id（可先用 query_todo 获取）\"},"
+            paramsSchema = "{\"taskId\":{\"type\":\"string\",\"description\":\"真实待办任务 id，必须先经 task_query_my_tasks 获取，不可编造\"},"
                     + "\"decision\":{\"type\":\"string\",\"description\":\"APPROVE 同意 / REJECT 驳回\"},"
                     + "\"comment\":{\"type\":\"string\",\"description\":\"办理意见，可选\"}}",
             required = {"taskId", "decision"})

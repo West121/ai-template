@@ -13,8 +13,28 @@ public final class P3Requests {
     private P3Requests() {
     }
 
-    /** 唤醒：已结束实例按快照重建新实例并定位到 nodeId 重审。 */
-    public record ResurrectRequest(@NotBlank String nodeId, String comment) {
+    /**
+     * 唤醒：已结束实例按快照重建新实例并定位到 nodeId 重审。
+     *
+     * <p>{@code assignees} 可选（复用 2D 选人模型 {@link OrgRef}，与加签/转办同源）：
+     * 传了则覆盖 nodeId 的办理人为所选；不传（null/空）则维持节点规则解析（向后兼容）。
+     */
+    public record ResurrectRequest(@NotBlank String nodeId, String comment, List<OrgRef> assignees) {
+    }
+
+    /**
+     * 唤醒选人预览：前端选节点后拉取，默认回填该节点办理人。
+     *
+     * @param nodeName         节点名
+     * @param historyAssignees 原（已结束）实例该 nodeId 最后一次办理人（act_hi_taskinst，多人取全部）
+     * @param ruleAssignees    节点规则默认解析结果（兜底，与不传 assignees 时一致）
+     */
+    public record ResurrectPreview(String nodeName,
+                                   List<AssigneeRef> historyAssignees,
+                                   List<AssigneeRef> ruleAssignees) {
+
+        public record AssigneeRef(Long id, String name) {
+        }
     }
 
     /** 电子章创建/更新。 */

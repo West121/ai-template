@@ -14,6 +14,7 @@ import com.xingchen.oa.workflow.dto.P2Requests.JumpRequest;
 import com.xingchen.oa.workflow.dto.P2Requests.SubmitDraftRequest;
 import com.xingchen.oa.workflow.dto.P3Requests.AdhocTaskRequest;
 import com.xingchen.oa.workflow.dto.P3Requests.PredictResponse;
+import com.xingchen.oa.workflow.dto.P3Requests.ResurrectPreview;
 import com.xingchen.oa.workflow.dto.P3Requests.ResurrectRequest;
 import com.xingchen.oa.workflow.dto.ResubmitRequest;
 import com.xingchen.oa.workflow.dto.StartInstanceRequest;
@@ -142,6 +143,13 @@ public class InstanceController {
     @PreAuthorize("hasAuthority('wf:instance:admin')")
     public R<InstanceDetailResponse> resurrect(@PathVariable Long id, @Valid @RequestBody ResurrectRequest req) {
         return R.ok(service.resurrect(id, req));
+    }
+
+    /** 唤醒选人预览：选节点后拉取，默认回填该节点办理人（历史办理人 + 规则解析兜底）。 */
+    @GetMapping("/instances/{id}/resurrect-preview")
+    @PreAuthorize("hasAuthority('wf:instance:admin')")
+    public R<ResurrectPreview> resurrectPreview(@PathVariable Long id, @RequestParam String nodeId) {
+        return R.ok(service.resurrectPreview(id, nodeId));
     }
 
     /** 动态构建 ad-hoc 任务（不体现在流程图，服务层管理完成条件）。 */

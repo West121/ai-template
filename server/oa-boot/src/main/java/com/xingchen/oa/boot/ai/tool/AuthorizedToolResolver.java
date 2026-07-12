@@ -81,6 +81,12 @@ public class AuthorizedToolResolver {
                 break;
             }
         }
+        // 可用性排查（亮点⑧）：打印本次暴露给模型的工具清单，确认 prepare 类工具确实在列（未被权限/上限过滤）。
+        if (log.isDebugEnabled()) {
+            log.debug("AI 工具暴露给模型 {} 个（user={}）：{}", out.size(),
+                    user != null ? user.getUsername() : "?",
+                    out.stream().map(t -> t.getToolDefinition().name()).collect(Collectors.joining(", ")));
+        }
         return out;
     }
 

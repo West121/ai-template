@@ -25,7 +25,9 @@ public class NavTools {
     private final AiFeatureService featureService;
 
     @AiToolDefinition(name = "feature_get_user_capabilities", aliases = {"list_functions"},
-            description = "列出当前用户可见的系统功能菜单及说明，用于介绍系统能力或推荐入口。无参数。")
+            description = "列出当前用户可见的系统功能菜单及说明，仅用于回答『系统有哪些功能/我能用什么』这类介绍与推荐入口。"
+                    + "不要用于『生成/创建模板、表单、自动化』的请求——那类请求请改用 bizdoc_prepare_template / "
+                    + "form_prepare_schema / orchestration_prepare_flow 产出草稿。无参数。")
     public ToolResult listFunctions(Map<String, Object> args) {
         List<AiFeatureCatalog> items = featureService.visibleFor(support.currentUser());
         List<Map<String, Object>> forLlm = new ArrayList<>();
@@ -45,7 +47,9 @@ public class NavTools {
     }
 
     @AiToolDefinition(name = "navigation_open", aliases = {"open_function"},
-            description = "按名称或用户意图匹配一个功能菜单并给出打开入口。参数 query=功能名或意图关键词。",
+            description = "打开一个『已存在』的功能菜单页（如请假、发文、我的待办）。仅当用户想进入/跳转某个现成功能页时用。"
+                    + "不要用于『生成/创建模板、表单、自动化草稿』——那类请求请改用对应的 *_prepare_* 工具产草稿。"
+                    + "参数 query=功能名或意图关键词。",
             paramsSchema = "{\"query\":{\"type\":\"string\",\"description\":\"功能名或意图，如 请假、发文、我的待办\"}}",
             required = {"query"})
     public ToolResult openFunction(Map<String, Object> args) {

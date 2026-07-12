@@ -104,9 +104,11 @@ public class DraftDesignTools {
 
     @AiToolDefinition(name = "bizdoc_prepare_template",
             authorities = {"bizdoc:def:write"}, risk = AiToolRisk.EXPLICIT_UI_SUBMIT, timeoutSeconds = 30,
-            description = "根据自然语言生成一个单据打印模板草稿（标题+信息块+审批区等），产草稿卡，"
-                    + "用户确认后建为草稿模板（不发布），再进模板设计器编辑。参数 desc=模板描述，"
-                    + "bindType=FLOW(绑流程 defCode)|FORM(绑表单 code)，bindCode=对应编码，name 可选。",
+            description = "【生成打印模板草稿】当用户要求『生成/创建/做一个/帮我出一份』单据或流程的打印模板、套打模板、"
+                    + "打印格式时，必须调用本工具产出可编辑的模板草稿卡——这是唯一能产出模板草稿的工具。"
+                    + "不要用 navigation_open 或 feature_get_user_capabilities 代替（那些只打开/介绍已有功能页，不产草稿）。"
+                    + "生成标题+信息块+审批区等，用户确认后建为草稿模板（不发布），再进模板设计器编辑。"
+                    + "参数 desc=模板描述，bindType=FLOW(绑流程 defCode)|FORM(绑表单 code)，bindCode=对应编码，name 可选。",
             paramsSchema = "{\"desc\":{\"type\":\"string\",\"description\":\"模板描述，如『车辆申请单打印模板，含申请信息表和审批区』\"},"
                     + "\"bindType\":{\"type\":\"string\",\"description\":\"FLOW 或 FORM\"},"
                     + "\"bindCode\":{\"type\":\"string\",\"description\":\"绑定的流程 defCode 或表单 code\"},"
@@ -201,7 +203,9 @@ public class DraftDesignTools {
 
     @AiToolDefinition(name = "form_prepare_schema",
             authorities = {"wf:def:edit"}, risk = AiToolRisk.EXPLICIT_UI_SUBMIT, timeoutSeconds = 30,
-            description = "根据自然语言生成一个在线表单草稿（字段控件），产草稿卡，用户确认后建为草稿表单定义"
+            description = "【生成表单草稿】当用户要求『生成/创建/做一个/帮我设计一份』表单（字段/控件）时，必须调用本工具"
+                    + "产出可编辑的表单草稿卡——这是唯一能产出表单草稿的工具。不要用 navigation_open 或 "
+                    + "feature_get_user_capabilities 代替（那些只打开/介绍已有功能页，不产草稿）。用户确认后建为草稿表单定义"
                     + "（不发布），再进表单设计器编辑。参数 desc=表单描述，name 可选。",
             paramsSchema = "{\"desc\":{\"type\":\"string\",\"description\":\"表单描述，如『报销单：报销人、金额、事由、附件』\"},"
                     + "\"name\":{\"type\":\"string\",\"description\":\"表单名称，可选\"}}",

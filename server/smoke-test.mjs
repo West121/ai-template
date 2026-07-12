@@ -1388,6 +1388,52 @@ const P_PREDICT = await mkProc(`p3predict_${TS}`, [
   check("p3 唤醒后重审走通→APPROVED", (await bizStatus(zhangsan.token, inst.id)) === "APPROVED")
 }
 
+// --- 唤醒重新选人/选角色：resurrect-preview 默认回填 + override 换人/换角色（复用 2D 选人模型） ---
+{
+  const P_RES2 = await mkProc(`p3res2_${TS}`, [approvalNode("rap", "唤醒改派审批", LISI)])
+  const t2 = `唤醒改派-${TS}`
+  const inst2 = await startInst(P_RES2, t2)
+  const lt = await findTodo(lisi.token, t2)
+  if (lt) await call(lisi.token, "POST", `/api/wf/tasks/${lt.taskId}/approve`, {})
+  check("p3 唤醒改派前实例已结束APPROVED", (await bizStatus(zhangsan.token, inst2.id)) === "APPROVED")
+
+  // resurrect-preview：默认回填=原办理人（历史 LISI）+ 规则解析兜底（LISI）+ 节点名
+  const pv = await call(admin.token, "GET", `/api/wf/instances/${inst2.id}/resurrect-preview?nodeId=rap`)
+  check("p3 resurrect-preview 默认回填=原办理人(历史LISI)+规则兜底+节点名",
+    pv.body?.code === 0 && pv.body.data?.nodeName === "唤醒改派审批" &&
+      (pv.body.data?.historyAssignees ?? []).some((a) => a.id === LISI) &&
+      (pv.body.data?.ruleAssignees ?? []).some((a) => a.id === LISI),
+    JSON.stringify(pv.body?.data))
+  const pvDeny = await call(zhangsan.token, "GET", `/api/wf/instances/${inst2.id}/resurrect-preview?nodeId=rap`)
+  check("p3 resurrect-preview 越权→403", pvDeny.status === 403)
+
+  // override 换人：唤醒带 assignees=[USER:MANAGER] → 新任务落 MANAGER，覆盖规则的 LISI
+  const rs2 = await call(admin.token, "POST", `/api/wf/instances/${inst2.id}/resurrect`, { nodeId: "rap", comment: "改派经理", assignees: [{ kind: "USER", id: MANAGER }] })
+  check("p3 唤醒override→RUNNING", rs2.body?.code === 0 && rs2.body.data?.bizStatus === "RUNNING", JSON.stringify(rs2.body))
+  const mtOv = await findTodo(manager.token, t2)
+  const ltOv = await findTodo(lisi.token, t2)
+  check("p3 唤醒override 换人生效(新任务=所选MANAGER,非规则LISI)", !!mtOv && !ltOv, JSON.stringify({ m: !!mtOv, l: !!ltOv }))
+  if (mtOv) await call(manager.token, "POST", `/api/wf/tasks/${mtOv.taskId}/approve`, {})
+  check("p3 唤醒override 重审走通→APPROVED", (await bizStatus(zhangsan.token, inst2.id)) === "APPROVED")
+
+  // override 换角色：唤醒带 assignees=[ROLE:2 部门经理] → 解析为经理，新任务落 MANAGER
+  const rs3 = await call(admin.token, "POST", `/api/wf/instances/${inst2.id}/resurrect`, { nodeId: "rap", comment: "改派角色", assignees: [{ kind: "ROLE", id: 2 }] })
+  check("p3 唤醒override 角色→RUNNING", rs3.body?.code === 0 && rs3.body.data?.bizStatus === "RUNNING", JSON.stringify(rs3.body))
+  const mtRole = await findTodo(manager.token, t2)
+  check("p3 唤醒override 换角色解析(ROLE:2 部门经理→MANAGER 待办)", !!mtRole, JSON.stringify(mtRole))
+  if (mtRole) await call(manager.token, "POST", `/api/wf/tasks/${mtRole.taskId}/approve`, {})
+
+  // 向后兼容：不传 assignees → 维持规则解析（新任务=规则 LISI）
+  const rs4 = await call(admin.token, "POST", `/api/wf/instances/${inst2.id}/resurrect`, { nodeId: "rap", comment: "维持规则" })
+  check("p3 唤醒不传assignees→维持规则解析(新任务=规则LISI)", rs4.body?.code === 0 && !!(await findTodo(lisi.token, t2)), JSON.stringify(rs4.body?.code))
+  const ltBack = await findTodo(lisi.token, t2)
+  if (ltBack) await call(lisi.token, "POST", `/api/wf/tasks/${ltBack.taskId}/approve`, {})
+
+  // 越权：普通用户唤醒→403（现有拦截不回归）
+  const rsDeny = await call(zhangsan.token, "POST", `/api/wf/instances/${inst2.id}/resurrect`, { nodeId: "rap" })
+  check("p3 唤醒越权→403(仍拦)", rsDeny.status === 403)
+}
+
 // --- 印章管理 CRUD ---
 {
   const cr = await call(admin.token, "POST", "/api/wf/seals", { name: `公章-${TS}`, imageFileId: null, enabled: true })
@@ -2523,7 +2569,7 @@ async function hlCompleted(token, iid) {
           let tool = null
           // 批E ⑦⑧⑨：对话固化自动化 / 生成模板/表单草稿 / 待办摘要
           if (lastUser.includes("自动化")) tool = { name: "orchestration_prepare_flow", arguments: JSON.stringify({ desc: lastUser.includes("非法") ? "非法定时自动化" : "每天早8点汇总昨日审批量并通知管理员", name: "每日审批汇总" }) }
-          else if (lastUser.includes("单据模板")) tool = { name: "bizdoc_prepare_template", arguments: JSON.stringify({ desc: lastUser.includes("非法") ? "非法块模板" : "车辆申请单打印模板", bindType: "FLOW", bindCode: "leave_approval", name: "车辆申请单" }) }
+          else if (lastUser.includes("单据模板") || lastUser.includes("打印模板")) tool = { name: "bizdoc_prepare_template", arguments: JSON.stringify({ desc: lastUser.includes("非法") ? "非法块模板" : "车辆申请单打印模板", bindType: "FLOW", bindCode: "leave_approval", name: "车辆申请单" }) }
           else if (lastUser.includes("表单")) tool = { name: "form_prepare_schema", arguments: JSON.stringify({ desc: "报销单表单：报销人金额事由", name: "报销单" }) }
           else if (lastUser.includes("摘要")) tool = { name: "task_get_detail", arguments: JSON.stringify({ taskId: (lastUser.match(/任务(\S+)/)?.[1] ?? "x") }) }
           else if (lastUser.includes("伪造")) tool = { name: "hack_everything", arguments: "{}" }
@@ -3751,6 +3797,22 @@ async function hlCompleted(token, iid) {
     JSON.stringify(formCreate.body?.data))
   const eFormStatus = psql(`SELECT status FROM wf_form_def WHERE id = ${Number(formCreate.body?.data?.formId)}`)
   check("aiV2E ⑧ DB 表单 status=DRAFT(未发布)", eFormStatus.trim() === "DRAFT", eFormStatus)
+
+  // ⑧ 触发边界（可用性）：真实用户话术『用AI生成…打印模板/表单草稿』必须走 prepare 工具产草稿，不被导航/介绍工具抢占
+  const purTplChat = await call(admin.token, "POST", "/api/ai/chat", { message: "用AI生成一份采购申请的打印模板草稿", credentialId: eCredId })
+  const purTplCards = purTplChat.body?.data?.messages?.[0]?.cards ?? []
+  const purTplDraft = purTplCards.find((c) => c.type === "templateDraft")
+  const purTplNav = purTplCards.find((c) => c.type === "navigate" || c.type === "link")
+  check("aiV2E ⑧ 『生成采购打印模板草稿』→触发 bizdoc_prepare_template 出 templateDraft(非导航)",
+    !!purTplDraft?.draftId && Array.isArray(purTplDraft.blocks) && purTplDraft.blocks.length >= 1 && !purTplNav,
+    JSON.stringify({ tpl: !!purTplDraft, nav: !!purTplNav }))
+  const purFormChat = await call(admin.token, "POST", "/api/ai/chat", { message: "用AI生成一份采购报销表单草稿", credentialId: eCredId })
+  const purFormCards = purFormChat.body?.data?.messages?.[0]?.cards ?? []
+  const purFormDraft = purFormCards.find((c) => c.type === "formDraft")
+  const purFormNav = purFormCards.find((c) => c.type === "navigate" || c.type === "link")
+  check("aiV2E ⑧ 『生成采购表单草稿』→触发 form_prepare_schema 出 formDraft(非导航)",
+    !!purFormDraft?.draftId && Array.isArray(purFormDraft.fields) && purFormDraft.fields.length >= 1 && !purFormNav,
+    JSON.stringify({ form: !!purFormDraft, nav: !!purFormNav }))
 
   // ⑨⑩ 前置：造 days=5 请假实例（经理待办 → 预测有下游总经理审批）
   const eApTitle = `AI冒烟E审批-${TS}`

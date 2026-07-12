@@ -21,6 +21,8 @@ import com.xingchen.oa.workflow.dto.P2Requests.JumpRequest;
 import com.xingchen.oa.workflow.dto.P3Requests.PredictResponse;
 import com.xingchen.oa.workflow.dto.P3Requests.PredictResponse.AssigneeName;
 import com.xingchen.oa.workflow.dto.P3Requests.PredictResponse.PredictNode;
+import com.xingchen.oa.workflow.dto.P3Requests.ResurrectPreview;
+import com.xingchen.oa.workflow.dto.P3Requests.ResurrectPreview.AssigneeRef;
 import com.xingchen.oa.workflow.dto.P3Requests.ResurrectRequest;
 import com.xingchen.oa.workflow.engine.AssigneeResolver;
 import com.xingchen.oa.workflow.convert.ConditionEvaluator;
@@ -1020,6 +1022,14 @@ public class InstanceService {
         if (!StringUtils.hasText(req.nodeId())) {
             throw new BusinessException(400, "唤醒需指定 nodeId");
         }
+        // 重新选人/选角色（可选）：先解析校验（无效人员即 400），再启引擎——失败不残留新实例。
+        List<Long> overrideUsers = List.of();
+        if (req.assignees() != null && !req.assignees().isEmpty()) {
+            overrideUsers = assigneeResolver.resolveRefsStrict(objectMapper.valueToTree(req.assignees()));
+            if (overrideUsers.isEmpty()) {
+                throw new BusinessException(400, "唤醒指定的办理人解析为空");
+            }
+        }
         Map<String, Object> data = parseMap(inst.getFormDataJson());
         Map<String, Object> vars = new LinkedHashMap<>();
         vars.put("initiatorId", inst.getInitiatorId());
@@ -1043,6 +1053,11 @@ public class InstanceService {
             throw new BusinessException(400, "唤醒定位到节点失败：" + e.getMessage());
         }
 
+        // 传了 assignees → 覆盖 nodeId 新任务办理人（复用转办/指派 setAssignee 落地路径）；不传 → 维持规则解析（向后兼容）。
+        if (!overrideUsers.isEmpty()) {
+            overrideAssignees(newPid, req.nodeId(), overrideUsers, ctx);
+        }
+
         String old = inst.getProcInstId();
         inst.setResurrectFrom(old);
         inst.setProcInstId(newPid);
@@ -1055,6 +1070,127 @@ public class InstanceService {
                     "您的流程「" + inst.getTitle() + "」已被唤醒并定位到节点重新审批", newPid);
         }
         return buildDetail(inst);
+    }
+
+    /**
+     * 唤醒 override：把 nodeId 上刚重建的活动任务办理人覆盖为所选用户（复用转办/指派 setAssignee 路径）。
+     * 多任务（并审）× 多选人时按 task i → users[i % n] 分派；单任务取首个。留痕 operation，并通知新办理人。
+     */
+    private void overrideAssignees(String pid, String nodeId, List<Long> users, UserContext ctx) {
+        List<Task> nodeTasks = taskService.createTaskQuery()
+                .processInstanceId(pid).taskDefinitionKey(nodeId).active().list();
+        if (nodeTasks.isEmpty()) {
+            // 节点未生成等待任务（如自动通过），无可覆盖对象——不报错，仅记录规则解析已生效
+            return;
+        }
+        for (int i = 0; i < nodeTasks.size(); i++) {
+            Task t = nodeTasks.get(i);
+            Long uid = users.get(i % users.size());
+            taskService.setAssignee(t.getId(), String.valueOf(uid));
+        }
+        String names = users.stream().map(nameResolver::name)
+                .filter(Objects::nonNull).collect(java.util.stream.Collectors.joining("、"));
+        operation(pid, nodeTasks.get(0).getId(), nodeId, nodeTasks.get(0).getName(), ctx,
+                WfOperation.ACTION_TRANSFER, "唤醒重新指派办理人：" + names);
+        for (Long uid : users) {
+            audit.notify(uid, WfNotify.TYPE_TODO, "唤醒待办：" + nodeTasks.get(0).getName(),
+                    "流程被唤醒重审，节点「" + nodeTasks.get(0).getName() + "」已指派给您处理", pid);
+        }
+    }
+
+    /**
+     * 唤醒选人预览：返回节点名 + 原实例该节点最后一次办理人（默认回填）+ 节点规则默认解析（兜底）。
+     * 权限同唤醒（wf:instance:admin）。
+     */
+    @Transactional(readOnly = true)
+    public ResurrectPreview resurrectPreview(Long id, String nodeId) {
+        requireInstanceAdmin();
+        if (!StringUtils.hasText(nodeId)) {
+            throw new BusinessException(400, "请指定 nodeId");
+        }
+        WfInstanceExt inst = instanceRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(404, "实例不存在"));
+        WfProcessExt def = processRepository.findByDefCode(inst.getDefCode()).orElse(null);
+
+        // 历史办理人：原（已结束）实例 procInstId 该 nodeId 最后一轮任务办理人（act_hi_taskinst，多人取全部）
+        List<AssigneeRef> history = historyAssignees(inst.getProcInstId(), nodeId);
+
+        // 节点名 + 规则默认解析（DINGTALK 图；BPMN 专业模式无静态图则留空）
+        String nodeName = null;
+        List<AssigneeRef> rule = new ArrayList<>();
+        if (def != null && WfProcessExt.TYPE_DINGTALK.equals(def.getDesignerType())
+                && StringUtils.hasText(def.getDesignerJson())) {
+            try {
+                JsonNode node = findGraphNode(objectMapper.readTree(def.getDesignerJson()).path("nodes"), nodeId);
+                if (node != null) {
+                    nodeName = node.path("name").asString(null);
+                    Map<String, Object> values = new LinkedHashMap<>(parseMap(inst.getFormDataJson()));
+                    for (Long uid : assigneeResolver.resolveOffline(node.path("assigneeRules"),
+                            inst.getInitiatorId(), inst.getInitiatorDeptId(), values)) {
+                        rule.add(new AssigneeRef(uid, nameResolver.name(uid)));
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("唤醒预览规则解析失败 id={} nodeId={}: {}", id, nodeId, e.getMessage());
+            }
+        }
+        return new ResurrectPreview(nodeName, history, rule);
+    }
+
+    /** 原实例 nodeId 最后一轮（最晚进入时间起）历史任务的办理人，去重保序。 */
+    private List<AssigneeRef> historyAssignees(String procInstId, String nodeId) {
+        List<AssigneeRef> out = new ArrayList<>();
+        if (!StringUtils.hasText(procInstId)) {
+            return out;
+        }
+        List<HistoricTaskInstance> hist = historyService.createHistoricTaskInstanceQuery()
+                .processInstanceId(procInstId).taskDefinitionKey(nodeId)
+                .orderByHistoricTaskInstanceEndTime().desc().list();
+        if (hist.isEmpty()) {
+            return out;
+        }
+        // 最后一轮：以最晚一条任务的进入(start)时间为界，纳入同轮（含并审并行任务），排除更早的驳回轮
+        java.util.Date lastStart = hist.stream().map(HistoricTaskInstance::getStartTime)
+                .filter(Objects::nonNull).max(java.util.Date::compareTo).orElse(null);
+        Set<Long> seen = new LinkedHashSet<>();
+        for (HistoricTaskInstance h : hist) {
+            if (!StringUtils.hasText(h.getAssignee())) {
+                continue;
+            }
+            if (lastStart != null && h.getStartTime() != null && h.getStartTime().before(lastStart)) {
+                continue; // 更早驳回轮的办理人不回填
+            }
+            try {
+                Long uid = Long.parseLong(h.getAssignee().trim());
+                if (seen.add(uid)) {
+                    out.add(new AssigneeRef(uid, nameResolver.name(uid)));
+                }
+            } catch (NumberFormatException ignored) {
+                // 非数字 assignee（占位/表达式）跳过
+            }
+        }
+        return out;
+    }
+
+    /** 在 DINGTALK 图 nodes（含条件分支 steps）中递归查找指定 id 的节点。 */
+    private JsonNode findGraphNode(JsonNode nodes, String nodeId) {
+        if (nodes == null || !nodes.isArray()) {
+            return null;
+        }
+        for (JsonNode node : nodes) {
+            if (nodeId.equals(node.path("id").asString(null))) {
+                return node;
+            }
+            if ("condition".equals(node.path("type").asString(""))) {
+                for (JsonNode branch : node.path("branches")) {
+                    JsonNode hit = findGraphNode(branch.path("steps"), nodeId);
+                    if (hit != null) {
+                        return hit;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     /* ---------------- 抄送 ---------------- */

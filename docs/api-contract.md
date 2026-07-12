@@ -341,7 +341,8 @@ NotifyItem = {id,type,title,content,procInstId,readFlag,createdAt}
 ### P3 高级能力（前缀 /api/wf）
 运行时端点：
 - POST `/api/wf/instances/{id}/predict` → `{path:[{nodeId,nodeName,type,assignees:[{name}]}], note?}` 流程预测：按当前表单值/流程变量静态 DFS 走 designerJson，条件分支离线求值（结构化条件，白名单操作符），输出后续未完成节点 + 预计审批人（离线试算 ORG/LEADER/FORM_FIELD/INITIATOR），不落库；BPMN 专业模式返回空 path + note
-- POST `/api/wf/instances/{id}/resurrect` {nodeId,comment?}【P:wf:instance:admin】（B-11：唤醒为治理操作，复用流程管理员权限，非管理员 403）→ InstanceDetail 唤醒：仅已结束实例(APPROVED/REJECTED/TERMINATED/CANCELED)按快照(form_data)重建新实例并 ChangeActivityState 定位到 nodeId 重审，复用同一 ext 行(proc_inst_id 更新)，ext.resurrect_from 记原实例，通知发起人
+- POST `/api/wf/instances/{id}/resurrect` {nodeId,comment?,assignees?:[OrgRef]}【P:wf:instance:admin】（B-11：唤醒为治理操作，复用流程管理员权限，非管理员 403）→ InstanceDetail 唤醒：仅已结束实例(APPROVED/REJECTED/TERMINATED/CANCELED)按快照(form_data)重建新实例并 ChangeActivityState 定位到 nodeId 重审，复用同一 ext 行(proc_inst_id 更新)，ext.resurrect_from 记原实例，通知发起人。**assignees 可选**（2D 选人 OrgRef[{kind:USER|DEPT|ROLE,id}]，与加签/转办同源）：传了则覆盖 nodeId 新任务办理人（复用 setAssignee 落地，留痕 TRANSFER 操作+通知）；不传维持节点规则解析（向后兼容）
+- GET `/api/wf/instances/{id}/resurrect-preview?nodeId=`【P:wf:instance:admin】→ `{nodeName, historyAssignees:[{id,name}], ruleAssignees:[{id,name}]}` 唤醒选人预览：historyAssignees=原(已结束)实例该 nodeId 最后一轮办理人(act_hi_taskinst，多人取全部，前端默认回填)；ruleAssignees=节点规则默认解析(兜底，DINGTALK 图；BPMN 专业模式为空)
 - POST `/api/wf/instances`（增强）可选 `bizTime`(ISO 日期 yyyy-MM-dd 或带时区日期时间) → 穿越时空：ext.biz_time + 首个 SUBMIT 操作 biz_time 记录；详情 bizTime 按服务器本地时区展示，引擎真实时间不动
 - POST `/api/wf/instances/{id}/adhoc-task` {name,assignees:[OrgRef]} → 动态构建 ad-hoc 任务（taskService.newTask，不体现在流程图、不参与主流程完成条件，服务层管理；办理走 tasks/{id}/complete-adhoc）
 
