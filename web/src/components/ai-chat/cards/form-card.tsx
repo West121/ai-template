@@ -3,9 +3,9 @@
  * /api/wf/instances，不经 LLM）；CODE 表单（submitPath）给跳转 CTA。
  * 提交成功替换为「已发起」结果条 + 实例链接（§10 返回 instId）。.ai-form 两列压一列。
  */
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { ArrowRight, CheckCircle2, ExternalLink, FileText } from "lucide-react"
+import { ArrowRight, CheckCircle2, ExternalLink, FileText, XCircle } from "lucide-react"
 import { toast } from "sonner"
 import { api, NetworkError } from "@/lib/api"
 import { FormRenderer } from "@/components/form-renderer"
@@ -32,12 +32,21 @@ function normalizeSchema(raw: unknown): AiFormCard["schema"] {
   return Array.isArray(v) ? (v as AiFormCard["schema"]) : []
 }
 
+/** 预填归一（防白屏）：仅接受对象 {fieldKey: value}，其它形状 → undefined（不预填，不崩） */
+function normalizePrefill(raw: unknown): Record<string, unknown> | undefined {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>
+  return undefined
+}
+
 export function FormCard({ card }: { card: AiFormCard }) {
   const navigate = useNavigate()
   const [submitting, setSubmitting] = useState(false)
   const [instId, setInstId] = useState<number | null>(null)
   const [submitted, setSubmitted] = useState(false)
+  const [cancelled, setCancelled] = useState(false)
   const schema = normalizeSchema(card.schema)
+  // 预填：后端从话语提取的 knownValues（如"请10天年假"→{leaveType:"年假",days:10}），用户只补余下字段
+  const prefill = useMemo(() => normalizePrefill(card.prefill), [card.prefill])
 
   // B：CODE 表单（无 schema，跳发起页）
   if (!schema || schema.length === 0) {
@@ -106,9 +115,25 @@ export function FormCard({ card }: { card: AiFormCard }) {
             </Button>
           )}
         </div>
+      ) : cancelled ? (
+        // 取消：本地收起表单，不提交不起流程（用户可重新发起对话）
+        <div aria-live="polite" className="flex items-center gap-1.5 px-3.5 py-4 text-sm text-muted-foreground">
+          <XCircle className="size-4 shrink-0" /> 已取消填写
+        </div>
       ) : (
         <div className="ai-form px-3.5 py-3">
-          <FormRenderer widgets={schema} submitLabel="提交并发起" submitting={submitting} onSubmit={handleSubmit} />
+          <FormRenderer
+            widgets={schema}
+            initialValues={prefill}
+            submitLabel="提交并发起"
+            cancelLabel="取消"
+            submitting={submitting}
+            onSubmit={handleSubmit}
+            onCancel={() => {
+              setCancelled(true)
+              toast.message("已取消填写")
+            }}
+          />
         </div>
       )}
     </div>

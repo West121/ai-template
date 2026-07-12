@@ -58,6 +58,11 @@ export interface AiFormCard {
   schema?: FormWidget[]
   /** CODE 表单发起页路由（无 schema 时跳转按钮，§10） */
   submitPath?: string
+  /**
+   * 预填值 {fieldKey: value}（后端从用户话语提取 knownValues→prefill，如"请10天年假"→
+   * {leaveType:"年假", days:10}）；透传给 FormRenderer initialValues，用户只需补余下字段。
+   */
+  prefill?: Record<string, unknown>
 }
 
 export interface AiListRow {

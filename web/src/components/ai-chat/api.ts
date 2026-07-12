@@ -248,13 +248,27 @@ function mockReply(text: string, session: MockSession, opts?: ChatOpts): AiMessa
     })
     session.lastTopic = "stats"
   } else if (has("请假")) {
-    content = "好的，帮你调出**请假申请**表单，填写后我直接为你发起流程："
+    // 从话语提取 knownValues → prefill（磐石后端真实提取；此处 mock 演示：类型 + 天数）
+    const prefill: Record<string, unknown> = {}
+    const daysMatch = /(\d+(?:\.\d+)?)\s*(?:天|日)/.exec(text)
+    if (daysMatch) prefill.days = Number(daysMatch[1])
+    for (const lt of ["年假", "事假", "病假", "调休"]) {
+      if (text.includes(lt)) {
+        prefill.leaveType = lt
+        break
+      }
+    }
+    const hasPrefill = Object.keys(prefill).length > 0
+    content = hasPrefill
+      ? "好的，已按你说的**预填**请假申请（类型/天数），你补齐起止日期和事由即可发起："
+      : "好的，帮你调出**请假申请**表单，填写后我直接为你发起流程："
     cards.push({
       type: "form",
       defCode: "leave_flow",
       defName: "请假申请",
       formType: "ONLINE",
       schema: LEAVE_SCHEMA,
+      prefill: hasPrefill ? prefill : undefined,
     })
     session.lastTopic = null
   } else if (has("发文", "公文")) {

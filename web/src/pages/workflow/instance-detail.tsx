@@ -28,7 +28,6 @@ import { normalizeFormType } from "@/pages/workflow/designer/types"
 import type { FieldPolicyMap } from "@/lib/form-manifest"
 import "@/pages/workflow/forms" // 触发 CODE 表单登记（registerForm 副作用）
 import { Modal } from "@/components/modal"
-import { Drawer } from "@/components/drawer"
 import { RichTextViewer } from "@/components/rich-text"
 import { WfOpBar } from "@/components/wf-op-dialogs"
 import { InstancePrintButton } from "@/pages/bizdoc/instance-print"
@@ -277,8 +276,6 @@ export default function WorkflowInstanceDetailPage() {
   // 操作弹窗
   const [canceling, setCanceling] = useState(false)
   const [acting, setActing] = useState(false)
-  // 流程跟踪侧边栏
-  const [trackOpen, setTrackOpen] = useState(false)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -430,6 +427,8 @@ export default function WorkflowInstanceDetailPage() {
     .map((n) => n.nodeName ?? n.nodeId)
     .filter(Boolean)
     .join("、")
+  // 流程图是否可渲染（DINGTALK 需 designerJson，BPMN/GRAPH 需 bpmnXml）——决定「流程图」Tab 可用性
+  const hasFlow = detail.designerType === "DINGTALK" ? !!detail.designerJson : !!detail.bpmnXml
 
   /* ---------- 表单来源分流（设计文档 2.4）：CODE（registry 命中）→ HostedForm；ONLINE → FormRenderer ---------- */
   // 节点绑定的是本仓库手写 CODE 表单时，把 nodeFormPerms(tri-state) + 清单 required 合成 FieldPolicyMap 交 HostedForm。
@@ -584,16 +583,21 @@ export default function WorkflowInstanceDetailPage() {
           </CardContent>
         </Card>
 
-        {/* 表单下方：审批记录 / 评论 / 通知 + 流程跟踪按钮（弹侧边栏） */}
+        {/* 表单下方：流程图（内嵌 · 首屏可见）/ 审批记录 / 评论 / 通知 */}
         <Card className="gap-0 py-0">
           <Tabs defaultValue="timeline">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 pt-3">
+            <div className="flex flex-wrap items-center gap-2 border-b px-4 pt-3">
               <TabsList>
                 <TabsTrigger value="timeline" className="gap-1.5">
                   <History className="size-3.5" /> 审批记录
                   {detail.timeline?.length ? (
                     <span className="text-xs text-muted-foreground">({detail.timeline.length})</span>
                   ) : null}
+                </TabsTrigger>
+                {/* 流程图入口提升为一级 Tab（办理时一眼可见）：主色图标点睛，含回放/预测 */}
+                <TabsTrigger value="flow" className="gap-1.5" disabled={!hasFlow}>
+                  <GitBranch className="size-3.5 text-primary" /> 流程图
+                  <span className="hidden text-[10px] text-muted-foreground sm:inline">· 回放 / 预测</span>
                 </TabsTrigger>
                 <TabsTrigger value="comments" className="gap-1.5">
                   <MessagesSquare className="size-3.5" /> 评论
@@ -608,18 +612,31 @@ export default function WorkflowInstanceDetailPage() {
                   ) : null}
                 </TabsTrigger>
               </TabsList>
-              <Button
-                variant="outline"
-                size="sm"
-                className="mb-2 gap-1.5"
-                disabled={detail.designerType === "DINGTALK" ? !detail.designerJson : !detail.bpmnXml}
-                onClick={() => setTrackOpen(true)}
-              >
-                <GitBranch className="size-3.5" /> 流程跟踪
-              </Button>
             </div>
             <TabsContent value="timeline" className="m-0 px-5 py-4">
               <Timeline items={detail.timeline ?? []} />
+            </TabsContent>
+            {/* 内嵌流程图：BPMN→FlowTrack（含顶部回放/预测工具条 + 全屏 + 图例）；DINGTALK→只读钉钉跟踪图 */}
+            <TabsContent value="flow" className="m-0 p-4">
+              {detail.designerType === "DINGTALK" && detail.designerJson ? (
+                <div className="min-h-105">
+                  <DingtalkTrack designerJson={detail.designerJson} highlight={detail.highlight} />
+                </div>
+              ) : detail.bpmnXml ? (
+                <FlowTrack
+                  xml={detail.bpmnXml}
+                  highlight={detail.highlight}
+                  nodeInfo={nodeRuntimeInfo}
+                  replaySteps={replaySteps}
+                  instanceId={detail.id}
+                  predictable={detail.predictable}
+                />
+              ) : (
+                <div className="flex h-64 flex-col items-center justify-center gap-2 text-muted-foreground">
+                  <GitBranch className="size-8 opacity-30" />
+                  <span className="text-sm">暂无流程图</span>
+                </div>
+              )}
             </TabsContent>
             <TabsContent value="comments" className="m-0 px-5 py-4">
               <CommentThread items={detail.comments ?? []} />
@@ -634,28 +651,6 @@ export default function WorkflowInstanceDetailPage() {
           </Tabs>
         </Card>
       </div>
-
-      {/* 流程跟踪侧边栏（点「流程跟踪」按钮弹出，展示 BPMN 跟踪图 + 高亮） */}
-      <Drawer open={trackOpen} onOpenChange={setTrackOpen} title="流程跟踪" width={760}>
-        {detail.designerType === "DINGTALK" && detail.designerJson ? (
-          // 钉钉定义：渲染只读钉钉风格跟踪图（复用 dingtalk 画布布局，按 highlight 高亮节点 id）
-          <DingtalkTrack designerJson={detail.designerJson} highlight={detail.highlight} />
-        ) : detail.bpmnXml ? (
-          <FlowTrack
-            xml={detail.bpmnXml}
-            highlight={detail.highlight}
-            nodeInfo={nodeRuntimeInfo}
-            replaySteps={replaySteps}
-            instanceId={detail.id}
-            predictable={detail.predictable}
-          />
-        ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
-            <GitBranch className="size-8 opacity-30" />
-            <span className="text-sm">暂无流程图</span>
-          </div>
-        )}
-      </Drawer>
 
       {/* 撤销确认 */}
       <Modal

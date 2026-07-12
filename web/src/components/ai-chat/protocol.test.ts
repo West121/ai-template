@@ -201,6 +201,18 @@ describe("cards ↔ parts 适配（兼容读旧消息 / mock 升级）", () => {
     expect(partToCard(part({ partType: "navigate", payload: { featureCode: "HACKED_CODE", title: "x" } }))).toBeNull()
   })
 
+  it("form 卡 prefill 往返透传（预填 initialValues；修表单卡字段全空缺陷）", () => {
+    const p = cardToPart(
+      { type: "form", defCode: "leave_flow", defName: "请假申请", formType: "ONLINE", schema: [], prefill: { leaveType: "年假", days: 10 } },
+      2,
+    )
+    expect(p.partType).toBe("form")
+    expect(p.payload.prefill).toEqual({ leaveType: "年假", days: 10 })
+    const back = partToCard(p) as { type: string; prefill?: Record<string, unknown> }
+    expect(back.type).toBe("form")
+    expect(back.prefill).toEqual({ leaveType: "年假", days: 10 })
+  })
+
   it("cardsToParts：link 卡拆成多个 navigate part；sequenceNo 递增", () => {
     const parts = cardsToParts([
       { type: "link", items: [{ title: "A", path: "/a" }, { title: "B", path: "/b" }] },
