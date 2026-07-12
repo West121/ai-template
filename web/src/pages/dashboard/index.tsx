@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   ArrowRight,
+  ArrowUpRight,
   CalendarClock,
   Clock3,
   CloudOff,
@@ -193,7 +194,9 @@ export default function DashboardPage() {
       value: degraded ? mockStats.pendingCount : wfTodo.total,
       unit: "项",
       icon: FileCheck2,
-      color: "text-blue-600 bg-blue-500/10",
+      tint: "bg-blue-500/10 text-blue-600 ring-blue-500/20 dark:text-blue-400",
+      wash: "from-blue-500/[0.09] to-transparent",
+      ghost: "text-blue-500/[0.06]",
       path: "/workflow/tasks",
     },
     {
@@ -201,7 +204,9 @@ export default function DashboardPage() {
       value: degraded ? mockStats.todayMeetings : (data?.todayMeetings ?? 0),
       unit: "场",
       icon: Presentation,
-      color: "text-violet-600 bg-violet-500/10",
+      tint: "bg-violet-500/10 text-violet-600 ring-violet-500/20 dark:text-violet-400",
+      wash: "from-violet-500/[0.09] to-transparent",
+      ghost: "text-violet-500/[0.06]",
       path: "/meeting/my",
     },
     {
@@ -209,7 +214,9 @@ export default function DashboardPage() {
       value: degraded ? mockStats.monthAttendanceDays : (data?.monthAttendanceDays ?? 0),
       unit: "天",
       icon: CalendarClock,
-      color: "text-emerald-600 bg-emerald-500/10",
+      tint: "bg-emerald-500/10 text-emerald-600 ring-emerald-500/20 dark:text-emerald-400",
+      wash: "from-emerald-500/[0.09] to-transparent",
+      ghost: "text-emerald-500/[0.06]",
       path: "/attendance/record",
     },
     {
@@ -217,7 +224,9 @@ export default function DashboardPage() {
       value: degraded ? mockStats.unreadAnnouncements : (data?.unreadAnnouncements ?? 0),
       unit: "条",
       icon: Megaphone,
-      color: "text-orange-600 bg-orange-500/10",
+      tint: "bg-orange-500/10 text-orange-600 ring-orange-500/20 dark:text-orange-400",
+      wash: "from-orange-500/[0.09] to-transparent",
+      ghost: "text-orange-500/[0.06]",
       path: "/announcement",
     },
   ]
@@ -323,23 +332,30 @@ export default function DashboardPage() {
       </Card>
 
       {/* 统计卡片 */}
-      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         {stats.map((stat) => (
           <Card
             key={stat.label}
-            className="cursor-pointer py-4 transition-shadow hover:shadow-md"
             onClick={() => navigate(stat.path)}
+            className="group relative cursor-pointer overflow-hidden border-border/60 py-0 transition-all duration-200 hover:-translate-y-0.5 hover:border-transparent hover:shadow-lg"
           >
-            <CardContent className="flex items-center gap-3.5 px-4">
-              <div className={cn("flex size-11 shrink-0 items-center justify-center rounded-lg", stat.color)}>
-                <stat.icon className="size-5.5" />
+            {/* 主色渐变底纹，hover 加深 */}
+            <div className={cn("pointer-events-none absolute inset-0 bg-gradient-to-br opacity-70 transition-opacity duration-200 group-hover:opacity-100", stat.wash)} />
+            {/* 角落水印图标 */}
+            <stat.icon className={cn("pointer-events-none absolute -bottom-4 -right-3 size-24 rotate-12 transition-transform duration-300 group-hover:-rotate-3 group-hover:scale-110", stat.ghost)} />
+            <CardContent className="relative flex flex-col gap-3.5 p-4">
+              <div className="flex items-start justify-between">
+                <div className={cn("flex size-11 items-center justify-center rounded-xl ring-1 transition-transform duration-200 group-hover:scale-105", stat.tint)}>
+                  <stat.icon className="size-5.5" />
+                </div>
+                <ArrowUpRight className="size-4 -translate-x-1 text-muted-foreground/50 opacity-0 transition-all duration-200 group-hover:translate-x-0 group-hover:opacity-100" />
               </div>
               <div>
-                <div className="text-2xl font-semibold leading-tight">
-                  {stat.value}
-                  <span className="ml-1 text-xs font-normal text-muted-foreground">{stat.unit}</span>
+                <div className="flex items-baseline gap-1">
+                  <span className="text-[1.75rem] font-bold leading-none tabular-nums tracking-tight">{stat.value}</span>
+                  <span className="text-xs font-medium text-muted-foreground">{stat.unit}</span>
                 </div>
-                <div className="text-xs text-muted-foreground">{stat.label}</div>
+                <div className="mt-1.5 text-sm text-muted-foreground">{stat.label}</div>
               </div>
             </CardContent>
           </Card>
