@@ -4317,6 +4317,115 @@ async function hlCompleted(token, iid) {
   check("bizdoc §12 计算变量与表单字段重名不覆盖(amount=1)", cd.amount === "1", JSON.stringify(cd.amount))
 }
 
+/* ---------- 25. 企业级 AI 知识库 · 批1（空间/目录树/文档/标签/权限） ---------- */
+/* 契约见 docs/design/ai-knowledge-base.md §2/§5/§7。本段自清本 run 造的 kb_*（删测试空间级联子树 + 删测试标签），
+   保留 V39 种子空间(公司制度库/产品团队空间)与种子文档。 */
+{
+  const KTS = Date.now()
+
+  // 25.1 种子可见性：PUBLIC 全员可见 / INTERNAL 登录可见
+  const zsSpaces = await call(zhangsan.token, "GET", "/api/kb/spaces")
+  const zsNames = (zsSpaces.body?.data ?? []).map((s) => s.name)
+  check("kb 种子 PUBLIC 空间(公司制度库)全员可见", zsSpaces.body?.code === 0 && zsNames.includes("公司制度库"), zsNames.join(","))
+  check("kb 种子 INTERNAL 空间(产品团队空间)登录可见", zsNames.includes("产品团队空间"))
+
+  // 种子目录树
+  const seedTree = await call(admin.token, "GET", "/api/kb/docs/tree?spaceId=1")
+  const roots = seedTree.body?.data ?? []
+  const seedFolder = roots.find((n) => n.title === "规章制度")
+  check("kb 种子目录树:根节点(规章制度FOLDER + 系统使用指南)", roots.length === 2 && seedFolder?.type === "FOLDER", JSON.stringify(roots.map((n) => n.title)))
+  check("kb 种子目录树:规章制度下含 2 篇文档(请假制度/公文办理流程)", (seedFolder?.children ?? []).length === 2)
+
+  // 25.2 空间 CRUD：zhangsan 建 PRIVATE 空间（建者即 owner→myRole=ADMIN）
+  const sp = await call(zhangsan.token, "POST", "/api/kb/spaces", {
+    name: "冒烟私密空间", code: `smoke_kb_${KTS}`, description: "smoke private", visibility: "PRIVATE",
+  })
+  check("kb 建 PRIVATE 空间", sp.body?.code === 0 && sp.body.data?.id, JSON.stringify(sp.body))
+  const spaceId = sp.body?.data?.id
+  check("kb 建者为 owner(myRole=ADMIN)", sp.body?.data?.myRole === "ADMIN")
+  const dupCode = await call(zhangsan.token, "POST", "/api/kb/spaces", { name: "重复编码", code: `smoke_kb_${KTS}`, visibility: "PRIVATE" })
+  check("kb 空间编码重复 409", dupCode.body?.code === 409, JSON.stringify(dupCode.body))
+
+  // 25.3 权限红线：admin(超管但非成员) 不可见该 PRIVATE 空间（列表 + 详情）
+  const adminSpaces1 = await call(admin.token, "GET", "/api/kb/spaces")
+  check("kb 红线:admin 非成员列表不含该 PRIVATE 空间", !(adminSpaces1.body?.data ?? []).some((s) => s.id === spaceId))
+  const adminGet1 = await call(admin.token, "GET", `/api/kb/spaces/${spaceId}`)
+  check("kb 红线:admin 直取 PRIVATE 空间 403", adminGet1.body?.code === 403, JSON.stringify(adminGet1.body))
+
+  // 25.4 目录树：建目录/文档 + 改名/移动/防环
+  const folder = await call(zhangsan.token, "POST", "/api/kb/docs", { spaceId, type: "FOLDER", title: "冒烟目录" })
+  check("kb 建目录 FOLDER", folder.body?.code === 0 && folder.body.data?.type === "FOLDER")
+  const fid = folder.body?.data?.id
+  const doc = await call(zhangsan.token, "POST", "/api/kb/docs", { spaceId, parentId: fid, type: "DOC", title: "冒烟文档" })
+  check("kb 目录下建文档 DOC(parentId 挂靠)", doc.body?.code === 0 && doc.body.data?.parentId === fid)
+  const did = doc.body?.data?.id
+  check("kb 新文档初始 version=1 status=DRAFT", doc.body?.data?.version === 1 && doc.body.data?.status === "DRAFT")
+
+  const rn = await call(zhangsan.token, "PUT", `/api/kb/docs/${did}`, { title: "冒烟文档-改名" })
+  check("kb 改标题", rn.body?.data?.title === "冒烟文档-改名")
+  const mv = await call(zhangsan.token, "PUT", `/api/kb/docs/${did}`, { parentId: 0 })
+  check("kb 移动到空间根(parentId=0)", mv.body?.data?.parentId === null)
+  const subFolder = await call(zhangsan.token, "POST", "/api/kb/docs", { spaceId, parentId: fid, type: "FOLDER", title: "子目录" })
+  const subId = subFolder.body?.data?.id
+  const cyc = await call(zhangsan.token, "PUT", `/api/kb/docs/${fid}`, { parentId: subId })
+  check("kb 防环:父节点移到自身子孙被拒", cyc.body?.code !== 0, JSON.stringify(cyc.body))
+
+  // 25.5 保存正文 + 版本自增（TipTap JSON 只存不解析）
+  const save1 = await call(zhangsan.token, "PUT", `/api/kb/docs/${did}/content`, {
+    contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "正文第一版" }] }] },
+    contentText: "正文第一版",
+  })
+  check("kb 保存正文 version 1→2", save1.body?.data?.version === 2, JSON.stringify(save1.body?.data?.version))
+  const save2 = await call(zhangsan.token, "PUT", `/api/kb/docs/${did}/content`, {
+    contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "正文第二版" }] }] },
+    contentText: "正文第二版",
+  })
+  check("kb 再存正文 version 2→3", save2.body?.data?.version === 3)
+  const detail = await call(zhangsan.token, "GET", `/api/kb/docs/${did}`)
+  check("kb 详情回读 contentText/contentJson", detail.body?.data?.contentText === "正文第二版" && detail.body?.data?.contentJson?.type === "doc")
+  const pub = await call(zhangsan.token, "POST", `/api/kb/docs/${did}/publish`)
+  check("kb 发布→PUBLISHED", pub.body?.data?.status === "PUBLISHED")
+
+  // 25.6 标签：打标签 + 列表 + 移除
+  const tag = await call(zhangsan.token, "POST", `/api/kb/docs/${did}/tags`, { name: `冒烟标签_${KTS}` })
+  check("kb 文档打标签(按名取或建)", tag.body?.code === 0 && tag.body.data?.id)
+  const tagId = tag.body?.data?.id
+  const dts = await call(zhangsan.token, "GET", `/api/kb/docs/${did}/tags`)
+  check("kb 文档标签列表含新标签", (dts.body?.data ?? []).some((t) => t.id === tagId))
+  const untag = await call(zhangsan.token, "DELETE", `/api/kb/docs/${did}/tags/${tagId}`)
+  check("kb 文档移除标签", untag.body?.code === 0)
+
+  // 25.7 成员角色红线：manager=EDITOR 可保存 / admin=VIEWER 不可
+  const addEditor = await call(zhangsan.token, "POST", `/api/kb/spaces/${spaceId}/members`, { principalType: "USER", principalId: manager.user.id, role: "EDITOR" })
+  check("kb 加成员 manager=EDITOR", addEditor.body?.code === 0 && addEditor.body.data?.role === "EDITOR", JSON.stringify(addEditor.body))
+  const addViewer = await call(zhangsan.token, "POST", `/api/kb/spaces/${spaceId}/members`, { principalType: "USER", principalId: admin.user.id, role: "VIEWER" })
+  const viewerMemberId = addViewer.body?.data?.id
+  check("kb 加成员 admin=VIEWER", addViewer.body?.code === 0 && addViewer.body.data?.role === "VIEWER")
+
+  // 成为成员后 admin 可见该 PRIVATE 空间
+  const adminSpaces2 = await call(admin.token, "GET", "/api/kb/spaces")
+  check("kb admin 成为 VIEWER 成员后可见 PRIVATE 空间", (adminSpaces2.body?.data ?? []).some((s) => s.id === spaceId))
+
+  const mgrSave = await call(manager.token, "PUT", `/api/kb/docs/${did}/content`, { contentJson: { type: "doc", content: [] }, contentText: "EDITOR 编辑" })
+  check("kb EDITOR(manager) 可保存正文", mgrSave.body?.code === 0 && mgrSave.body.data?.version === 4, JSON.stringify(mgrSave.body?.code))
+  const adminSave = await call(admin.token, "PUT", `/api/kb/docs/${did}/content`, { contentJson: { type: "doc", content: [] }, contentText: "VIEWER 越权" })
+  check("kb 红线:VIEWER(admin) 保存正文 403", adminSave.body?.code === 403, JSON.stringify(adminSave.body))
+  const removeMember = await call(zhangsan.token, "DELETE", `/api/kb/spaces/${spaceId}/members/${viewerMemberId}`)
+  check("kb 移除成员", removeMember.body?.code === 0)
+
+  // 25.8 树级联删：删目录 fid（其下含子目录）→ 整棵子树消失
+  const delFolder = await call(zhangsan.token, "DELETE", `/api/kb/docs/${fid}`)
+  check("kb 删目录(级联子树)", delFolder.body?.code === 0)
+  const treeAfter = await call(zhangsan.token, "GET", `/api/kb/docs/tree?spaceId=${spaceId}`)
+  const flat = JSON.stringify(treeAfter.body?.data ?? [])
+  check("kb 级联删后 fid/subId 均不在树中", !flat.includes(`"id":${fid},`) && !flat.includes(`"id":${subId},`), flat)
+
+  // 25.9 自清：删测试空间（级联剩余文档/正文/标签关联）+ 删测试标签
+  const delSpace = await call(zhangsan.token, "DELETE", `/api/kb/spaces/${spaceId}`)
+  check("kb 自清:删测试 PRIVATE 空间", delSpace.body?.code === 0)
+  await call(zhangsan.token, "DELETE", `/api/kb/tags/${tagId}`)
+}
+
 /* ---------- 汇总 ---------- */
 cleanupTestData() // 跑完自动清理测试数据，避免污染流程定义/待办列表
 console.log(`\n==> 通过 ${passed} 项，失败 ${failed} 项`)
