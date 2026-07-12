@@ -273,7 +273,9 @@ export function WorkflowDetailShell(p: WorkflowDetailShellProps) {
   if (p.loading) return <ShellLoading />
   if (p.error) return <ShellError error={p.error} onBack={p.onBack} onRetry={p.onRetry} />
 
-  const showStage = !!(p.currentNode || p.currentAssignee || p.stageActions)
+  // ② 环节条按"当前环节存在"决定是否渲染：办理动作恒是 ReactNode（如空 WfOpBar），
+  // 不能据其真假判断，否则终态会出空框。当前环节存在时才展示（办理动作随之插入同框）。
+  const showStage = !!(p.currentNode || p.currentAssignee)
 
   return (
     <div className="space-y-4">
