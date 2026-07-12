@@ -9,6 +9,7 @@ import com.xingchen.oa.system.repository.SysDeptRepository;
 import com.xingchen.oa.system.repository.SysPostRepository;
 import com.xingchen.oa.system.repository.SysRoleRepository;
 import com.xingchen.oa.system.repository.SysUserAssignmentRepository;
+import com.xingchen.oa.system.repository.SysUserLeaderRepository;
 import com.xingchen.oa.system.repository.SysUserRepository;
 import com.xingchen.oa.workflow.engine.expression.ExpressionService;
 import com.xingchen.oa.workflow.engine.expression.FormulaFunctionRegistrar;
@@ -47,6 +48,7 @@ public class AssigneeResolver {
     private final SysUserRepository userRepository;
     private final SysDeptRepository deptRepository;
     private final SysUserAssignmentRepository assignmentRepository;
+    private final SysUserLeaderRepository userLeaderRepository;
     private final SysRoleRepository roleRepository;
     private final SysPostRepository postRepository;
     private final ObjectMapper objectMapper;
@@ -180,12 +182,8 @@ public class AssigneeResolver {
                             users.add(initiatorId);
                         }
                     }
-                    case "LEADER", "FIND_LEADER" -> {
-                        Long leader = leaderOf(initiatorDeptId, rule.path("level").asInt(1));
-                        if (leader != null) {
-                            users.add(leader);
-                        }
-                    }
+                    case "LEADER", "FIND_LEADER" -> users.addAll(
+                            resolveLeaderAssignees(initiatorId, initiatorDeptId, rule.path("level").asInt(1)));
                     // 旧形状 {type/kind:FORM_FIELD}（无 source）：仍从离线表单值读取
                     case "FORM_FIELD" -> {
                         String field = rule.path("field").asString(null);
@@ -304,10 +302,7 @@ public class AssigneeResolver {
             }
             case "LEADER", "FIND_LEADER" -> {
                 int level = rule.path("level").asInt(1);
-                Long leader = leaderOf(initiatorDeptId, level);
-                if (leader != null) {
-                    out.add(leader);
-                }
+                out.addAll(resolveLeaderAssignees(initiatorId, initiatorDeptId, level));
             }
             case "FORM_FIELD" -> {
                 String field = rule.path("field").asString(null);
@@ -671,6 +666,32 @@ public class AssigneeResolver {
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    /**
+     * LEADER（发起人主管）办理人解析：<b>指定优先 → 回退部门经理</b>。
+     * <ul>
+     *   <li>直接主管（level ≤ 1）时：发起人若在 {@code sys_user_leader} 配了指定直属上级 →
+     *       返回这组 user id（节点 multiMode ANY/ALL 决定或签/会签）；</li>
+     *   <li>未配、或跨级（level ≥ 2，指定主管仅表达直接上级，跳级仍走组织架构）→
+     *       回退所在部门（上溯 level-1 级）负责人 {@code dept.leader_id}。</li>
+     * </ul>
+     * 向后兼容：{@code sys_user_leader} 为空的用户行为与改造前完全一致（=部门负责人）。
+     */
+    private Set<Long> resolveLeaderAssignees(Long initiatorId, Long initiatorDeptId, int level) {
+        Set<Long> out = new LinkedHashSet<>();
+        if (initiatorId != null && level <= 1) {
+            List<Long> designated = userLeaderRepository.findLeaderIdsByUserId(initiatorId);
+            if (!designated.isEmpty()) {
+                out.addAll(designated);
+                return out;
+            }
+        }
+        Long leader = leaderOf(initiatorDeptId, level);
+        if (leader != null) {
+            out.add(leader);
+        }
+        return out;
     }
 
     /** 沿发起人部门 ancestors 上溯 level-1 级，取该部门负责人 */

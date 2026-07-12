@@ -659,6 +659,49 @@ await call(admin.token, "POST", "/api/system/users/batch-set-roles", { ids: [bAd
 const cleanupAdmin = await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [bAdmin] })
 check("清理:第二超管降级后可删除", cleanupAdmin.body?.data?.successIds?.includes(bAdmin), JSON.stringify(cleanupAdmin.body?.data))
 
+/* ---------- 11c. 直属上级 leaderIds 读写往返 + 防御（磐石） ---------- */
+const LTS = Date.now()
+// 用两位种子用户当指定上级（MANAGER=2 / LISI=4；不改动他们，仅被引用）
+const L1 = 2, L2 = 4
+const lmain = await call(admin.token, "POST", "/api/system/users", {
+  username: `ldmain_${LTS}`, name: `直属上级主体`, password: "admin123", deptId, postId, roleIds: [roleId],
+})
+const lmainId = lmain.body?.data?.id ?? lmain.body?.data
+check("leaderIds:创建主体用户", !!lmainId, JSON.stringify(lmain.body))
+// PUT 写入有序 [L1,L2] → GET 详情按序回读
+await call(admin.token, "PUT", `/api/system/users/${lmainId}`, { name: `直属上级主体`, leaderIds: [L1, L2] })
+const g1 = await call(admin.token, "GET", `/api/system/users/${lmainId}`)
+check("leaderIds:详情返回 leaderIds 有序 [L1,L2]",
+  JSON.stringify(g1.body?.data?.leaderIds) === JSON.stringify([L1, L2]), JSON.stringify(g1.body?.data?.leaderIds))
+// 顺序敏感：改为 [L2,L1] → 回读顺序随之变
+await call(admin.token, "PUT", `/api/system/users/${lmainId}`, { name: `直属上级主体`, leaderIds: [L2, L1] })
+const g2 = await call(admin.token, "GET", `/api/system/users/${lmainId}`)
+check("leaderIds:顺序往返 [L2,L1]",
+  JSON.stringify(g2.body?.data?.leaderIds) === JSON.stringify([L2, L1]), JSON.stringify(g2.body?.data?.leaderIds))
+// 空数组=清空
+await call(admin.token, "PUT", `/api/system/users/${lmainId}`, { name: `直属上级主体`, leaderIds: [] })
+const g3 = await call(admin.token, "GET", `/api/system/users/${lmainId}`)
+check("leaderIds:空数组清空", Array.isArray(g3.body?.data?.leaderIds) && g3.body.data.leaderIds.length === 0)
+// null(不传)=不改：重设 [L1] 后发一个不带 leaderIds 的更新，应保持 [L1]
+await call(admin.token, "PUT", `/api/system/users/${lmainId}`, { name: `直属上级主体`, leaderIds: [L1] })
+await call(admin.token, "PUT", `/api/system/users/${lmainId}`, { name: `直属上级主体改名` }) // 不带 leaderIds
+const g4 = await call(admin.token, "GET", `/api/system/users/${lmainId}`)
+check("leaderIds:未传字段不改动（保持 [L1]）", JSON.stringify(g4.body?.data?.leaderIds) === JSON.stringify([L1]), JSON.stringify(g4.body?.data?.leaderIds))
+// 防御:不能把自己设为自己上级 → 400
+const selfLeader = await call(admin.token, "PUT", `/api/system/users/${lmainId}`, { name: `x`, leaderIds: [lmainId] })
+check("leaderIds:自己不能设为自己上级 → 400", selfLeader.body?.code !== 0, JSON.stringify(selfLeader.body))
+// 防御:不存在的 leader → 400
+const badLeader = await call(admin.token, "PUT", `/api/system/users/${lmainId}`, { name: `x`, leaderIds: [999999999] })
+check("leaderIds:不存在的上级 → 400", badLeader.body?.code !== 0, JSON.stringify(badLeader.body))
+// 创建时直接带 leaderIds
+const lmain2 = await call(admin.token, "POST", "/api/system/users", {
+  username: `ldmain2_${LTS}`, name: `建时带上级`, password: "admin123", deptId, postId, roleIds: [roleId], leaderIds: [L1, L2],
+})
+const lmain2Id = lmain2.body?.data?.id ?? lmain2.body?.data
+check("leaderIds:创建即返回 leaderIds", JSON.stringify(lmain2.body?.data?.leaderIds) === JSON.stringify([L1, L2]), JSON.stringify(lmain2.body?.data?.leaderIds))
+// 清理（删除用户同时清 sys_user_leader）
+await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [lmainId, lmain2Id] })
+
 /* ---------- 12. 定时任务信息 ---------- */
 const jobs = await call(admin.token, "GET", "/api/system/jobs")
 check("定时任务信息(3 个 handler)", jobs.body?.data?.handlers?.length === 3 && jobs.body.data.appname === "oa-executor")
@@ -1852,6 +1895,50 @@ async function mkProcFull(code, designer, extra = {}) {
   const mt = await findTodo(manager.token, t2)
   check("p2 办理人 source=APPLICANT_DEPT_LEADER 解析为部门主管(王经理)", !!mt, JSON.stringify(mt))
   if (mt) await call(manager.token, "POST", `/api/wf/tasks/${mt.taskId}/approve`, {})
+}
+
+// --- 直属上级 LEADER 解析：指定优先 → 回退部门经理（磐石） ---
+{
+  const ZS = uidByName.zhangsan
+  const deptFinance = (company?.children ?? []).find((d) => d.name === "财务部")?.id // leader=何军(≠2/3)
+  const deptProduct = (company?.children ?? []).find((d) => d.name === "产品部")?.id // leader=王经理(2)
+  check("LEADER:测试部门 id 就绪", !!deptFinance && !!deptProduct && !!ZS, JSON.stringify({ deptFinance, deptProduct, ZS }))
+  // LEADER 节点（发起人主管），multiMode=ALL 会签 → 多上级各生成一个任务
+  const P_LEAD = await mkProc(`p2leader_${TS}`, [{
+    id: "ap", type: "approval", name: "直属上级审", assigneeRules: [{ kind: "LEADER", level: 1 }],
+    multiMode: "ALL", emptyStrategy: "TO_ADMIN",
+  }])
+  async function mkInitiator(suffix, depId, leaderIds) {
+    const body = { username: `ld_${suffix}_${TS}`, name: `LD${suffix}`, password: "admin123", deptId: depId, postId, roleIds: [roleId] }
+    if (leaderIds !== undefined) body.leaderIds = leaderIds
+    const u = await call(admin.token, "POST", "/api/system/users", body)
+    const uid = u.body?.data?.id ?? u.body?.data
+    const lg = await call(null, "POST", "/api/auth/login", { username: `ld_${suffix}_${TS}`, password: "admin123" })
+    return { uid, token: lg.body?.data?.token }
+  }
+  // ① 配了指定上级 [MANAGER, ZHANGSAN]（发起人在财务部，其部门负责人≠这两人）→ 两人都收到（多上级 + 会签）
+  const desig = await mkInitiator("desig", deptFinance, [MANAGER, ZS])
+  check("LEADER:指定上级发起人创建+登录", !!desig.uid && !!desig.token, JSON.stringify(desig))
+  const tD = `直属上级指定-${TS}`
+  const sD = await call(desig.token, "POST", "/api/wf/instances", { defCode: P_LEAD, title: tD, formData: {} })
+  check("LEADER:指定上级发起成功", sD.body?.code === 0, JSON.stringify(sD.body))
+  const dMgr = await findTodo(manager.token, tD)
+  const dZs = await findTodo(zhangsan.token, tD)
+  check("LEADER:配指定上级→MANAGER 收到待办（指定优先，非财务部负责人）", !!dMgr, JSON.stringify(dMgr))
+  check("LEADER:配指定上级→ZHANGSAN 收到待办（多上级 multiMode ALL）", !!dZs, JSON.stringify(dZs))
+  // ② 未配指定上级 → 回退所在部门(产品部)负责人=王经理；ZHANGSAN 不应收到（证明回退≠指定集）
+  const fb = await mkInitiator("fb", deptProduct, undefined) // 不传 leaderIds
+  const tF = `直属上级回退-${TS}`
+  const sF = await call(fb.token, "POST", "/api/wf/instances", { defCode: P_LEAD, title: tF, formData: {} })
+  check("LEADER:未配上级发起成功", sF.body?.code === 0, JSON.stringify(sF.body))
+  const fMgr = await findTodo(manager.token, tF)
+  const fZs = await findTodo(zhangsan.token, tF)
+  check("LEADER:未配→回退部门负责人(产品部=王经理)收到", !!fMgr, JSON.stringify(fMgr))
+  check("LEADER:未配→ZHANGSAN 不收到（回退部门经理，非指定集）", !fZs)
+  // 清理：取消两实例 + 删两发起人（删用户联带清 sys_user_leader）
+  if (sD.body?.data?.id) await call(desig.token, "POST", `/api/wf/instances/${sD.body.data.id}/cancel`)
+  if (sF.body?.data?.id) await call(fb.token, "POST", `/api/wf/instances/${sF.body.data.id}/cancel`)
+  await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [desig.uid, fb.uid] })
 }
 
 // --- 办理选项 candidate → 认领（等价 CLAIM） ---

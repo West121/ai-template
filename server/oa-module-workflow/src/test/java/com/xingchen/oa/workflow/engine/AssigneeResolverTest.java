@@ -9,6 +9,7 @@ import com.xingchen.oa.system.repository.SysDeptRepository;
 import com.xingchen.oa.system.repository.SysPostRepository;
 import com.xingchen.oa.system.repository.SysRoleRepository;
 import com.xingchen.oa.system.repository.SysUserAssignmentRepository;
+import com.xingchen.oa.system.repository.SysUserLeaderRepository;
 import com.xingchen.oa.system.repository.SysUserRepository;
 import com.xingchen.oa.workflow.engine.expression.ExpressionService;
 import com.xingchen.oa.workflow.engine.expression.FormulaFunctionRegistrar;
@@ -67,6 +68,7 @@ class AssigneeResolverTest {
     @Mock SysUserRepository userRepository;
     @Mock SysDeptRepository deptRepository;
     @Mock SysUserAssignmentRepository assignmentRepository;
+    @Mock SysUserLeaderRepository userLeaderRepository;
     @Mock SysRoleRepository roleRepository;
     @Mock SysPostRepository postRepository;
     @Mock FormulaFunctionRegistrar formulaFunctionRegistrar;
@@ -83,8 +85,8 @@ class AssigneeResolverTest {
     @BeforeEach
     void setUp() {
         resolver = new AssigneeResolver(repositoryService, historyService, userRepository,
-                deptRepository, assignmentRepository, roleRepository, postRepository, realMapper,
-                formulaFunctionRegistrar, expressionService);
+                deptRepository, assignmentRepository, userLeaderRepository, roleRepository, postRepository,
+                realMapper, formulaFunctionRegistrar, expressionService);
     }
 
     private JsonNode json(String s) {
@@ -111,6 +113,25 @@ class AssigneeResolverTest {
         dept.setLeaderId(50L);
         when(deptRepository.findById(10L)).thenReturn(Optional.of(dept));
         JsonNode rules = json("[{\"type\":\"LEADER\",\"level\":1}]");
+        assertEquals(List.of(50L), resolver.resolveOffline(rules, 7L, 10L, Map.of()));
+    }
+
+    @Test
+    void kindLeaderUsesDesignatedLeadersWhenConfigured() {
+        // 发起人 7 配了指定直属上级 [2,4] → LEADER(level 1) 用指定的，忽略部门负责人（deptRepository 不应被查）
+        when(userLeaderRepository.findLeaderIdsByUserId(7L)).thenReturn(List.of(2L, 4L));
+        JsonNode rules = json("[{\"kind\":\"LEADER\",\"level\":1}]");
+        assertEquals(List.of(2L, 4L), resolver.resolveOffline(rules, 7L, 10L, Map.of()));
+    }
+
+    @Test
+    void kindLeaderFallsBackToDeptWhenNoDesignated() {
+        // 未配指定上级（仓库返回空）→ 回退部门负责人，保持向后兼容
+        when(userLeaderRepository.findLeaderIdsByUserId(7L)).thenReturn(List.of());
+        SysDept dept = new SysDept();
+        dept.setLeaderId(50L);
+        when(deptRepository.findById(10L)).thenReturn(Optional.of(dept));
+        JsonNode rules = json("[{\"kind\":\"LEADER\",\"level\":1}]");
         assertEquals(List.of(50L), resolver.resolveOffline(rules, 7L, 10L, Map.of()));
     }
 

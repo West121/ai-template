@@ -15,10 +15,12 @@ import com.xingchen.oa.system.entity.SysPost;
 import com.xingchen.oa.system.entity.SysRole;
 import com.xingchen.oa.system.entity.SysUser;
 import com.xingchen.oa.system.entity.SysUserAssignment;
+import com.xingchen.oa.system.entity.SysUserLeader;
 import com.xingchen.oa.system.repository.SysDeptRepository;
 import com.xingchen.oa.system.repository.SysPostRepository;
 import com.xingchen.oa.system.repository.SysRoleRepository;
 import com.xingchen.oa.system.repository.SysUserAssignmentRepository;
+import com.xingchen.oa.system.repository.SysUserLeaderRepository;
 import com.xingchen.oa.system.repository.SysUserRepository;
 import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
@@ -57,6 +59,7 @@ public class SysUserService {
 
     private final SysUserRepository userRepository;
     private final SysUserAssignmentRepository assignmentRepository;
+    private final SysUserLeaderRepository userLeaderRepository;
     private final SysDeptRepository deptRepository;
     private final SysDeptService deptService;
     private final SysPostRepository postRepository;
@@ -113,7 +116,8 @@ public class SysUserService {
         SysUser user = requireUser(id);
         return UserResponse.of(user,
                 assignmentRepository.findByUserIdAndEnabledTrueOrderByPrimaryFlagDescIdAsc(id),
-                leaderNameOf(user));
+                leaderNameOf(user),
+                userLeaderRepository.findLeaderIdsByUserId(id));
     }
 
     /**
@@ -155,7 +159,10 @@ public class SysUserService {
         assignment.setRoles(resolveRoles(request.roleIds()));
         assignmentRepository.save(assignment);
 
-        return UserResponse.of(user, List.of(assignment), leaderNameOf(user));
+        upsertLeaders(user.getId(), request.leaderIds());
+
+        return UserResponse.of(user, List.of(assignment), leaderNameOf(user),
+                userLeaderRepository.findLeaderIdsByUserId(user.getId()));
     }
 
     @Transactional
@@ -172,6 +179,7 @@ public class SysUserService {
         user.setAvatar(request.avatar());
         user.setRemark(request.remark());
         userRepository.save(user);
+        upsertLeaders(id, request.leaderIds());
         return getById(id);
     }
 
@@ -213,6 +221,8 @@ public class SysUserService {
     public void delete(Long id) {
         SysUser user = requireUser(id);
         assignmentRepository.deleteAll(assignmentRepository.findByUserId(id));
+        userLeaderRepository.deleteByUserId(id);   // 其直属上级配置
+        userLeaderRepository.deleteByLeaderId(id);  // 以其为上级的悬挂引用
         userRepository.delete(user);
     }
 
@@ -245,6 +255,8 @@ public class SysUserService {
                 continue;
             }
             assignmentRepository.deleteAll(assignmentRepository.findByUserId(id));
+            userLeaderRepository.deleteByUserId(id);
+            userLeaderRepository.deleteByLeaderId(id);
             userRepository.delete(userOpt.get());
             result.success(id);
         }
@@ -462,6 +474,39 @@ public class SysUserService {
             throw new BusinessException(400, "性别取值仅支持 MALE / FEMALE / UNKNOWN");
         }
         return value;
+    }
+
+    /**
+     * 全量替换用户的指定直属上级（sys_user_leader）：
+     * <ul>
+     *   <li>{@code leaderIds == null}：不改（未传该字段，保留现有配置）；</li>
+     *   <li>空数组：清空；</li>
+     *   <li>非空：按数组顺序写 sort_order（去重保序），先删后插全量替换。</li>
+     * </ul>
+     * 防御：leader_id 必须是存在用户；<b>不能把自己设为自己上级</b>（后端也拦，不只靠前端）。
+     */
+    private void upsertLeaders(Long userId, List<Long> leaderIds) {
+        if (leaderIds == null) {
+            return; // 未传 → 不动
+        }
+        List<Long> ordered = leaderIds.stream().filter(Objects::nonNull).distinct().toList();
+        for (Long leaderId : ordered) {
+            if (leaderId.equals(userId)) {
+                throw new BusinessException(400, "直属上级不能选择本人");
+            }
+            if (!userRepository.existsById(leaderId)) {
+                throw new BusinessException(400, "直属上级不存在: id=" + leaderId);
+            }
+        }
+        userLeaderRepository.deleteByUserId(userId); // 全量替换：先清后写
+        int sort = 0;
+        for (Long leaderId : ordered) {
+            SysUserLeader link = new SysUserLeader();
+            link.setUserId(userId);
+            link.setLeaderId(leaderId);
+            link.setSortOrder(sort++);
+            userLeaderRepository.save(link);
+        }
     }
 
     /** 校验直属上级存在且不是本人；返回可直接落库的 leaderId */

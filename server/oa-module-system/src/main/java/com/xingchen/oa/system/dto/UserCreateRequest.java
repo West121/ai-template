@@ -26,6 +26,8 @@ public record UserCreateRequest(
         String officeLocation,
         Long leaderId,
         String avatar,
-        String remark
+        String remark,
+        /** 指定直属上级 id（多值、有序）；缺省=不配（LEADER 节点回退部门负责人）。 */
+        List<Long> leaderIds
 ) {
 }
