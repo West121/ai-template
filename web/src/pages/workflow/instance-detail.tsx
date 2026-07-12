@@ -13,8 +13,6 @@ import {
   Send,
   ShieldAlert,
   Undo2,
-  Maximize2,
-  Minimize2,
 } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
@@ -43,199 +41,13 @@ import {
   wfFormatTime,
   type WfComment,
   type WfFormData,
-  type WfHighlight,
   type WfTimelineItem,
 } from "@/types/workflow"
 import type { WfInstanceDetailP3 } from "@/types/workflow-p3"
 import { SubInstanceLinks, WfP3Bar } from "./wf-p3"
 import { SealStrip } from "./wf-print"
-import { DingtalkTrack } from "./wf-dingtalk-track"
-import { FlowViewer, type FlowPredict } from "./designer/flow/flow-viewer"
-import type { ProcessModel } from "./designer/flow/model"
-import { buildNodeInfo, buildReplaySteps, type NodeRuntimeInfo } from "./designer/flow/runtime-info"
+import { WorkflowFlowTrack } from "./designer/flow/workflow-flow-track"
 import type { WfPredictResult } from "@/types/workflow-p3"
-
-/* ================= 跟踪图：react-flow 只读 FlowViewer + 高亮 ================= */
-
-/** POST /api/wf/models/import 结果：bpmnXml → 归一化 ProcessModel（+ 未完全还原提示） */
-interface BpmnImportResult {
-  model: ProcessModel
-  warnings?: string[]
-}
-
-/**
- * bpmnXml → ProcessModel 缓存（按 xml 串键）：同一实例多次开合流程跟踪侧栏、切换全屏时避免重复调
- * /api/wf/models/import。模块级 Map，跨组件实例复用；xml 变化（新版本/重新加载）自然产生新键。
- */
-const modelCache = new Map<string, ProcessModel>()
-
-/**
- * 流程预测取数（钉钉 + BPMN 两跟踪图复用）：POST /predict → 归一 FlowPredict **完整链路**
- * （done/current/future + 并签/驳回元信息）。后端 /predict 仅钉钉模式非空；BPMN 返回空 path。
- * 运行中实例 predictable=true；**已办结实例 predictable=false 但 /predict 仍返回全 done 链路**——
- * 故入口对"可预测 或 已结束"均开放（见 DingtalkTrackHost 的 canPredict）。
- */
-function useTrackPredict(instanceId: number) {
-  const [predict, setPredict] = useState<FlowPredict | null>(null)
-  const [predictLoading, setPredictLoading] = useState(false)
-  const runPredict = useCallback(async () => {
-    setPredictLoading(true)
-    try {
-      const res = await api<WfPredictResult>(`/api/wf/instances/${instanceId}/predict`, { method: "POST" })
-      const path = (res.path ?? []).filter((p) => p.nodeId)
-      setPredict({
-        note: res.note,
-        nodes: path.map((p) => ({
-          nodeId: p.nodeId,
-          nodeName: p.nodeName,
-          status: p.status === "done" || p.status === "current" || p.status === "future" ? p.status : "future",
-          assignees: (p.assignees ?? []).map((a) => a.name).filter(Boolean),
-          canReject: p.canReject,
-          rejectTo: p.rejectTo ?? null,
-          multiMode: p.multiMode ?? null,
-          parallelGroup: p.parallelGroup ?? null,
-        })),
-      })
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "预测失败")
-    } finally {
-      setPredictLoading(false)
-    }
-  }, [instanceId])
-  return { predict, predictLoading, runPredict }
-}
-
-/**
- * 钉钉跟踪图宿主：owns 预测拉取，向 DingtalkTrack 透传 ①办理信息 ②回放 ③预测（钉钉是主战场）。
- */
-function DingtalkTrackHost({
-  designerJson,
-  highlight,
-  nodeInfo,
-  replaySteps,
-  instanceId,
-  canPredict,
-}: {
-  designerJson: unknown
-  highlight?: WfHighlight
-  nodeInfo?: Record<string, NodeRuntimeInfo>
-  replaySteps?: string[]
-  instanceId: number
-  /** 可看完整链路：运行中(predictable) 或 已办结（/predict 返回全 done） */
-  canPredict?: boolean
-}) {
-  const { predict, predictLoading, runPredict } = useTrackPredict(instanceId)
-  return (
-    <div className="min-h-105">
-      <DingtalkTrack
-        designerJson={designerJson}
-        highlight={highlight}
-        nodeInfo={nodeInfo}
-        replaySteps={replaySteps}
-        predict={predict}
-        onRequestPredict={canPredict ? () => void runPredict() : undefined}
-        predictLoading={predictLoading}
-      />
-    </div>
-  )
-}
-
-/**
- * 流程跟踪图（BPMN / GRAPH 定义）：把后端 bpmnXml 经 POST /api/wf/models/import 转成归一化
- * ProcessModel，喂只读 FlowViewer 渲染 + 高亮当前节点/已完成路径。
- * 高亮 id（highlight.completed/active）与 ProcessModel 节点/边 id 对齐（== BPMN 元素 id）。
- */
-function FlowTrack({
-  xml,
-  highlight,
-  nodeInfo,
-  replaySteps,
-  instanceId,
-  predictable,
-}: {
-  xml: string
-  highlight?: WfHighlight
-  /** ① 节点办理信息（timeline 映射，瞬态叠加） */
-  nodeInfo?: Record<string, NodeRuntimeInfo>
-  /** ② 回放时间序 */
-  replaySteps?: string[]
-  /** ③ 预测：实例 id + 是否可预测 */
-  instanceId: number
-  predictable?: boolean
-}) {
-  const [model, setModel] = useState<ProcessModel | null>(() => modelCache.get(xml) ?? null)
-  const [loadError, setLoadError] = useState(false)
-  const [fullscreen, setFullscreen] = useState(false)
-  // ③ 流程预测（复用 /predict；拉取后 FlowViewer 显蓝虚线 + 可播放）
-  const { predict, predictLoading, runPredict } = useTrackPredict(instanceId)
-
-  useEffect(() => {
-    const cached = modelCache.get(xml)
-    if (cached) {
-      setModel(cached)
-      setLoadError(false)
-      return
-    }
-    let disposed = false
-    setModel(null)
-    setLoadError(false)
-    void api<BpmnImportResult>("/api/wf/models/import", {
-      method: "POST",
-      headers: { "Content-Type": "text/plain" },
-      body: xml,
-    })
-      .then((res) => {
-        if (disposed) return
-        modelCache.set(xml, res.model)
-        setModel(res.model)
-      })
-      .catch(() => {
-        if (!disposed) setLoadError(true)
-      })
-    return () => {
-      disposed = true
-    }
-  }, [xml])
-
-  if (loadError) {
-    return (
-      <div className="flex h-105 flex-col items-center justify-center gap-2 text-muted-foreground">
-        <ShieldAlert className="size-8 opacity-40" />
-        <span className="text-sm">流程图解析失败</span>
-      </div>
-    )
-  }
-
-  if (!model) {
-    return <Skeleton className="h-105 w-full rounded-md" />
-  }
-
-  return (
-    <div className={cn("relative", fullscreen && "fixed inset-0 z-50 flex flex-col bg-background p-4")}>
-      <FlowViewer
-        model={model}
-        highlight={highlight}
-        nodeInfo={nodeInfo}
-        replaySteps={replaySteps}
-        predict={predict}
-        onRequestPredict={predictable ? () => void runPredict() : undefined}
-        predictLoading={predictLoading}
-        heightClass={fullscreen ? "min-h-0 flex-1" : "h-105"}
-      />
-      <div className="absolute top-3 right-3 z-10">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-7 border bg-card/90 shadow-sm backdrop-blur"
-          title={fullscreen ? "退出全屏" : "全屏查看"}
-          onClick={() => setFullscreen((v) => !v)}
-        >
-          {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-        </Button>
-      </div>
-    </div>
-  )
-}
 
 /* ================= 审批记录时间线 ================= */
 
@@ -369,12 +181,6 @@ export default function WorkflowInstanceDetailPage() {
     () => (detail?.timeline ?? []).filter((t) => ["CC", "URGE"].includes(t.action ?? "")),
     [detail?.timeline],
   )
-  // 流程图预览增强：① 节点办理信息（timeline→nodeId 映射）② 回放时间序（纯映射，瞬态注入 FlowViewer）
-  const nodeRuntimeInfo = useMemo(
-    () => buildNodeInfo(detail?.timeline, detail?.highlight, detail?.currentNodes),
-    [detail?.timeline, detail?.highlight, detail?.currentNodes],
-  )
-  const replaySteps = useMemo(() => buildReplaySteps(detail?.timeline), [detail?.timeline])
 
   const isInitiator = detail != null && userId != null && detail.initiatorId === userId
   /** 被驳回到发起人：实例状态为 REJECTED 且我是发起人 → 表单可编辑 + 重新提交 */
@@ -672,32 +478,19 @@ export default function WorkflowInstanceDetailPage() {
             <TabsContent value="timeline" className="m-0 px-5 py-4">
               <Timeline items={detail.timeline ?? []} />
             </TabsContent>
-            {/* 内嵌流程图：BPMN→FlowTrack（含顶部回放/预测工具条 + 全屏 + 图例）；DINGTALK→只读钉钉跟踪图 */}
+            {/* 内嵌流程图（共享组件 WorkflowFlowTrack）：节点办理信息/回放/预测完整链路/连线高亮/全屏，DINGTALK+BPMN 统一 */}
             <TabsContent value="flow" className="m-0 p-4">
-              {detail.designerType === "DINGTALK" && detail.designerJson ? (
-                <DingtalkTrackHost
-                  designerJson={detail.designerJson}
-                  highlight={detail.highlight}
-                  nodeInfo={nodeRuntimeInfo}
-                  replaySteps={replaySteps}
-                  instanceId={detail.id}
-                  canPredict={canPredictChain}
-                />
-              ) : detail.bpmnXml ? (
-                <FlowTrack
-                  xml={detail.bpmnXml}
-                  highlight={detail.highlight}
-                  nodeInfo={nodeRuntimeInfo}
-                  replaySteps={replaySteps}
-                  instanceId={detail.id}
-                  predictable={detail.predictable}
-                />
-              ) : (
-                <div className="flex h-64 flex-col items-center justify-center gap-2 text-muted-foreground">
-                  <GitBranch className="size-8 opacity-30" />
-                  <span className="text-sm">暂无流程图</span>
-                </div>
-              )}
+              <WorkflowFlowTrack
+                source={{ load: "inline", designerType: detail.designerType, designerJson: detail.designerJson, bpmnXml: detail.bpmnXml }}
+                timeline={detail.timeline ?? []}
+                highlight={detail.highlight}
+                currentNodes={detail.currentNodes}
+                predict={
+                  canPredictChain
+                    ? { enabled: true, run: () => api<WfPredictResult>(`/api/wf/instances/${detail.id}/predict`, { method: "POST" }) }
+                    : undefined
+                }
+              />
             </TabsContent>
             <TabsContent value="comments" className="m-0 px-5 py-4">
               <CommentThread items={detail.comments ?? []} />
