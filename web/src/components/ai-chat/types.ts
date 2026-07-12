@@ -238,6 +238,13 @@ export interface AiModelChoice extends AiModelProfile {
 
 /* ============================ 消息 / 会话 ============================ */
 
+/** 「思考中」折叠态一步（结构同 api.ToolStatusItem；此处内联避免 types→api 循环） */
+export interface AiThinkingStep {
+  id: string
+  displayName: string
+  state: "running" | "done" | "failed"
+}
+
 export interface AiMessage {
   role: "USER" | "ASSISTANT"
   /** 助手消息为 markdown；用户消息按纯文本渲染（不套 .ai-md，防注入+反白） */
@@ -248,6 +255,8 @@ export interface AiMessage {
   parts?: AiMessagePartRef[]
   /** 随消息附带的附件（用户气泡回显） */
   attachments?: AiAttachment[]
+  /** 本轮「思考中」步骤快照（完成后并入消息，收成一行可回看；无工具轮次为空/缺，不渲染） */
+  thinking?: AiThinkingStep[]
   /** 前端生成 ULID（重试幂等，§9.1 clientMessageId） */
   clientMessageId?: string
   createdAt?: string

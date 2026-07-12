@@ -146,6 +146,8 @@ export function AiAssistant() {
       }
       lastSentRef.current = { text, attachments, clientMessageId }
 
+      /** 本轮「思考」步骤累积（用于完成后写进落地消息 thinking，可回看）——state 异步，用本地数组做快照源 */
+      const collectedTools: ToolStatusItem[] = []
       /** 流式助手消息占位是否已建（started/首个增量时建，失败前无空气泡） */
       const streamOpenRef = { open: false }
       const ensureStreamMsg = () => {
@@ -188,12 +190,17 @@ export function AiAssistant() {
             onTextDelta: (t) => patchStreamMsg((m) => ({ ...m, content: m.content + t })),
             // 同 partId 覆盖更新（计划卡逐步打勾等），否则追加
             onPart: (part) => patchStreamMsg((m) => ({ ...m, parts: mergePart(m.parts ?? [], part) })),
-            onToolStatus: (item) =>
+            onToolStatus: (item) => {
+              // 累积快照（完成后落地 message.thinking）：同 id 覆盖，否则追加
+              const ci = collectedTools.findIndex((x) => x.id === item.id)
+              if (ci >= 0) collectedTools[ci] = item
+              else collectedTools.push(item)
               setToolStatuses((prev) => {
                 const i = prev.findIndex((x) => x.id === item.id)
                 if (i >= 0) return prev.map((x, xi) => (xi === i ? item : x))
                 return [...prev, item]
-              }),
+              })
+            },
             // 回退路径（旧阻塞端点）：整条消息（旧 cards 形状）直接追加
             onAssistantMessage: (msg) => {
               streamOpenRef.open = true
@@ -202,6 +209,10 @@ export function AiAssistant() {
           },
         )
         setDemo(res.demo)
+        // 完成：把本轮工具步骤快照写进落地助手消息 thinking（收成一行可回看；无工具则不写）
+        if (streamOpenRef.open && collectedTools.length) {
+          patchStreamMsg((m) => ({ ...m, thinking: collectedTools.slice() }))
+        }
         if (res.sessionId) {
           setSessionId(res.sessionId)
           modelBySessionRef.current.set(res.sessionId, modelId)

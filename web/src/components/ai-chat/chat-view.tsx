@@ -5,7 +5,7 @@
  * 所选模型不支持视觉时附图就地提示引导切换）；用户气泡回显附件。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react"
-import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, CloudOff, Eye, FileText, Loader2, Mic, Paperclip, RotateCw, Slash, Sparkles, Square, X, XCircle } from "lucide-react"
+import { AlertTriangle, ArrowDown, ArrowUp, CloudOff, Eye, FileText, Loader2, Mic, Paperclip, RotateCw, Slash, Sparkles, Square, X } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { sanitizeHtml } from "@/lib/sanitize"
@@ -38,6 +38,7 @@ class CardBoundary extends Component<{ children: ReactNode }, { failed: boolean 
 }
 import { LinkCard } from "./cards/simple-cards"
 import { BriefingCard } from "./briefing-card"
+import { ThinkingBlock } from "./thinking-block"
 import { MAX_ATTACHMENTS, checkAttachmentFile, formatBytes, hasUploadingAttachment, imageSrcOf, needsVisionWarning, type PendingAttachment } from "./attachments"
 import { filterSlashCommands, type SlashCommand } from "./panel-logic"
 import { isSpeechSupported, startSpeech, type SpeechSession } from "./speech"
@@ -155,6 +156,8 @@ function MessageRow({ message }: { message: AiMessage }) {
         <Sparkles className="size-4" />
       </div>
       <div className="flex min-w-0 max-w-[85%] flex-1 flex-col gap-2">
+        {/* 完成态「思考」回看块（并入消息列首；无工具轮次不渲染）——内部无 ml-9，已在内容列内 */}
+        {message.thinking?.length ? <ThinkingBlock steps={message.thinking} phase="done" /> : null}
         {message.content && <AssistantMarkdown content={message.content} />}
         {/* 卡片级错误边界(防白屏规约):单张卡渲染崩溃 → 降级小块,绝不炸消息流/面板 */}
         {parts
@@ -172,27 +175,6 @@ function MessageRow({ message }: { message: AiMessage }) {
           <time className="px-1 text-[11px] text-muted-foreground">{formatTime(message.createdAt)}</time>
         )}
       </div>
-    </div>
-  )
-}
-
-/** 工具状态条（§9.2 displayName：正在查询我的待办… ✓/✗），随流式过程更新 */
-function ToolStatusBar({ items }: { items: ToolStatusItem[] }) {
-  if (items.length === 0) return null
-  return (
-    <div className="ml-9 flex w-fit min-w-0 flex-col gap-1 rounded-lg border border-dashed bg-muted/30 px-2.5 py-1.5">
-      {items.map((t) => (
-        <div key={t.id || t.displayName} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          {t.state === "running" ? (
-            <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
-          ) : t.state === "done" ? (
-            <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" />
-          ) : (
-            <XCircle className="size-3.5 shrink-0 text-destructive" />
-          )}
-          <span className="min-w-0 truncate">{t.displayName}</span>
-        </div>
-      ))}
     </div>
   )
 }
@@ -567,8 +549,15 @@ export function ChatView({
             {messages.map((m, i) => (
               <MessageRow key={i} message={m} />
             ))}
-            {sending && <ToolStatusBar items={toolStatuses} />}
-            {sending && <TypingIndicator />}
+            {/* 流式期：有工具→单一呼吸「思考块」（呼吸头即进度，不再叠三点）；纯思考无工具→保留三点 */}
+            {sending &&
+              (toolStatuses.length > 0 ? (
+                <div className="ml-9">
+                  <ThinkingBlock steps={toolStatuses} phase="active" />
+                </div>
+              ) : (
+                <TypingIndicator />
+              ))}
             {sendError != null && (
               <div className="flex w-fit max-w-[85%] flex-col gap-2 rounded-2xl rounded-bl-md border border-destructive/40 bg-destructive/5 px-3.5 py-2.5">
                 <div className="flex items-center gap-2 text-sm text-destructive">
