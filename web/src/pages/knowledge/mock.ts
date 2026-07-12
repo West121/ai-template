@@ -24,6 +24,7 @@ import { htmlToJson } from "./content-codec"
 import { buildDocTree } from "./tree"
 import { roleOf, visibleSpaces } from "./permissions"
 import { buildSnippet } from "./search-util"
+import { buildAssistText, type AssistAction } from "./assist-util"
 import type {
   KbDoc,
   KbDocDetail,
@@ -436,6 +437,109 @@ export function searchKb(req: SearchReq): Promise<KbResult<PageResult<SearchHit>
       return { list: hits.slice((pageNum - 1) * pageSize, pageNum * pageSize), total: hits.length, pageNum, pageSize }
     },
   )
+}
+
+/* =============================== 批3：AI 写作辅助（§3.2，SSE 流式） =============================== */
+
+export interface AssistReq {
+  action: AssistAction
+  selectedText?: string
+  docContext?: string
+  docId?: number
+}
+export interface AssistHandlers {
+  onDelta: (chunk: string) => void
+  onDone: (full: string) => void
+  onError: (msg: string) => void
+}
+
+/** 演示流式：把整段文本切块，定时逐块回调，返回取消函数。 */
+function mockAssist(req: AssistReq, h: AssistHandlers): () => void {
+  const full = buildAssistText(req.action, req.selectedText, req.docContext)
+  const chunks: string[] = []
+  for (let i = 0; i < full.length; i += 4) chunks.push(full.slice(i, i + 4))
+  let idx = 0
+  let acc = ""
+  const timer = setInterval(() => {
+    if (idx >= chunks.length) {
+      clearInterval(timer)
+      h.onDone(acc)
+      return
+    }
+    acc += chunks[idx]
+    h.onDelta(chunks[idx])
+    idx += 1
+  }, 12)
+  return () => clearInterval(timer)
+}
+
+/**
+ * AI 写作辅助流（§3.2）：POST /api/kb/ai/assist（SSE，text.delta 增量）。返回取消函数。
+ * offline / 后端未就绪(网络失败/404/非事件流) → 降级为演示流式，始终可用。
+ */
+export function assistStream(req: AssistReq, h: AssistHandlers): () => void {
+  if (useAuthStore.getState().offline) return mockAssist(req, h)
+
+  const controller = new AbortController()
+  let cancelled = false
+  void (async () => {
+    let res: Response
+    try {
+      const { token } = useAuthStore.getState()
+      res = await fetch(`${KB}/ai/assist`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(req),
+        signal: controller.signal,
+      })
+    } catch {
+      if (!cancelled) mockAssist(req, h) // 网络不通 → 演示降级
+      return
+    }
+    const ct = res.headers.get("content-type") ?? ""
+    if (res.status === 404 || !res.ok || !ct.includes("text/event-stream") || !res.body) {
+      if (!cancelled) mockAssist(req, h)
+      return
+    }
+    const reader = res.body.getReader()
+    const dec = new TextDecoder()
+    let buf = ""
+    let acc = ""
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += dec.decode(value, { stream: true })
+        const blocks = buf.split("\n\n")
+        buf = blocks.pop() ?? ""
+        for (const block of blocks) {
+          const line = block.split("\n").find((l) => l.startsWith("data:"))
+          if (!line) continue
+          const data = line.slice(5).trim()
+          if (!data || data === "[DONE]") continue
+          let text = ""
+          try {
+            const j = JSON.parse(data) as { text?: string; delta?: string }
+            text = typeof j.text === "string" ? j.text : typeof j.delta === "string" ? j.delta : ""
+          } catch {
+            text = data
+          }
+          if (text) {
+            acc += text
+            h.onDelta(text)
+          }
+        }
+      }
+      if (!cancelled) h.onDone(acc)
+    } catch {
+      if (!cancelled) h.onError("AI 生成失败，请重试")
+    }
+  })()
+
+  return () => {
+    cancelled = true
+    controller.abort()
+  }
 }
 
 /** 相关推荐（§9.2）：排除自身、仅可见空间、相似降序。mock 用同空间其它文档。 */

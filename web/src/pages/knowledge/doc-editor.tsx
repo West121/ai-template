@@ -3,8 +3,9 @@
  * 正文经 content-codec 在 HTML↔TipTap JSON 间互转（后端 contentJson 原样存）。保存自增版本；发布/归档。
  * 协同（CRDT）批4，本批单人编辑。
  */
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
+import type { Editor } from "@tiptap/react"
 import { Archive, FileText, FolderOpen, Loader2, Save, Send, ShieldAlert } from "lucide-react"
 import { ApiError } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -15,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { RichTextEditor, RichTextViewer, stripHtml } from "@/components/rich-text"
 import { fetchDoc, saveDocContent, setDocStatus, updateDoc } from "./mock"
 import { jsonToHtml, htmlToJson } from "./content-codec"
+import { KbAiAssist } from "./kb-ai-assist"
 import { DOC_STATUS_META, type KbDocDetail } from "./types"
 
 export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | null; canEdit: boolean; onDocChanged?: () => void }) {
@@ -25,6 +27,8 @@ export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | nu
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [error, setError] = useState<"forbidden" | "notfound" | string | null>(null)
+  const [editor, setEditor] = useState<Editor | null>(null)
+  const onEditorReady = useCallback((e: Editor | null) => setEditor(e), [])
 
   useEffect(() => {
     if (docId == null) {
@@ -166,6 +170,7 @@ export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | nu
         <span className="shrink-0 text-xs text-muted-foreground">v{detail.version}</span>
         {canEdit && (
           <div className="flex shrink-0 items-center gap-1.5">
+            <KbAiAssist editor={editor} docId={detail.id} />
             {detail.status !== "PUBLISHED" && (
               <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void changeStatus("publish")}>
                 <Send className="size-3.5" /> 发布
@@ -196,6 +201,7 @@ export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | nu
             preset="full"
             placeholder="开始编写文档内容…"
             minHeight={360}
+            onEditorReady={onEditorReady}
           />
         ) : (
           <RichTextViewer html={html} />

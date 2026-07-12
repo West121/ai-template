@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, type CSSProperties } from "react"
 import { toast } from "sonner"
-import { EditorContent, useEditor } from "@tiptap/react"
+import { EditorContent, useEditor, type Editor } from "@tiptap/react"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth-store"
 import {
@@ -47,6 +47,8 @@ export interface RichTextEditorProps {
   /** 显示字数统计（有 maxLength 时默认显示） */
   showCount?: boolean
   className?: string
+  /** 拿到底层 TipTap 编辑器实例（如知识库 AI 写作辅助：选区/插入/替换）；卸载回传 null。传稳定引用（useCallback）。 */
+  onEditorReady?: (editor: Editor | null) => void
 }
 
 /** 后端文件上传响应（对齐 file-uploader 的 UploadedFile） */
@@ -77,6 +79,7 @@ export function RichTextEditor({
   maxLength,
   showCount,
   className,
+  onEditorReady,
 }: RichTextEditorProps) {
   const resolved = resolveFeatures(preset, features)
   const editable = !readOnly && !disabled
@@ -103,6 +106,12 @@ export function RichTextEditor({
   useEffect(() => {
     editor?.setEditable(editable)
   }, [editor, editable])
+
+  // 暴露编辑器实例（可选；卸载回传 null）
+  useEffect(() => {
+    onEditorReady?.(editor)
+    return () => onEditorReady?.(null)
+  }, [editor, onEditorReady])
 
   /* ---- 图片：上传优先，offline/失败降级 base64 预览 ---- */
   const insertImage = useCallback(
