@@ -5,7 +5,7 @@
  * status/error/approval 为 V2 新增轻量卡。
  */
 import { useMemo } from "react"
-import { AlertTriangle, BookOpen, CheckCircle2, Circle, ExternalLink, Info, Loader2, PackageX, ShieldAlert, XCircle } from "lucide-react"
+import { AlertTriangle, BookOpen, CheckCircle2, Circle, ExternalLink, Info, Library, Loader2, PackageX, ShieldAlert, XCircle } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { sanitizeHtml } from "@/lib/sanitize"
 import { Button } from "@/components/ui/button"
@@ -28,9 +28,23 @@ function UnknownPart({ part, reason }: { part: AiMessagePart; reason: string }) 
   )
 }
 
+/** KB_DOC 引用（§9.3）所属空间 id 容错解析（后端可能给 {id} / 名称 / 数字） */
+function kbSpaceId(c: AiCitation): number | undefined {
+  if (typeof c.spaceId === "number") return c.spaceId
+  const sp = c.space
+  if (typeof sp === "number") return sp
+  if (sp && typeof sp === "object" && typeof sp.id === "number") return sp.id
+  return undefined
+}
+/** KB_DOC 引用 → 知识库文档深链（无空间 id 时退回知识库首页，仍可点） */
+function kbDocPath(c: AiCitation): string {
+  const sid = kbSpaceId(c)
+  return sid != null ? `/knowledge/${sid}?doc=${encodeURIComponent(c.sourceId)}` : "/knowledge"
+}
+
 /**
  * text 卡（V2 批C 引用溯源）：markdown 正文 + 尾部角标 [1][2] + 底部引用行
- * （标题 + version；FEATURE 类走 Registry 受控导航可点）。无 citations 时纯正文。
+ * （标题 + version；FEATURE 走 Registry 导航、KB_DOC 跳知识库文档，均可点）。无 citations 时纯正文。
  */
 function TextPartView({ part }: { part: AiMessagePart }) {
   const navigate = useNavigate()
@@ -63,10 +77,12 @@ function TextPartView({ part }: { part: AiMessagePart }) {
       {citations.length > 0 && (
         <ul className="mt-1.5 space-y-0.5 px-1">
           {citations.map((c, i) => {
-            const path = c.sourceType === "FEATURE" ? resolveFeaturePath(c.sourceId) : null
+            const isKb = c.sourceType === "KB_DOC"
+            const path = c.sourceType === "FEATURE" ? resolveFeaturePath(c.sourceId) : isKb ? kbDocPath(c) : null
+            const Icon = isKb ? Library : BookOpen
             const label = (
               <>
-                <BookOpen className="size-3 shrink-0" />
+                <Icon className="size-3 shrink-0" />
                 <span className="shrink-0">[{i + 1}]</span>
                 <span className="min-w-0 truncate">{c.title}</span>
                 {c.version && <span className="shrink-0 text-muted-foreground/70">{c.version}</span>}

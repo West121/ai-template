@@ -44,9 +44,9 @@ describe("知识库 空间内页", () => {
     renderPage()
     // 头部空间名
     expect(await screen.findByText("产品研发知识库")).toBeTruthy()
-    // 目录树：目录 + 文档节点（默认展开）
+    // 目录树：目录 + 文档节点（默认展开；「接口设计规范」也可能出现在相关文档区，故 getAllByText）
     expect(await screen.findByText("研发规范")).toBeTruthy()
-    expect(screen.getByText("接口设计规范")).toBeTruthy()
+    expect(screen.getAllByText("接口设计规范").length).toBeGreaterThan(0)
     // 首个文档默认选中 → 编辑器标题输入（可编，ADMIN）
     expect(await screen.findByDisplayValue("代码提交规约")).toBeTruthy()
     // 成员入口 + 演示提示

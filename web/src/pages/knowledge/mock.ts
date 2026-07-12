@@ -17,17 +17,19 @@
  *  content：content_json 后端只存不解析（TipTap JSON），content_text 由前端 editor 文本抽取附带（批2 检索用）。
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { api, NetworkError } from "@/lib/api"
+import { api, NetworkError, type PageResult } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
 import { stripHtml } from "@/components/rich-text"
 import { htmlToJson } from "./content-codec"
 import { buildDocTree } from "./tree"
 import { roleOf, visibleSpaces } from "./permissions"
+import { buildSnippet } from "./search-util"
 import type {
   KbDoc,
   KbDocDetail,
   KbDocStatus,
   KbDocType,
+  KbMatchedBy,
   KbMemberRole,
   KbPrincipalType,
   KbSpace,
@@ -36,6 +38,8 @@ import type {
   KbTreeNode,
   KbUserCtx,
   KbVisibility,
+  RelatedDoc,
+  SearchHit,
 } from "./types"
 
 const KB = "/api/kb"
@@ -394,5 +398,64 @@ export function fetchTags(): Promise<KbResult<KbTag[]>> {
   return withMock(
     () => api<KbTag[]>(`${KB}/tags`).then(normList<KbTag>),
     () => TAGS,
+  )
+}
+
+/* =============================== 批2：检索 / 推荐（§9） =============================== */
+
+export interface SearchReq {
+  q: string
+  spaceId?: number
+  pageNum?: number
+  pageSize?: number
+}
+
+/** 混合检索（§9.1）。真实端点后端做语义+全文；mock 走标题/正文 ILIKE，仅可见空间。 */
+export function searchKb(req: SearchReq): Promise<KbResult<PageResult<SearchHit>>> {
+  const pageNum = req.pageNum ?? 1
+  const pageSize = req.pageSize ?? 10
+  return withMock(
+    () => api<PageResult<SearchHit>>(`${KB}/search`, { method: "POST", body: JSON.stringify({ ...req, pageNum, pageSize }) }),
+    () => {
+      const ctx = currentKbCtx()
+      const visIds = new Set(visibleSpaces(SPACES, membersOf, ctx).map((s) => s.id))
+      const ql = req.q.trim().toLowerCase()
+      const hits: SearchHit[] = DOCS.filter((doc) => doc.type === "DOC" && visIds.has(doc.spaceId) && (req.spaceId == null || doc.spaceId === req.spaceId))
+        .map((doc): SearchHit | null => {
+          const text = getContent(doc.id).contentText || ""
+          const inTitle = doc.title.toLowerCase().includes(ql)
+          const inBody = text.toLowerCase().includes(ql)
+          if (ql && !inTitle && !inBody) return null
+          const sp = SPACES.find((s) => s.id === doc.spaceId)
+          const matchedBy: KbMatchedBy = inTitle && inBody ? "hybrid" : inBody ? "fulltext" : "vector"
+          const score = (inTitle ? 2 : 0) + (inBody ? 1 : 0) + 0.1
+          return { docId: doc.id, title: doc.title, spaceId: doc.spaceId, spaceName: sp?.name ?? "", snippet: buildSnippet(text || doc.title, req.q), score, matchedBy }
+        })
+        .filter((h): h is SearchHit => h !== null)
+        .sort((a, b) => b.score - a.score)
+      return { list: hits.slice((pageNum - 1) * pageSize, pageNum * pageSize), total: hits.length, pageNum, pageSize }
+    },
+  )
+}
+
+/** 相关推荐（§9.2）：排除自身、仅可见空间、相似降序。mock 用同空间其它文档。 */
+export function fetchRelated(docId: number, topN = 5): Promise<KbResult<RelatedDoc[]>> {
+  return withMock(
+    () => api<RelatedDoc[]>(`${KB}/docs/${docId}/related?topN=${topN}`).then(normList<RelatedDoc>),
+    () => {
+      const self = DOCS.find((d) => d.id === docId)
+      if (!self) return []
+      const ctx = currentKbCtx()
+      const visIds = new Set(visibleSpaces(SPACES, membersOf, ctx).map((s) => s.id))
+      return DOCS.filter((d) => d.type === "DOC" && d.id !== docId && visIds.has(d.spaceId))
+        .map((d, i): RelatedDoc => {
+          const sp = SPACES.find((s) => s.id === d.spaceId)
+          // 同空间更相关
+          const base = d.spaceId === self.spaceId ? 0.95 : 0.6
+          return { docId: d.id, title: d.title, spaceId: d.spaceId, spaceName: sp?.name ?? "", score: Math.max(0.3, base - i * 0.08) }
+        })
+        .sort((a, b) => b.score - a.score)
+        .slice(0, topN)
+    },
   )
 }

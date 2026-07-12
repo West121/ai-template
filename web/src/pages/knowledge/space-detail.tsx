@@ -4,9 +4,9 @@
  * 目录树 / 文档区 各自 ErrorBoundary（防白屏第 1 层：坏 payload 局部降级不炸整页）。
  */
 import { useCallback, useEffect, useState } from "react"
-import { useNavigate, useParams } from "react-router-dom"
+import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
-import { ArrowLeft, RotateCw, Settings, ShieldAlert, Users } from "lucide-react"
+import { ArrowLeft, RotateCw, Search, Settings, ShieldAlert, Users } from "lucide-react"
 import { ApiError } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -17,8 +17,10 @@ import { createDoc, deleteDoc, fetchDocTree, fetchSpace, updateDoc } from "./moc
 import { canEdit, canManage } from "./permissions"
 import { firstDoc } from "./tree"
 import { KbDemoBanner } from "./kb-ui"
+import { KbSearchDialog } from "./kb-search"
 import { DocTree } from "./doc-tree"
 import { DocEditor } from "./doc-editor"
+import { RelatedDocs } from "./related-docs"
 import { MemberDialog } from "./member-dialog"
 import { SpaceDialog } from "./space-dialog"
 import { ROLE_META, VISIBILITY_META, type KbDocType, type KbSpace, type KbTreeNode } from "./types"
@@ -27,6 +29,7 @@ export default function KnowledgeSpaceDetailPage() {
   const { spaceId } = useParams()
   const id = Number(spaceId)
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
 
   const [space, setSpace] = useState<KbSpace | null>(null)
   const [tree, setTree] = useState<KbTreeNode[]>([])
@@ -36,6 +39,7 @@ export default function KnowledgeSpaceDetailPage() {
   const [error, setError] = useState<"forbidden" | "notfound" | string | null>(null)
   const [memberOpen, setMemberOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
 
   const role = space?.myRole ?? null
   const editable = canEdit(role)
@@ -75,6 +79,15 @@ export default function KnowledgeSpaceDetailPage() {
   }, [id])
 
   useEffect(load, [load])
+
+  // 深链定位：/knowledge/:id?doc=123（搜索结果 / KB_DOC 引用跳转）→ 选中该文档
+  useEffect(() => {
+    const docParam = searchParams.get("doc")
+    if (docParam) {
+      const n = Number(docParam)
+      if (!Number.isNaN(n)) setSelectedId(n)
+    }
+  }, [searchParams])
 
   /* ---- 目录树写操作（落 API 后 reload） ---- */
   const onCreate = (parentId: number | null, type: KbDocType) => {
@@ -137,6 +150,9 @@ export default function KnowledgeSpaceDetailPage() {
         )}
         {role && <Badge variant="outline" className={ROLE_META[role].className}>{ROLE_META[role].label}</Badge>}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setSearchOpen(true)}>
+            <Search className="size-3.5" /> 搜索
+          </Button>
           <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setMemberOpen(true)}>
             <Users className="size-3.5" /> 成员 {space.memberCount ? `(${space.memberCount})` : ""}
           </Button>
@@ -176,8 +192,14 @@ export default function KnowledgeSpaceDetailPage() {
         </div>
       </Card>
 
+      {/* 相关文档（§9.2）：跟随选中文档 */}
+      <ErrorBoundary label="kb-related">
+        <RelatedDocs docId={selectedId} />
+      </ErrorBoundary>
+
       <MemberDialog open={memberOpen} onOpenChange={setMemberOpen} spaceId={id} canManage={manageable} onChanged={load} />
       <SpaceDialog open={settingsOpen} onOpenChange={setSettingsOpen} space={space} onSaved={() => load()} />
+      <KbSearchDialog open={searchOpen} onOpenChange={setSearchOpen} spaceId={id} spaceName={space.name} />
     </div>
   )
 }

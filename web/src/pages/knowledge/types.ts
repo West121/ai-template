@@ -93,6 +93,38 @@ export interface KbDocDetail extends KbDoc {
   tags: KbTag[]
 }
 
+/* ---------------- 批2：检索 / 推荐（§9） ---------------- */
+
+/** 命中方式：语义(vector) / 全文(fulltext) / 混合(hybrid) */
+export type KbMatchedBy = "vector" | "fulltext" | "hybrid"
+
+/** 混合检索命中项（POST /api/kb/search） */
+export interface SearchHit {
+  docId: number
+  title: string
+  spaceId: number
+  spaceName: string
+  /** 含 <mark>…</mark> 高亮（渲染前须 sanitize） */
+  snippet: string
+  score: number
+  matchedBy: KbMatchedBy
+}
+
+/** 相关推荐项（GET /api/kb/docs/{id}/related） */
+export interface RelatedDoc {
+  docId: number
+  title: string
+  spaceId: number
+  spaceName: string
+  score: number
+}
+
+export const MATCHED_BY_META: Record<KbMatchedBy, { label: string; className: string }> = {
+  vector: { label: "语义", className: "border-violet-500/40 text-violet-600 dark:text-violet-400" },
+  fulltext: { label: "全文", className: "border-sky-500/40 text-sky-600 dark:text-sky-400" },
+  hybrid: { label: "混合", className: "border-emerald-500/40 text-emerald-600 dark:text-emerald-400" },
+}
+
 /** 权限判定上下文（当前用户），offline=演示放开 */
 export interface KbUserCtx {
   userId: number | null

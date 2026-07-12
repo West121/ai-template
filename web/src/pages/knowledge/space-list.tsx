@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { FileText, Plus, Users } from "lucide-react"
+import { FileText, Plus, Search, Users } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { fetchSpaces } from "./mock"
 import { KbDemoBanner } from "./kb-ui"
+import { KbSearchDialog } from "./kb-search"
 import { SpaceDialog } from "./space-dialog"
 import { VISIBILITY_META, type KbSpace } from "./types"
 
@@ -22,6 +23,7 @@ export default function KnowledgeSpaceListPage() {
   const [loading, setLoading] = useState(true)
   const [demo, setDemo] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -41,9 +43,14 @@ export default function KnowledgeSpaceListPage() {
         title="知识库"
         description="企业知识空间：建库、分权、沉淀文档。"
         actions={
-          <Button size="sm" className="gap-1.5" onClick={() => setDialogOpen(true)}>
-            <Plus className="size-4" /> 新建空间
-          </Button>
+          <>
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setSearchOpen(true)}>
+              <Search className="size-4" /> 搜索
+            </Button>
+            <Button size="sm" className="gap-1.5" onClick={() => setDialogOpen(true)}>
+              <Plus className="size-4" /> 新建空间
+            </Button>
+          </>
         }
       />
       {demo && <KbDemoBanner />}
@@ -101,6 +108,7 @@ export default function KnowledgeSpaceListPage() {
         )}
       </ErrorBoundary>
       <SpaceDialog open={dialogOpen} onOpenChange={setDialogOpen} onSaved={() => load()} />
+      <KbSearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
     </div>
   )
 }

@@ -152,10 +152,13 @@ export type AiCard =
 
 /** V2 批C 引用溯源（TextPart citations[]）：FEATURE 类可走 Registry 导航 */
 export interface AiCitation {
-  sourceType: "FEATURE" | "RAG_DOC" | (string & {})
+  sourceType: "FEATURE" | "RAG_DOC" | "KB_DOC" | (string & {})
   sourceId: string
   title: string
   version?: string
+  /** KB_DOC（§9.3）：所属知识空间。后端可能给 {id,name} / 名称 / id（对账点，前端容错取 id） */
+  space?: { id?: number; name?: string } | string | number | null
+  spaceId?: number
 }
 
 /* ============================ 附件 / 模型（§11 增强批） ============================ */
