@@ -69,6 +69,8 @@ public class GongwenService {
     private static final String SEND_KEY = "gw_send";
     private static final String RECV_KEY = "gw_recv";
     private static final String BIZ_PREFIX = "GW:";
+    /** 起始事件节点 id（gw_send/gw_recv 均以 start 为 startEvent id，见 V21 designerJson）。 */
+    private static final String NODE_START = "start";
 
     private final DocumentRepository documentRepository;
     private final DocOpinionRepository opinionRepository;
@@ -138,7 +140,7 @@ public class GongwenService {
         d.setStatus(Document.STATUS_REVIEWING);
         documentRepository.save(d);
 
-        recordOpinion(d.getId(), "draft", ctx, "拟稿提交", DocOpinion.DECISION_APPROVE);
+        recordOpinion(d.getId(), "draft", NODE_START, ctx, "拟稿提交", DocOpinion.DECISION_APPROVE);
         return detail(d.getId());
     }
 
@@ -179,7 +181,7 @@ public class GongwenService {
         d.setStatus(Document.STATUS_ASSIGNING);
         documentRepository.save(d);
 
-        recordOpinion(d.getId(), "register", ctx, "收文登记", DocOpinion.DECISION_APPROVE);
+        recordOpinion(d.getId(), "register", NODE_START, ctx, "收文登记", DocOpinion.DECISION_APPROVE);
         return detail(d.getId());
     }
 
@@ -205,7 +207,8 @@ public class GongwenService {
         UserContext ctx = SecuritySupport.currentUser();
         String decision = StringUtils.hasText(req.decision())
                 ? req.decision().toUpperCase() : DocOpinion.DECISION_APPROVE;
-        recordOpinion(id, key, ctx, req.opinion(), decision);
+        // nodeId = 当前任务 taskDefinitionKey（= 流程图节点 id），与审批同口径
+        recordOpinion(id, key, key, ctx, req.opinion(), decision);
 
         switch (decision) {
             case DocOpinion.DECISION_REJECT -> {
@@ -254,7 +257,8 @@ public class GongwenService {
             throw new BusinessException(400, "该公文当前不在用印环节");
         }
         UserContext ctx = SecuritySupport.currentUser();
-        recordOpinion(id, "seal", ctx, req != null ? req.opinion() : null, DocOpinion.DECISION_APPROVE);
+        recordOpinion(id, "seal", task.getTaskDefinitionKey(), ctx,
+                req != null ? req.opinion() : null, DocOpinion.DECISION_APPROVE);
         d.setSealStatus(Document.SEAL_SEALED);
         d.setSealedBy(SecuritySupport.displayName(ctx));
         d.setSealedAt(LocalDateTime.now());
@@ -286,8 +290,8 @@ public class GongwenService {
             c.setStatus(DocCirculation.STATUS_PENDING);
             circulationRepository.save(c);
         }
-        recordOpinion(id, "circulate", ctx, "发起传阅 " + req.readers().size() + " 人",
-                DocOpinion.DECISION_APPROVE);
+        recordOpinion(id, "circulate", task.getTaskDefinitionKey(), ctx,
+                "发起传阅 " + req.readers().size() + " 人", DocOpinion.DECISION_APPROVE);
         d.setStatus(Document.STATUS_CIRCULATING);
         documentRepository.save(d);
         taskService.complete(task.getId());
@@ -322,7 +326,9 @@ public class GongwenService {
             throw new BusinessException(400, "该公文当前无待办环节，无需催办");
         }
         UserContext ctx = SecuritySupport.currentUser();
-        recordOpinion(id, "urge", ctx, "催办：请尽快办理「" + task.getName() + "」", "URGE");
+        // 催办记录被催办的当前节点 id（decision=URGE，前端不计入节点办理人）
+        recordOpinion(id, "urge", task.getTaskDefinitionKey(), ctx,
+                "催办：请尽快办理「" + task.getName() + "」", "URGE");
         Long assignee = parseLong(task.getAssignee());
         if (assignee != null) {
             notifyBestEffort(assignee, "催办：" + d.getTitle(),
@@ -371,8 +377,8 @@ public class GongwenService {
 
         List<DocDetailResponse.TimelineItem> timeline = opinionRepository
                 .findByDocumentIdOrderByIdAsc(id).stream()
-                .map(o -> new DocDetailResponse.TimelineItem(o.getId(), o.getTaskKey(), o.getUserId(),
-                        o.getUserName(), o.getOpinion(), o.getDecision(), o.getCreatedAt()))
+                .map(o -> new DocDetailResponse.TimelineItem(o.getId(), o.getTaskKey(), o.getNodeId(),
+                        o.getUserId(), o.getUserName(), o.getOpinion(), o.getDecision(), o.getCreatedAt()))
                 .toList();
         List<DocDetailResponse.Circulation> circulations = circulationRepository
                 .findByDocumentIdOrderByIdAsc(id).stream()
@@ -585,11 +591,17 @@ public class GongwenService {
         return tasks.isEmpty() ? null : tasks.get(0);
     }
 
-    private void recordOpinion(Long documentId, String taskKey, UserContext ctx,
+    /**
+     * 留痕一条办文意见。nodeId = 该意见所属流程节点 id（= Flowable 当前任务 taskDefinitionKey
+     * = 流程图节点 activity id，与审批 wf_operation.node_id 同口径），供前端流程图逐节点回填。
+     * 起始事件（拟稿/登记）传 {@link #NODE_START}；非流程动作可传 null。
+     */
+    private void recordOpinion(Long documentId, String taskKey, String nodeId, UserContext ctx,
                                String opinion, String decision) {
         DocOpinion o = new DocOpinion();
         o.setDocumentId(documentId);
         o.setTaskKey(taskKey);
+        o.setNodeId(nodeId);
         o.setUserId(ctx.getUserId());
         o.setUserName(SecuritySupport.displayName(ctx));
         o.setOpinion(opinion);

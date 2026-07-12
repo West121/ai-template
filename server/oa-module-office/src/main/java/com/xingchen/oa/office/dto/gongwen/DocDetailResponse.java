@@ -55,8 +55,11 @@ public record DocDetailResponse(
     public record CurrentTask(String taskId, String taskKey, String taskName, String assignee) {
     }
 
-    /** 时间线项（办文意见）。 */
-    public record TimelineItem(Long id, String taskKey, Long userId, String userName,
+    /**
+     * 时间线项（办文意见）。nodeId = 办理节点 activity id（= 流程图节点 id，与 highlight 同口径），
+     * 供前端流程图（WorkflowFlowTrack）按 nodeId 逐节点回填办理信息；起始事件为 'start'，老数据可能为空。
+     */
+    public record TimelineItem(Long id, String taskKey, String nodeId, Long userId, String userName,
                                String opinion, String decision, LocalDateTime createdAt) {
     }
 

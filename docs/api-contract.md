@@ -53,6 +53,7 @@ RECEIVE status: TO_SIGN(待签收)/PROCESSING(办理中)/FINISHED(已办结)；S
 - POST `/send/draft` 【P:office:doc:send】{title*,docType?,issuingOrg?,mainRecipients?,ccRecipients?,secret?,urgency?,copyNo?,issuer?,annotation?,content?,attachments?(JSON:文件id/名列表),templateId?,numberRuleId?,needCountersign?} → 起 gw_send，status=REVIEWING，返回详情
 - POST `/recv/register` 【P:office:doc:recv】{title*,code?(来文字号),unit?(来文单位),docType?,secret?,urgency?,content?,needCirculate?} → 起 gw_recv，status=ASSIGNING
 - GET `/{id}` 详情：版式字段 + currentTask{taskId,taskKey,taskName,assignee} + timeline[办文意见] + circulations[传阅回执]
+  - timeline 项：`{id,taskKey,nodeId,userId,userName,opinion,decision,createdAt}`。`nodeId` = 办理节点 activity id（= 流程图/highlight 节点 id，与审批 wf_operation.node_id 同口径：办理时取当前 Flowable 任务 taskDefinitionKey；拟稿/登记=起始节点 `start`；催办记被催办节点 id）。前端 WorkflowFlowTrack 按 nodeId 逐节点回填办理信息；存量老数据可能为空（只高亮当前节点，不崩）。
 - POST `/{id}/opinion` {opinion?,decision?,targetUserId?} 办理当前节点（核稿/会签/签发/拟办/批办/承办/成文）；签发节点占号回写 code+ISSUED；节点权限服务层按环节校验（review→office:doc:review、issue/publish→office:doc:issue、拟办批办承办→office:doc:assign）
 - POST `/{id}/seal` 【P:office:doc:seal】{opinion?} 完成用印节点 → sealStatus=SEALED,status=SEALED
 - POST `/{id}/circulate` 【P:office:doc:assign】{readers:[{id,name}]} 完成传阅节点，生成传阅单，status=CIRCULATING

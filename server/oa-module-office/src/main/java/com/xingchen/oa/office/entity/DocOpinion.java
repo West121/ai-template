@@ -35,6 +35,14 @@ public class DocOpinion {
     @Column(name = "task_key", length = 32)
     private String taskKey;
 
+    /**
+     * 办理节点 id（= Flowable 当前任务 taskDefinitionKey = 钉钉/BPMN 节点 activity id），
+     * 与审批 wf_operation.node_id 同口径，供公文流程图逐节点回填办理信息。
+     * 起始事件（拟稿/登记）= 'start'；非流程节点（如催办）可为空。
+     */
+    @Column(name = "node_id", length = 64)
+    private String nodeId;
+
     @Column(name = "user_id")
     private Long userId;
 

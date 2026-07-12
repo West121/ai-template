@@ -317,6 +317,15 @@ check("办文时间线留痕(≥5 条意见)", (arch.body?.data?.timeline?.lengt
 // 办结/成文后流程结束：highlight.active 空、completed 覆盖全程(含 publish)
 const hlDone = arch.body?.data?.highlight
 check("成文后 highlight active 空 + completed 含 publish", !!hlDone && (hlDone.active?.length ?? 0) === 0 && hlDone.completed.includes("publish"), JSON.stringify(hlDone))
+// 办文意见 nodeId（V38）：每条带 nodeId 且对齐流程图节点 id（= highlight 节点集，前端 WorkflowFlowTrack 按 nodeId 逐节点回填）
+const sendTl = arch.body?.data?.timeline ?? []
+const sendNodeUniverse = new Set([...(hlDone?.completed ?? []), ...(hlDone?.active ?? [])])
+check("发文 timeline 每条带 nodeId 且对齐流程图节点(⊆ highlight 节点集)",
+  sendTl.length >= 5 && sendTl.every((o) => o.nodeId && sendNodeUniverse.has(o.nodeId)),
+  JSON.stringify(sendTl.map((o) => ({ tk: o.taskKey, n: o.nodeId }))))
+check("发文 拟稿意见 nodeId=start(起始节点)", sendTl.find((o) => o.taskKey === "draft")?.nodeId === "start", JSON.stringify(sendTl.find((o) => o.taskKey === "draft")))
+check("发文 核稿/签发/用印/成文意见 nodeId 命中 review/issue/seal/publish",
+  ["review", "issue", "seal", "publish"].every((n) => sendTl.some((o) => o.nodeId === n)), JSON.stringify(sendTl.map((o) => o.nodeId)))
 // 流程已结束的预测：path 空 + note
 const predDone = await call(admin.token, "POST", `/api/office/doc/${a.id}/predict`)
 check("办结后预测 path 空 + note(流程已结束)", (predDone.body?.data?.path?.length ?? -1) === 0 && !!predDone.body?.data?.note, JSON.stringify(predDone.body?.data))
@@ -368,6 +377,20 @@ const readr = await call(admin.token, "POST", `/api/office/doc/circulation/${cid
 check("传阅已阅回执(READ)", (readr.body?.data?.circulations ?? []).some((c) => c.id === cid && c.status === "READ"))
 const rfin = await call(admin.token, "POST", `/api/office/doc/${gwRid}/opinion`, { decision: "APPROVE", opinion: "办结" })
 check("收文办结(FINISHED,流程结束)", rfin.body?.data?.status === "FINISHED" && !rfin.body?.data?.currentTask)
+// 办文意见 nodeId（V38）：收文全链路每条对齐流程图节点 id
+const recvTl = rfin.body?.data?.timeline ?? []
+const recvHl = rfin.body?.data?.highlight
+const recvNodeUniverse = new Set([...(recvHl?.completed ?? []), ...(recvHl?.active ?? [])])
+check("收文 timeline 每条带 nodeId 且对齐流程图节点(⊆ highlight 节点集)",
+  recvTl.length >= 5 && recvTl.every((o) => o.nodeId && recvNodeUniverse.has(o.nodeId)),
+  JSON.stringify(recvTl.map((o) => ({ tk: o.taskKey, n: o.nodeId }))))
+check("收文 登记 nodeId=start + 拟办/批办/承办命中 propose/approve/handle",
+  recvTl.find((o) => o.taskKey === "register")?.nodeId === "start" &&
+    ["propose", "approve", "handle"].every((n) => recvTl.some((o) => o.nodeId === n)),
+  JSON.stringify(recvTl.map((o) => ({ tk: o.taskKey, n: o.nodeId }))))
+check("收文 催办意见 nodeId=当前被催办节点 circulate(decision=URGE)",
+  recvTl.some((o) => o.decision === "URGE" && o.nodeId === "circulate"),
+  JSON.stringify(recvTl.filter((o) => o.decision === "URGE")))
 const rarch = await call(admin.token, "POST", `/api/office/doc/${gwRid}/archive`, { category: "收文" })
 check("收文归档(ARCHIVED)", rarch.body?.data?.status === "ARCHIVED" && !!rarch.body?.data?.archiveNo)
 
