@@ -23,6 +23,7 @@ import { DocEditor } from "./doc-editor"
 import { RelatedDocs } from "./related-docs"
 import { MemberDialog } from "./member-dialog"
 import { SpaceDialog } from "./space-dialog"
+import { SpaceIcon } from "./space-icon"
 import { ROLE_META, VISIBILITY_META, type KbDocType, type KbSpace, type KbTreeNode } from "./types"
 
 export default function KnowledgeSpaceDetailPage() {
@@ -141,7 +142,7 @@ export default function KnowledgeSpaceDetailPage() {
         <Button variant="ghost" size="icon" className="size-8 shrink-0" aria-label="返回" onClick={() => navigate("/knowledge")}>
           <ArrowLeft className="size-4.5" />
         </Button>
-        <span className="text-xl">{space.icon || "📁"}</span>
+        <SpaceIcon icon={space.icon} size="size-5" emojiClassName="text-xl" />
         <h1 className="truncate text-base font-semibold">{space.name}</h1>
         {VISIBILITY_META[space.visibility] && (
           <Badge variant="outline" className={VISIBILITY_META[space.visibility].className}>

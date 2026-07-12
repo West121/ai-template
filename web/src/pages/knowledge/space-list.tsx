@@ -16,6 +16,7 @@ import { KbDemoBanner } from "./kb-ui"
 import { KbSearchDialog } from "./kb-search"
 import { KbStatsOverview } from "./kb-stats"
 import { SpaceDialog } from "./space-dialog"
+import { SpaceIcon } from "./space-icon"
 import { VISIBILITY_META, type KbSpace } from "./types"
 
 export default function KnowledgeSpaceListPage() {
@@ -91,7 +92,9 @@ export default function KnowledgeSpaceListPage() {
                 <Card className="h-full transition-shadow hover:shadow-md">
                   <CardContent className="space-y-3 p-4">
                     <div className="flex items-start gap-3">
-                      <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-muted text-2xl">{s.icon || "📁"}</div>
+                      <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-muted text-2xl text-muted-foreground">
+                        <SpaceIcon icon={s.icon} size="size-6" />
+                      </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <h3 className="truncate font-semibold">{s.name}</h3>
