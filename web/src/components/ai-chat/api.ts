@@ -816,7 +816,8 @@ export async function sendChatStream(req: ChatSendRequest, h: ChatStreamHandlers
     })
     h.onStarted?.()
     for (const msg of res.messages) h.onAssistantMessage?.(msg)
-    return { sessionId: res.sessionId, demo: false, mode: "fallback" }
+    // 后端 sessionId 是 Long → 归一为字符串,与 SSE 路径一致(否则回退路径会话复用类型不一致)
+    return { sessionId: res.sessionId != null ? String(res.sessionId) : undefined, demo: false, mode: "fallback" }
   } catch (err) {
     if (err instanceof NetworkError || (err instanceof ApiError && err.code === 404)) {
       // ---- 3) SSE mock ----

@@ -123,8 +123,10 @@ export function parseAiEvent(frame: SseFrame): AiSseEvent | null {
     const type = (typeof obj.type === "string" ? obj.type : frame.event) ?? ""
     if (!type) return null
     return {
-      sessionId: typeof obj.sessionId === "string" ? obj.sessionId : undefined,
-      messageId: typeof obj.messageId === "string" ? obj.messageId : undefined,
+      // 后端 sessionId/messageId 是 Long(数字)——必须归一为字符串,否则前端会话复用断裂
+      // (曾致每条消息都当新会话发送,短期记忆完全失效:AI 说"这是新对话的开始")。
+      sessionId: obj.sessionId != null ? String(obj.sessionId) : undefined,
+      messageId: obj.messageId != null ? String(obj.messageId) : undefined,
       sequence: typeof obj.sequence === "number" ? obj.sequence : undefined,
       type,
       timestamp: typeof obj.timestamp === "string" ? obj.timestamp : undefined,

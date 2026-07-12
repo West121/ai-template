@@ -377,3 +377,19 @@ describe("confirm 状态机 V2 增量", () => {
     expect(confirmReducer(executing, { type: "FAILURE", expired: true }).state).toBe("expired")
   })
 })
+
+describe("parseAiEvent sessionId 归一(记忆失效回归)", () => {
+  it("后端数字 sessionId/messageId → 归一为字符串(否则会话不复用,记忆全断)", () => {
+    const evt = parseAiEvent({ event: "", data: JSON.stringify({ type: "message.started", sessionId: 437, messageId: 1024, sequence: 1 }) })
+    expect(evt).not.toBeNull()
+    expect(evt!.sessionId).toBe("437")
+    expect(evt!.messageId).toBe("1024")
+    expect(typeof evt!.sessionId).toBe("string")
+  })
+  it("字符串 sessionId 原样保留;缺失为 undefined", () => {
+    const a = parseAiEvent({ event: "", data: JSON.stringify({ type: "x", sessionId: "abc" }) })
+    expect(a!.sessionId).toBe("abc")
+    const b = parseAiEvent({ event: "", data: JSON.stringify({ type: "x" }) })
+    expect(b!.sessionId).toBeUndefined()
+  })
+})
