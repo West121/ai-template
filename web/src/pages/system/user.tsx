@@ -23,6 +23,7 @@ import {
   Plus,
   Trash2,
   UserCog,
+  UserMinus,
   X,
 } from "lucide-react"
 import { useForm } from "react-hook-form"
@@ -34,6 +35,7 @@ import { Modal } from "@/components/modal"
 import { Drawer } from "@/components/drawer"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { DataDimensionAuthz } from "@/components/system/data-dimension-authz"
+import { ResignWizard } from "@/components/system/resign-wizard"
 import { DataTable, indexColumn } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { RecordPicker, RecordPickerField, type RecordPickerColumn } from "@/components/record-picker"
@@ -122,6 +124,8 @@ interface UserRow extends Record<string, unknown> {
   avatar?: string
   remark?: string
   enabled: boolean
+  /** 在职状态：ACTIVE=在职、RESIGNED=已离职（缺省视为在职） */
+  status?: "ACTIVE" | "RESIGNED"
   createdAt?: string
   primaryDeptName?: string
   primaryPostName?: string
@@ -339,6 +343,8 @@ export default function UserPage() {
   // 重置成功后展示后端返回的一次性随机新密码（供管理员转交用户）
   const [resetResult, setResetResult] = useState<{ name: string; password: string } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null)
+  // 离职交接向导目标（在职用户点「离职」打开三步向导）
+  const [resignTarget, setResignTarget] = useState<UserRow | null>(null)
 
   // 批量操作目标（保留选中行原始数据 + 清空选中的回调）
   const [moveDeptTarget, setMoveDeptTarget] = useState<{ rows: UserRow[]; clear: () => void } | null>(null)
@@ -726,7 +732,11 @@ export default function UserPage() {
 
   // 状态派生字段：advancedFilter 的 select 条件按中文值求值
   const tableRows = useMemo<UserTableRow[]>(
-    () => (data?.list ?? []).map((row) => ({ ...row, enabledText: row.enabled ? "启用" : "停用" })),
+    () =>
+      (data?.list ?? [])
+        .map((row) => ({ ...row, enabledText: row.enabled ? "启用" : "停用" }))
+        // 已离职用户默认排在最后（用户仍可点列头改变排序）
+        .sort((a, b) => (a.status === "RESIGNED" ? 1 : 0) - (b.status === "RESIGNED" ? 1 : 0)),
     [data],
   )
 
@@ -747,7 +757,17 @@ export default function UserPage() {
         accessorKey: "name",
         meta: { title: "姓名", filterType: "text" },
         header: ({ column }) => <DataTableColumnHeader column={column} title="姓名" />,
-        cell: ({ row }) => <span className="font-medium">{row.original.name}</span>,
+        cell: ({ row }) =>
+          row.original.status === "RESIGNED" ? (
+            <span className="flex items-center gap-1.5">
+              <span className="font-medium text-muted-foreground line-through">{row.original.name}</span>
+              <Badge variant="outline" className="border-muted-foreground/30 text-muted-foreground">
+                已离职
+              </Badge>
+            </span>
+          ) : (
+            <span className="font-medium">{row.original.name}</span>
+          ),
       },
       {
         accessorKey: "empNo",
@@ -837,6 +857,12 @@ export default function UserPage() {
               </DropdownMenuItem>
               <DropdownMenuItem disabled={!canEdit} onClick={() => setResetTarget(row.original)}>
                 <KeyRound className="size-3.5" /> 重置密码
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!canEdit || row.original.status === "RESIGNED"}
+                onClick={() => setResignTarget(row.original)}
+              >
+                <UserMinus className="size-3.5" /> 离职
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -1819,6 +1845,20 @@ export default function UserPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* 离职交接向导（DP2）：选继任者 → 逐项交接 → 执行；重装局部 ErrorBoundary 防坏数据白屏 */}
+      <ErrorBoundary label="resign-wizard">
+        <ResignWizard
+          open={!!resignTarget}
+          onOpenChange={(o) => !o && setResignTarget(null)}
+          user={resignTarget ? { id: resignTarget.id, name: resignTarget.name } : { id: 0, name: "" }}
+          users={tableRows}
+          onDone={() => {
+            setResignTarget(null)
+            reload()
+          }}
+        />
+      </ErrorBoundary>
 
       {/* 重置密码确认 */}
       <Dialog open={!!resetTarget} onOpenChange={(open) => !open && setResetTarget(null)}>
