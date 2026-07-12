@@ -1332,6 +1332,62 @@ const P_PREDICT = await mkProc(`p3predict_${TS}`, [
   const bt = await findTodo(lisi.token, tBig); if (bt) await call(lisi.token, "POST", `/api/wf/tasks/${bt.taskId}/approve`, {})
 }
 
+// --- 流程预测「完整链路」增强（磐石 2026-07-12）：从头到尾 done/current/future + canReject/rejectTo + 并签 multiMode ---
+{
+  const P_CHAIN = await mkProc(`p3chain_${TS}`, [
+    { id: "start", type: "start", name: "发起" },
+    approvalNode("mgr", "经理审批", MANAGER, "ALL"),      // 会签 ALL
+    approvalNode("director", "总监审批", LISI, "ANY"),     // 或签 ANY
+  ])
+  const t = `预测完整链路-${TS}`
+  const inst = await startInst(P_CHAIN, t)
+  const byId = (p, id) => (p?.path ?? []).find((n) => n.nodeId === id)
+  // 进行中：完整链路含已走过的 start(done) + 当前 mgr(current) + 后续 director(future)
+  const p1 = (await call(zhangsan.token, "POST", `/api/wf/instances/${inst.id}/predict`)).body?.data
+  check("p3 完整链路:进行中含已走过 start(status=done)",
+    byId(p1, "start")?.status === "done", JSON.stringify((p1?.path ?? []).map((n) => [n.nodeId, n.status])))
+  check("p3 完整链路:进行中当前节点 mgr(status=current)",
+    byId(p1, "mgr")?.status === "current", JSON.stringify(byId(p1, "mgr")))
+  check("p3 完整链路:进行中后续节点 director(status=future)",
+    byId(p1, "director")?.status === "future", JSON.stringify(byId(p1, "director")))
+  check("p3 完整链路:审批节点 canReject=true 且 rejectTo 非空(回发起人兜底)",
+    byId(p1, "mgr")?.canReject === true && !!byId(p1, "mgr")?.rejectTo?.name,
+    JSON.stringify(byId(p1, "mgr")?.rejectTo))
+  check("p3 完整链路:并签 multiMode 透传(mgr=ALL 会签 / director=ANY 或签)",
+    byId(p1, "mgr")?.multiMode === "ALL" && byId(p1, "director")?.multiMode === "ANY",
+    JSON.stringify([byId(p1, "mgr")?.multiMode, byId(p1, "director")?.multiMode]))
+  // 走完流程 → 已办结实例完整链路非空且全 done
+  const mt = await findTodo(manager.token, t); if (mt) await call(manager.token, "POST", `/api/wf/tasks/${mt.taskId}/approve`, {})
+  const dt = await findTodo(lisi.token, t); if (dt) await call(lisi.token, "POST", `/api/wf/tasks/${dt.taskId}/approve`, {})
+  const p2 = (await call(zhangsan.token, "POST", `/api/wf/instances/${inst.id}/predict`)).body?.data
+  check("p3 完整链路:已办结实例非空且全 done(不再返回空)",
+    (p2?.path ?? []).length > 0 && (p2?.path ?? []).every((n) => n.status === "done"),
+    JSON.stringify((p2?.path ?? []).map((n) => [n.nodeId, n.status])))
+}
+
+// --- 流程预测:并行网关 parallelGroup（多路都纳入,同组一个 id）---
+{
+  const P_PAR = await mkProc(`p3par_${TS}`, [
+    approvalNode("m1", "初审", MANAGER),
+    { id: "par", type: "parallel", name: "并行会审", branches: [
+      { id: "b1", name: "分支1", steps: [approvalNode("pa", "并行A", LISI)] },
+      { id: "b2", name: "分支2", steps: [approvalNode("pb", "并行B", ZS)] },
+    ] },
+  ])
+  const t = `预测并行-${TS}`
+  const inst = await startInst(P_PAR, t)
+  const p = (await call(zhangsan.token, "POST", `/api/wf/instances/${inst.id}/predict`)).body?.data
+  const pa = (p?.path ?? []).find((n) => n.nodeId === "pa")
+  const pb = (p?.path ?? []).find((n) => n.nodeId === "pb")
+  check("p3 完整链路:并行网关多路都纳入且标同组 parallelGroup",
+    !!pa && !!pb && pa.parallelGroup === "par" && pb.parallelGroup === "par",
+    JSON.stringify([pa?.parallelGroup, pb?.parallelGroup]))
+  // 清理:走完 m1 + 两并行分支
+  const m1t = await findTodo(manager.token, t); if (m1t) await call(manager.token, "POST", `/api/wf/tasks/${m1t.taskId}/approve`, {})
+  const pat = await findTodo(lisi.token, t); if (pat) await call(lisi.token, "POST", `/api/wf/tasks/${pat.taskId}/approve`, {})
+  const pbt = await findTodo(zhangsan.token, t); if (pbt) await call(zhangsan.token, "POST", `/api/wf/tasks/${pbt.taskId}/approve`, {})
+}
+
 // --- 离线预测覆盖新版二维来源：FUTURE 节点 {kind:ACCOUNT, source:FORM_FIELD} 必须能离线预测出人 ---
 // 回归防护：resolveOffline 曾只按 type/kind 分发，新形状 {kind:ACCOUNT, source:FORM_FIELD} 会落到
 // ACCOUNT/refs 分支预测为空（老形状 {kind:FORM_FIELD} 才从 values 读取）。修复后 resolveOffline 与

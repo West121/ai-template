@@ -45,10 +45,39 @@ public final class P3Requests {
     public record AdhocTaskRequest(String name, List<OrgRef> assignees, Boolean requireAll) {
     }
 
-    /** 流程预测响应：后续将经过节点 + 预计审批人。 */
+    /**
+     * 流程预测响应：从流程起点到终点的<b>完整链路</b>（已完成 + 当前 + 后续）+ 预计办理人。
+     *
+     * <p>{@code path} 每个节点带 {@link PredictNode#status()}（done/current/future）；已结束实例全链路皆 done。
+     */
     public record PredictResponse(List<PredictNode> path, String note) {
 
-        public record PredictNode(String nodeId, String nodeName, String type, List<AssigneeName> assignees) {
+        /**
+         * 预测链路节点。
+         *
+         * @param nodeId        节点 id（designer 图节点 id，= Flowable activityId）
+         * @param nodeName      节点名
+         * @param type          节点类型（向后兼容既有字段：approval/cc/condition/parallel/start/...）
+         * @param assignees     预计办理人（approval 节点按规则离线求值；其余空）
+         * @param status        链路状态：{@code done}(已完成) / {@code current}(当前活动) / {@code future}(后续)
+         * @param nodeType      节点类型（= type，如实输出，供前端按类型渲染图标；与 type 同值，保留兼容）
+         * @param canReject     审批节点是否可驳回（流程级未关闭 reject + 节点 allowedOps 未排除 reject）
+         * @param rejectTo      驳回回退目标 {nodeId,name}（回发起人 / 回上一审批节点），不可驳回时 null
+         * @param multiMode     approval 并签模式：ALL(会签)/ANY(或签)/SEQUENCE(顺序)/VOTE(票签)，非审批节点 null
+         * @param parallelGroup 并行网关分组 id（同组前端并排渲染），非并行分支内节点 null
+         */
+        public record PredictNode(String nodeId, String nodeName, String type, List<AssigneeName> assignees,
+                                  String status, String nodeType, boolean canReject, RejectTarget rejectTo,
+                                  String multiMode, String parallelGroup) {
+
+            /** 向后兼容便捷构造：仅基础字段（status=future、无驳回/并签/并行信息）。 */
+            public PredictNode(String nodeId, String nodeName, String type, List<AssigneeName> assignees) {
+                this(nodeId, nodeName, type, assignees, "future", type, false, null, null, null);
+            }
+        }
+
+        /** 驳回回退目标节点（回发起人 = 起点节点；回上一审批节点 = 前一 approval）。 */
+        public record RejectTarget(String nodeId, String name) {
         }
 
         public record AssigneeName(String name) {

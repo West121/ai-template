@@ -246,6 +246,10 @@ public class AiApprovalInsightService {
                 return chain;
             }
             for (PredictNode node : pred.path()) {
+                // predict 现返回完整链路（含已完成），此处仅取「后续流转」（当前+未来），排除 done 保持既有语义。
+                if ("done".equals(node.status())) {
+                    continue;
+                }
                 Map<String, Object> step = new LinkedHashMap<>();
                 step.put("stepName", nz(node.nodeName()));
                 step.put("assigneeName", joinAssignees(node.assignees()));

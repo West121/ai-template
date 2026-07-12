@@ -21,6 +21,7 @@ import com.xingchen.oa.workflow.dto.P2Requests.JumpRequest;
 import com.xingchen.oa.workflow.dto.P3Requests.PredictResponse;
 import com.xingchen.oa.workflow.dto.P3Requests.PredictResponse.AssigneeName;
 import com.xingchen.oa.workflow.dto.P3Requests.PredictResponse.PredictNode;
+import com.xingchen.oa.workflow.dto.P3Requests.PredictResponse.RejectTarget;
 import com.xingchen.oa.workflow.dto.P3Requests.ResurrectPreview;
 import com.xingchen.oa.workflow.dto.P3Requests.ResurrectPreview.AssigneeRef;
 import com.xingchen.oa.workflow.dto.P3Requests.ResurrectRequest;
@@ -922,54 +923,106 @@ public class InstanceService {
                 || !StringUtils.hasText(def.getDesignerJson())) {
             return new PredictResponse(List.of(), "该流程为 BPMN 专业模式，暂不支持静态预测");
         }
+        String pid = inst.getProcInstId();
+        boolean ended;
+        try {
+            ended = runtimeEnded(pid);
+        } catch (Exception e) {
+            ended = true;
+        }
         // 求值上下文：表单快照 + 运行时流程变量（审批可能已改表单）
         Map<String, Object> values = new LinkedHashMap<>(parseMap(inst.getFormDataJson()));
-        String pid = inst.getProcInstId();
-        try {
-            if (!runtimeEnded(pid)) {
+        if (!ended) {
+            try {
                 runtimeService.getVariables(pid).forEach((k, v) -> {
                     if (v instanceof Number || v instanceof String || v instanceof Boolean) {
                         values.put(k, v);
                     }
                 });
+            } catch (Exception ignored) {
+                // 变量读取失败退化为仅表单值
             }
-        } catch (Exception ignored) {
-            // 变量读取失败退化为仅表单值
         }
-        // 已完成节点集合（预测只输出后续未完成节点）
+        // 完整链路：已完成节点(done) + 当前活动节点(current)，其余 future。活动 id == designer 节点 id。
         Set<String> completed = new LinkedHashSet<>();
+        Set<String> active = new LinkedHashSet<>();
         try {
             for (HistoricActivityInstance a : historyService.createHistoricActivityInstanceQuery()
                     .processInstanceId(pid).list()) {
-                if (a.getActivityId() != null && a.getEndTime() != null) {
+                if (a.getActivityId() == null) {
+                    continue;
+                }
+                if (a.getEndTime() != null) {
                     completed.add(a.getActivityId());
+                } else {
+                    active.add(a.getActivityId());
+                }
+            }
+            if (!ended) {
+                for (Execution ex : runtimeService.createExecutionQuery().processInstanceId(pid).list()) {
+                    if (ex.getActivityId() != null) {
+                        active.add(ex.getActivityId());
+                    }
                 }
             }
         } catch (Exception ignored) {
-            // 历史读取失败则不排除已完成节点
+            // 历史/运行时读取失败：退化为全 future（仍输出完整链路结构）
         }
+
+        // 驳回策略（用户方案）：流程级 flowConfig.operations.reject 关闭 → 全链不可驳回；
+        // flowConfig.rejectStrategy=PREV → 回上一审批节点；否则回发起人（与引擎默认 target=START 一致）。
+        JsonNode flowConfig = flowConfigOf(def);
+        boolean rejectDisabled = !operationEnabled(def, "reject");
+        boolean rejectToPrev = rejectStrategyPrev(flowConfig);
 
         List<PredictNode> path = new ArrayList<>();
         try {
             JsonNode root = objectMapper.readTree(def.getDesignerJson());
-            predictWalk(root.path("nodes"), values, inst, completed, path);
+            PredictState state = new PredictState();
+            state.startTarget = startTargetOf(root.path("nodes"), inst); // 回发起人兜底目标
+            predictWalk(root.path("nodes"), values, inst, completed, active, path,
+                    rejectDisabled, rejectToPrev, state, null);
         } catch (Exception e) {
             log.warn("流程预测失败 id={}: {}", id, e.getMessage());
         }
-        String note = path.isEmpty() ? "无后续节点或流程已结束" : null;
+        String note;
+        if (path.isEmpty()) {
+            note = "无可预测节点";
+        } else if (ended) {
+            note = "流程已结束，展示完整链路";
+        } else {
+            note = null;
+        }
         return new PredictResponse(path, note);
     }
 
+    /** 预测游走状态：驳回目标（回发起人兜底 + 上一审批节点）。 */
+    private static final class PredictState {
+        private RejectTarget startTarget;
+        private RejectTarget lastApproval;
+    }
+
+    /**
+     * 完整链路 DFS：从流程起点走全程，<b>不跳过已完成节点</b>。
+     * completed→done、active→current、其余→future；条件网关走命中分支（正向主链路），
+     * 并行网关多路都纳入并标同一 parallelGroup，审批节点标 canReject/rejectTo/multiMode + 全部办理人。
+     */
     private void predictWalk(JsonNode nodes, Map<String, Object> values, WfInstanceExt inst,
-                             Set<String> completed, List<PredictNode> path) {
+                             Set<String> completed, Set<String> active, List<PredictNode> path,
+                             boolean rejectDisabled, boolean rejectToPrev, PredictState state,
+                             String parallelGroup) {
         if (nodes == null || !nodes.isArray()) {
             return;
         }
         for (JsonNode node : nodes) {
             String type = node.path("type").asString("");
             String nid = node.path("id").asString("");
-            if ("condition".equals(type)) {
-                boolean inclusive = "INCLUSIVE".equalsIgnoreCase(node.path("gatewayType").asString("EXCLUSIVE"));
+            String nodeName = node.path("name").asString(type);
+
+            // 条件/包容网关：按当前表单值走命中分支（正向主链路）；全不命中走 default 兜底。
+            if ("condition".equals(type) || "inclusive".equals(type)) {
+                boolean inclusive = "INCLUSIVE".equalsIgnoreCase(node.path("gatewayType").asString("EXCLUSIVE"))
+                        || "inclusive".equals(type);
                 JsonNode branches = node.path("branches");
                 JsonNode defaultBranch = null;
                 boolean anyMatched = false;
@@ -982,30 +1035,113 @@ public class InstanceService {
                             branch.path("logic").asString("AND"), values);
                     if (match) {
                         anyMatched = true;
-                        predictWalk(branch.path("steps"), values, inst, completed, path);
+                        predictWalk(branch.path("steps"), values, inst, completed, active, path,
+                                rejectDisabled, rejectToPrev, state, parallelGroup);
                         if (!inclusive) {
                             break; // 排它：命中首个即止
                         }
                     }
                 }
                 if (!anyMatched && defaultBranch != null) {
-                    predictWalk(defaultBranch.path("steps"), values, inst, completed, path);
+                    predictWalk(defaultBranch.path("steps"), values, inst, completed, active, path,
+                            rejectDisabled, rejectToPrev, state, parallelGroup);
                 }
                 continue;
             }
-            if (completed.contains(nid)) {
-                continue; // 已走过的节点不纳入后续预测
+
+            // 并行网关：各分支都纳入完整链路，标同一 parallelGroup（同组前端并排）。
+            if ("parallel".equals(type)) {
+                String group = StringUtils.hasText(nid) ? nid : ("parallel_" + path.size());
+                for (JsonNode branch : node.path("branches")) {
+                    predictWalk(branch.path("steps"), values, inst, completed, active, path,
+                            rejectDisabled, rejectToPrev, state, group);
+                }
+                continue;
             }
-            String nodeName = node.path("name").asString(type);
+
+            // 普通节点（approval/cc/start/autoApprove/subprocess/ai/timer/...）：如实纳入链路。
+            String status = statusOf(nid, type, completed, active);
             List<AssigneeName> assignees = List.of();
+            String multiMode = null;
+            boolean canReject = false;
+            RejectTarget rejectTo = null;
             if ("approval".equals(type)) {
                 List<Long> ids = assigneeResolver.resolveOffline(node.path("assigneeRules"),
                         inst.getInitiatorId(), inst.getInitiatorDeptId(), values);
                 assignees = ids.stream()
                         .map(uid -> new AssigneeName(nameResolver.name(uid))).toList();
+                multiMode = node.path("multiMode").asString("ANY");
+                // 只标可驳回点：流程级未关闭 reject + 节点 allowedOps 未显式排除 reject（缺省 true）。
+                canReject = !rejectDisabled && nodeAllowsReject(node);
+                if (canReject) {
+                    rejectTo = (rejectToPrev && state.lastApproval != null)
+                            ? state.lastApproval : state.startTarget; // PREV 无上一审批 → 兜底发起人
+                }
             }
-            path.add(new PredictNode(nid, nodeName, type, assignees));
+            path.add(new PredictNode(nid, nodeName, type, assignees, status, type,
+                    canReject, rejectTo, multiMode, parallelGroup));
+            if ("approval".equals(type)) {
+                state.lastApproval = new RejectTarget(nid, nodeName); // 后续审批节点 PREV 驳回目标
+            }
         }
+    }
+
+    /** 链路状态：起点恒 done；活动集合 current；历史完成 done；其余 future。 */
+    private String statusOf(String nid, String type, Set<String> completed, Set<String> active) {
+        if ("start".equals(type)) {
+            return "done"; // 起点一旦发起即已走过
+        }
+        if (active.contains(nid)) {
+            return "current";
+        }
+        if (completed.contains(nid)) {
+            return "done";
+        }
+        return "future";
+    }
+
+    /** 审批节点是否允许驳回：allowedOps 显式白名单则须含 reject；未配置 → 默认 true。 */
+    private boolean nodeAllowsReject(JsonNode node) {
+        JsonNode ops = node.path("allowedOps");
+        if (ops != null && ops.isArray() && ops.size() > 0) {
+            for (JsonNode op : ops) {
+                if ("reject".equals(op.asString(""))) {
+                    return true;
+                }
+            }
+            return false; // 配了白名单但不含 reject → 不可驳回
+        }
+        return true;
+    }
+
+    /** 驳回策略是否「回上一审批节点」：flowConfig.rejectStrategy / operations.rejectTo = PREV。缺省回发起人。 */
+    private boolean rejectStrategyPrev(JsonNode flowConfig) {
+        if (flowConfig == null) {
+            return false;
+        }
+        String s = flowConfig.path("rejectStrategy").asString(
+                flowConfig.path("operations").path("rejectTo").asString(""));
+        return "PREV".equalsIgnoreCase(s) || "PREV_NODE".equalsIgnoreCase(s)
+                || "上一节点".equals(s) || "上一审批".equals(s) || "上一审批节点".equals(s);
+    }
+
+    /** 回发起人的驳回目标：优先图中 start 节点 {id,name}，无则 {"start", 发起人名/"发起人"}。 */
+    private RejectTarget startTargetOf(JsonNode rootNodes, WfInstanceExt inst) {
+        String sid = "start";
+        String sname = null;
+        if (rootNodes != null && rootNodes.isArray()) {
+            for (JsonNode n : rootNodes) {
+                if ("start".equals(n.path("type").asString(""))) {
+                    sid = n.path("id").asString("start");
+                    sname = n.path("name").asString(null);
+                    break;
+                }
+            }
+        }
+        if (!StringUtils.hasText(sname)) {
+            sname = StringUtils.hasText(inst.getInitiatorName()) ? inst.getInitiatorName() : "发起人";
+        }
+        return new RejectTarget(sid, sname);
     }
 
     /* ---------------- P3：唤醒（已结束实例按快照重建并定位重审） ---------------- */
