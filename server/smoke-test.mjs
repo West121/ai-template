@@ -348,7 +348,10 @@ const b = await draftAndIssue("冒烟测试发文B：工作安排")
 check("文号防跳(第二次序号 = 第一次 +1)", seqOf(b.issued?.data?.code) === seqOf(a.issued?.data?.code) + 1, `${a.issued?.data?.code} → ${b.issued?.data?.code}`)
 
 // —— 台账连续可查 ——
-const ledger = await call(admin.token, "GET", `/api/office/doc/ledger?year=${new Date().getFullYear()}&pageNum=1&pageSize=100`)
+// 先取 total 再一次全取:OA_SMOKE_KEEP=1 累积超 100 行时,本轮新号会落到首页(pageSize=100)之外,
+// 靠 pageSize=首页固定值会误报失败。按 total 全取,不管累积多少都能命中本轮占号(测试健壮性)。
+const lgTotal = (await call(admin.token, "GET", `/api/office/doc/ledger?year=${new Date().getFullYear()}&pageNum=1&pageSize=1`)).body?.data?.total ?? 0
+const ledger = await call(admin.token, "GET", `/api/office/doc/ledger?year=${new Date().getFullYear()}&pageNum=1&pageSize=${Math.max(100, lgTotal)}`)
 const lrows = ledger.body?.data?.list ?? []
 check("文号台账含本轮两条占号记录(OCCUPIED)", [a.issued?.data?.code, b.issued?.data?.code].every((n) => lrows.some((r) => r.docNumber === n && r.status === "OCCUPIED")), String(lrows.length))
 const lseqs = lrows.map((r) => seqOf(r.docNumber)).filter((n) => !Number.isNaN(n))
