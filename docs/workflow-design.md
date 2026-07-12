@@ -448,3 +448,24 @@ interface WfInstanceDetailP3 extends WfInstanceDetail {
 - 流程设计器(dingtalk)：子流程/定时/触发/AI 节点类型 + 属性配置面板。
 - 节点表单权限：详情表单快照按 nodeFormPerms 渲染。
 - 印章管理页(可选，或并入监控/治理)。
+
+## 唤醒重新选人/选角色（用户需求 2026-07-12）
+
+现状：`POST /api/wf/instances/{id}/resurrect {nodeId,comment}` 按快照重建实例并定位到 nodeId，
+该节点办理人由**节点 assignee 规则重新解析**（AssigneeResolver），无法手动指定。
+
+增强目标：唤醒时可**重新选人/角色**，弹窗**默认带出该节点"上次的办理人"**，可改。
+
+### 契约
+- `ResurrectRequest` 增可选 `assignees`（复用 2D assignee 模型 AssigneeKind×AssigneeSource，与加签/转办同源：
+  用户/角色/部门/岗位/发起人相关…）。传了 → 覆盖该 nodeId 的办理人为所选；不传 → 维持现状（按规则解析，向后兼容）。
+- 默认值来源：新增 `GET /api/wf/instances/{id}/resurrect-preview?nodeId=` → 返回该 nodeId 在**原（已结束）
+  实例的历史办理人**（act_hi_taskinst / wf_operation 该节点最后一次 assignee，多人取全部）+ 节点名 +
+  节点规则默认解析结果（兜底）。前端拿它回填选人框。
+- 覆盖实现：重建定位后，对 nodeId 生成的任务用 override 覆盖 assignee（复用转办/指派同一落地路径），
+  留痕 operation。
+
+### 分工
+- 磐石：ResurrectRequest.assignees + resurrect-preview 端点 + override 落地；smoke（默认回填=原办理人 /
+  override 生效换人 / 换角色解析 / 不传维持规则解析 向后兼容 / 越权 403 仍拦）。
+- 疾风：唤醒弹窗——选节点 → 拉 resurrect-preview 默认回填办理人 → 可改人/角色（复用现有 assignee 选择器组件）→ 提交带 assignees。
