@@ -76,7 +76,7 @@ describe("FlowViewer 渲染冒烟", () => {
       <FlowViewer
         model={model}
         highlight={{ completed: ["start"], active: ["n1"] }}
-        predict={{ nodeIds: ["n2", "end"], assignees: { n2: ["王经理"] } }}
+        predict={{ nodes: [{ nodeId: "n2", status: "future", assignees: ["王经理"] }, { nodeId: "end", status: "future", assignees: [] }] }}
       />,
     )
     expect(screen.getByRole("button", { name: "播放预测" })).toBeTruthy()

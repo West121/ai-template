@@ -159,6 +159,28 @@ export function reachableAncestors(edges: Array<{ source: string; target: string
 }
 
 /**
+ * 正向可达集合（含种子本身）：从 seed 节点沿边**正向 BFS**。
+ * 用于预测态"后续路径"：从当前活动节点正向走到后续/结束节点（配合 reachableAncestors 分出 done 段与 future 段）。
+ */
+export function forwardReachable(edges: Array<{ source: string; target: string }>, seedIds: string[]): Set<string> {
+  const fwd = new Map<string, string[]>()
+  for (const e of edges) {
+    const a = fwd.get(e.source)
+    if (a) a.push(e.target)
+    else fwd.set(e.source, [e.target])
+  }
+  const out = new Set<string>()
+  const st = [...seedIds]
+  while (st.length) {
+    const n = st.pop() as string
+    if (out.has(n)) continue
+    out.add(n)
+    for (const t of fwd.get(n) ?? []) if (!out.has(t)) st.push(t)
+  }
+  return out
+}
+
+/**
  * 回放某一步的边推导：走到 steps[i] 时，模型里 steps[i-1]→steps[i] 的边即"正在走过"的流光边。
  * 返回该边 id（无则 null）。
  */

@@ -21,7 +21,7 @@ import {
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
 import { useEffect, useMemo, useState } from "react"
-import { CheckCircle2, Circle, Clock, GitBranch, Loader2, Play, Sparkles, Square, UserPlus, UserRound, XCircle } from "lucide-react"
+import { CheckCircle2, Circle, Clock, GitBranch, Loader2, Play, RotateCcw, Sparkles, Square, Users, UserPlus, UserRound, XCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { isDarkMode } from "@/lib/theme"
 import { useAppStore } from "@/stores/app-store"
@@ -31,7 +31,7 @@ import { LEAF_STYLE } from "./designer/dingtalk/canvas"
 import { buildFlow } from "./designer/dingtalk/layout"
 import type { ApprovalStep, Branch, CcStep, LeafStep, StepNode } from "./designer/dingtalk/model"
 import { deserializeDingtalk, isBackendDesignerJson } from "./designer/dingtalk/serialize"
-import { reachableAncestors, type NodeRuntimeInfo, type NodeRuntimeStatus } from "./designer/flow/runtime-info"
+import { forwardReachable, reachableAncestors, type NodeRuntimeInfo, type NodeRuntimeStatus } from "./designer/flow/runtime-info"
 import type { FlowPredict } from "./designer/flow/flow-viewer"
 
 /** 运行时节点状态（highlight 的 completed/active + timeline 派生的 rejected/addSign） */
@@ -136,18 +136,23 @@ function NodeHandles() {
 }
 
 function StartNode({ data }: NodeProps) {
-  const { info } = data as { info?: NodeRuntimeInfo }
+  const { info, status } = data as { info?: NodeRuntimeInfo; status?: TrackStatus }
   return (
-    <div className={cn("w-64 overflow-hidden rounded-lg border bg-card shadow-sm", statusRing(info?.status))}>
+    <div className={cn("w-64 overflow-hidden rounded-lg border bg-card shadow-sm", statusRing(status ?? info?.status))}>
       <div className="flex h-8 items-center gap-1.5 bg-slate-500 px-3 text-xs font-medium text-white">
         <UserRound className="size-3.5" /> <span className="flex-1">发起人</span>
-        <StatusBadge status={info?.status} />
+        <StatusBadge status={status ?? info?.status} />
       </div>
       <div className="px-3 py-2.5 text-sm text-muted-foreground">发起申请</div>
       <HandledInfo info={info} />
       <NodeHandles />
     </div>
   )
+}
+
+/** 并签模式标签 */
+function multiModeLabel(m: string): string {
+  return m === "ALL" ? "会签·全部" : m === "ANY" ? "或签·一人" : m === "SEQUENCE" ? "顺序审批" : m === "VOTE" ? "投票" : m
 }
 
 function EndNode() {
@@ -184,15 +189,20 @@ function stepSummary(step: LeafStep) {
 }
 
 function StepNodeCard({ data }: NodeProps) {
-  const { step, status, info, predicted, predictNames } = data as {
+  const { step, status, info, predicted, predictNames, canReject, rejectToName, multiMode, parallelGroup } = data as {
     step: LeafStep
     status: TrackStatus
     info?: NodeRuntimeInfo
     predicted?: boolean
     predictNames?: string[]
+    canReject?: boolean
+    rejectToName?: string
+    multiMode?: string
+    parallelGroup?: string
   }
   const style = LEAF_STYLE[step.kind]
   const Icon = style.icon
+  const showMeta = step.kind === "approval" && (multiMode || canReject || parallelGroup)
   return (
     <div
       className={cn(
@@ -213,6 +223,27 @@ function StepNodeCard({ data }: NodeProps) {
           <StatusBadge status={status} />
         )}
       </div>
+      {/* ④ 并签模式 + ② 可驳回标记 + ③ 并行分组（预测态标注） */}
+      {showMeta && (
+        <div className="flex flex-wrap items-center gap-1 border-b bg-muted/20 px-3 py-1 text-[10px]">
+          {multiMode && (
+            <span className="flex items-center gap-0.5 rounded bg-slate-500/10 px-1 py-0.5 text-slate-600 dark:text-slate-300">
+              <Users className="size-2.5" /> {multiModeLabel(multiMode)}
+            </span>
+          )}
+          {parallelGroup && (
+            <span className="rounded bg-indigo-500/10 px-1 py-0.5 text-indigo-600 dark:text-indigo-300">并行</span>
+          )}
+          {canReject && (
+            <span
+              className="flex items-center gap-0.5 rounded bg-amber-500/10 px-1 py-0.5 text-amber-600 dark:text-amber-400"
+              title={`驳回将回到 ${rejectToName ?? "发起人"}`}
+            >
+              <RotateCcw className="size-2.5" /> 可驳回
+            </span>
+          )}
+        </div>
+      )}
       <div className="px-3 py-2.5">{stepSummary(step)}</div>
       {/* ③ 预测节点/当前活动节点的预计办理人（无实际办理记录时补充展示） */}
       {predictNames && predictNames.length > 0 && (
@@ -320,7 +351,7 @@ export function DingtalkTrack({
   }, [replay, replaySeq.length])
   useEffect(() => {
     if (predictPlay === null || !predict) return
-    if (predictPlay >= predict.nodeIds.length || prefersReducedMotion()) {
+    if (predictPlay >= predict.nodes.length || prefersReducedMotion()) {
       setPredictPlay(null)
       return
     }
@@ -334,24 +365,25 @@ export function DingtalkTrack({
   }
   const startPredictPlay = () => {
     setReplay(null)
-    if (!predict || predict.nodeIds.length === 0 || prefersReducedMotion()) return
+    if (!predict || predict.nodes.length === 0 || prefersReducedMotion()) return
     setPredictPlay(0)
   }
 
-  // 预测可见节点（静态=全量虚线；播放中=逐个揭示）
-  const predictedVisible = useMemo(() => {
-    if (!predict) return [] as string[]
-    const n = predictPlay === null ? predict.nodeIds.length : Math.min(predictPlay + 1, predict.nodeIds.length)
-    return predict.nodeIds.slice(0, n)
-  }, [predict, predictPlay])
+  // 预测链路顺序 + 已揭示集合（静态=全量；播放中=逐个揭示，结构节点随其步骤节点揭示自然点亮）
+  const predictOrder = useMemo(() => predict?.nodes.map((n) => n.nodeId) ?? [], [predict])
+  const predictRevealed = useMemo(() => {
+    if (!predict) return new Set<string>()
+    const n = predictPlay === null ? predictOrder.length : Math.min(predictPlay + 1, predictOrder.length)
+    return new Set(predictOrder.slice(0, n))
+  }, [predict, predictPlay, predictOrder])
 
   const { nodes, edges, empty } = useMemo(() => {
     const parsedSteps = parseSteps(designerJson)
     if (parsedSteps.length === 0) return { nodes: [] as Node[], edges: [] as Edge[], empty: true }
     const completed = new Set(highlight?.completed ?? [])
     const active = new Set(highlight?.active ?? [])
-    const predictedSet = new Set(predictedVisible)
     const replaying = replay !== null
+    const predicting = !replaying && !!predict
     const walked = replaying ? new Set(replaySeq.slice(0, replay)) : null
     const activeStep = replaying && replay < replaySeq.length ? replaySeq[replay] : null
 
@@ -366,54 +398,86 @@ export function DingtalkTrack({
 
     const built = buildFlow(parsedSteps)
 
-    /**
-     * 常态「走过路径」判定：钉钉盒式图有 dot/branch/merge 结构节点，其 id 不在 highlight（BPMN 口径），
-     * 故不能按节点/边 id 直接命中。改为**从已到达节点反向回溯祖先**：
-     *  - 已到达锚点 = statusOf 非空（completed/active/rejected/addSign）的（步骤）节点；
-     *  - 反向 BFS：条件分支只回溯命中支（有已到达子节点的那支），未命中支不入集 → 保持灰；
-     *  - 并行汇聚：合并节点的多个父支都会被回溯到 → 都高亮（符合并行都走过）。
-     * 走过的边 = source 与 target 均在 walkedNodes。
-     */
+    /* ---------------- 常态「走过路径」（反向回溯祖先；条件分支只亮命中支，并行汇聚都亮） ---------------- */
     let walkedNodes = new Set<string>()
     const activeNodeSet = new Set<string>()
-    let predictedEff = new Set<string>()
-    if (!replaying) {
+    if (!replaying && !predicting) {
       const reached = built.nodes.filter((n) => statusOf(n.id)).map((n) => n.id)
       walkedNodes = reachableAncestors(built.edges, reached)
       for (const n of built.nodes) if (statusOf(n.id) === "active") activeNodeSet.add(n.id)
-      // 预测节点排除已到达（/predict 常把当前 active 节点当"下一步"返回，避免与进行中态冲突）
-      predictedEff = new Set([...predictedSet].filter((id) => !statusOf(id)))
+    }
+
+    /* ---------------- 预测态「完整链路」（done+current+future，从头到尾） ---------------- */
+    const predictById = new Map((predict?.nodes ?? []).map((n) => [n.nodeId, n]))
+    let doneChain = new Set<string>()
+    let futureFwd = new Set<string>()
+    let currentPSet = new Set<string>()
+    if (predicting && predict) {
+      const seeds = predict.nodes.filter((n) => (n.status === "done" || n.status === "current") && predictRevealed.has(n.nodeId)).map((n) => n.nodeId)
+      currentPSet = new Set(predict.nodes.filter((n) => n.status === "current" && predictRevealed.has(n.nodeId)).map((n) => n.nodeId))
+      doneChain = reachableAncestors(built.edges, seeds) // done+current 段（含结构节点）
+      futureFwd = forwardReachable(built.edges, [...currentPSet]) // 当前节点正向 → 后续段
+    }
+
+    // 节点视觉态：predict态按链路状态（done绿/current进行中/future蓝虚线），否则回放/常态 statusOf
+    const nodeVisual = (id: string): { status: TrackStatus; predicted: boolean } => {
+      if (predicting) {
+        const pn = predictById.get(id)
+        if (pn && predictRevealed.has(id)) {
+          if (pn.status === "done") return { status: "completed", predicted: false }
+          if (pn.status === "current") return { status: "active", predicted: false }
+          return { status: undefined, predicted: true } // future
+        }
+        if (doneChain.has(id)) return { status: "completed", predicted: false } // 结构节点在 done 段
+        if (futureFwd.has(id) && !doneChain.has(id)) return { status: undefined, predicted: true } // 结构节点在 future 段
+        return { status: undefined, predicted: false }
+      }
+      return { status: statusOf(id), predicted: false }
     }
 
     const outNodes: Node[] = built.nodes.map((n) => {
-      // 蓝虚线环 + "预计"徽标：仅真·后续节点（predictedEff 已排除已到达，避免与进行中/已完成态冲突）
-      const predicted = !replaying && predictedEff.has(n.id)
-      // 预计办理人：预测路径上任意节点（含当前 active 节点，展示其预计办理人；active 节点尚无 timeline 办理记录）
-      const pNames = !replaying ? predict?.assignees?.[n.id] : undefined
+      const v = nodeVisual(n.id)
+      const pn = predicting ? predictById.get(n.id) : undefined
+      // 预计办理人：仅在该节点**无实际办理记录**时补充展示（done 节点已有 HandledInfo，不重复）
+      const hasHandled = (nodeInfo?.[n.id]?.assignees.length ?? 0) > 0
+      const pNames = pn && !hasHandled && pn.assignees.length ? pn.assignees : undefined
       // 回放中：仅已揭示（walked/active）节点显办理信息
       const showInfo = replaying ? walked?.has(n.id) || n.id === activeStep : true
       return {
         ...n,
         data: {
           ...n.data,
-          status: statusOf(n.id),
+          status: v.status,
           info: showInfo ? nodeInfo?.[n.id] : undefined,
-          predicted,
-          predictNames: pNames && pNames.length ? pNames : undefined,
+          predicted: v.predicted,
+          predictNames: pNames,
+          // 预测态：审批节点可驳回标记 + 并签模式 + 并行分组（供卡片标注）
+          canReject: pn && pn.canReject && pn.rejectTo ? true : false,
+          rejectToName: pn?.rejectTo?.name,
+          multiMode: pn?.multiMode ?? undefined,
+          parallelGroup: pn?.parallelGroup ?? undefined,
         },
       }
     })
 
-    // 边着色：回放（流光/已走绿）> 预测（蓝虚线）> 常态走过路径（绿/进行中主题色 + 虚线流动）> 灰
+    // 边着色：回放 > 预测完整链路（done绿/进current主题色 + future蓝虚线）> 常态走过路径 > 灰
     const edgeDeco = (src: string, tgt: string): { style: React.CSSProperties; className?: string } => {
       if (replaying) {
         if (replay > 0 && src === replaySeq[replay - 1]) return { style: { stroke: "var(--primary)", strokeWidth: 2.5 }, className: "wf-dt-edge-flow" }
         if (walked?.has(src)) return { style: { stroke: "#10b981", strokeWidth: 2 } }
         return { style: { stroke: "var(--border)", strokeWidth: 1.5 } }
       }
-      if (predictedEff.has(tgt) || predictedEff.has(src)) return { style: { stroke: "#60a5fa", strokeWidth: 2, strokeDasharray: "6 4" } }
+      if (predicting) {
+        if (doneChain.has(src) && doneChain.has(tgt)) {
+          const stroke = currentPSet.has(tgt) ? "var(--primary)" : "#10b981"
+          return { style: { stroke, strokeWidth: 2.5, strokeDasharray: "6 4" }, className: "wf-dt-edge-loop" }
+        }
+        const sFut = futureFwd.has(src) && !doneChain.has(src)
+        const tFut = futureFwd.has(tgt) && !doneChain.has(tgt)
+        if ((doneChain.has(src) || sFut) && tFut) return { style: { stroke: "#60a5fa", strokeWidth: 2, strokeDasharray: "6 4" } }
+        return { style: { stroke: "var(--border)", strokeWidth: 1.5 } }
+      }
       if (walkedNodes.has(src) && walkedNodes.has(tgt)) {
-        // 进入进行中节点的入线用主题色（呼应 active），其余已完成路径绿；均虚线持续流动
         const stroke = activeNodeSet.has(tgt) ? "var(--primary)" : "#10b981"
         return { style: { stroke, strokeWidth: 2.5, strokeDasharray: "6 4" }, className: "wf-dt-edge-loop" }
       }
@@ -424,7 +488,7 @@ export function DingtalkTrack({
       return { id: e.id, source: e.source, target: e.target, type: "smoothstep", style, className }
     })
     return { nodes: outNodes, edges: outEdges, empty: false }
-  }, [designerJson, highlight, nodeInfo, replay, replaySeq, predict, predictedVisible])
+  }, [designerJson, highlight, nodeInfo, replay, replaySeq, predict, predictRevealed])
 
   if (empty) {
     return (
@@ -446,9 +510,9 @@ export function DingtalkTrack({
       <span className="flex items-center gap-1.5">
         <span className="size-2.5 animate-pulse rounded-sm border-2 border-primary" /> 进行中
       </span>
-      {(predict || predictedVisible.length > 0) && (
+      {predict && (
         <span className="flex items-center gap-1.5">
-          <span className="size-2.5 rounded-sm border-2 border-dashed border-blue-400" /> 预测
+          <span className="size-2.5 rounded-sm border-2 border-dashed border-blue-400" /> 预测后续
         </span>
       )}
     </div>

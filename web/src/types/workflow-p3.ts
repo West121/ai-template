@@ -61,7 +61,7 @@ export interface WfInstanceDetailP3 extends WfInstanceDetail {
 
 /* ================= P3-A 运行时端点入参 / 返回 ================= */
 
-/** 预测路径上的一个节点 */
+/** 预测路径上的一个节点（完整链路，含 done/current/future 状态与并签/驳回元信息） */
 export interface WfPredictNode {
   nodeId: string
   nodeName: string
@@ -69,12 +69,24 @@ export interface WfPredictNode {
   type: string
   /** 预计审批人（静态试算，可能为空） */
   assignees?: { name: string }[]
+  /** done=已完成 / current=当前活动 / future=后续（已结束实例全 done） */
+  status?: "done" | "current" | "future"
+  /** =type，兼容保留 */
+  nodeType?: string
+  /** 审批节点可驳回（流程级 reject 未关且节点未排除，缺省 true） */
+  canReject?: boolean
+  /** 驳回回退目标（rejectStrategy=PREV→上一审批，否则回发起人） */
+  rejectTo?: { nodeId: string; name: string } | null
+  /** 并签模式（非审批 null）：ALL 会签 / ANY 或签 / SEQUENCE 顺序 / VOTE 投票 */
+  multiMode?: "ALL" | "ANY" | "SEQUENCE" | "VOTE" | (string & {}) | null
+  /** 并行网关分组 id（同组前端并排） */
+  parallelGroup?: string | null
 }
 
-/** POST instances/{id}/predict 返回：静态演算后续将经过节点 + 预计审批人 */
+/** POST instances/{id}/predict 返回：完整链路（done+current+future）+ 预计审批人 */
 export interface WfPredictResult {
   path: WfPredictNode[]
-  /** 演算说明（如分支按当前表单值命中、审批人试算局限等） */
+  /** 演算说明（如"流程已结束，展示完整链路"） */
   note?: string
 }
 

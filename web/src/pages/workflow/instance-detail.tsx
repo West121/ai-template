@@ -70,8 +70,10 @@ interface BpmnImportResult {
 const modelCache = new Map<string, ProcessModel>()
 
 /**
- * 流程预测取数（钉钉 + BPMN 两跟踪图复用）：POST /predict → 归一 FlowPredict（后续节点 + 预计办理人）。
- * 注意：后端 /predict 仅钉钉模式支持；BPMN 返回"暂不支持"，故仅在 predictable 时暴露入口。
+ * 流程预测取数（钉钉 + BPMN 两跟踪图复用）：POST /predict → 归一 FlowPredict **完整链路**
+ * （done/current/future + 并签/驳回元信息）。后端 /predict 仅钉钉模式非空；BPMN 返回空 path。
+ * 运行中实例 predictable=true；**已办结实例 predictable=false 但 /predict 仍返回全 done 链路**——
+ * 故入口对"可预测 或 已结束"均开放（见 DingtalkTrackHost 的 canPredict）。
  */
 function useTrackPredict(instanceId: number) {
   const [predict, setPredict] = useState<FlowPredict | null>(null)
@@ -80,10 +82,19 @@ function useTrackPredict(instanceId: number) {
     setPredictLoading(true)
     try {
       const res = await api<WfPredictResult>(`/api/wf/instances/${instanceId}/predict`, { method: "POST" })
-      const path = res.path ?? []
+      const path = (res.path ?? []).filter((p) => p.nodeId)
       setPredict({
-        nodeIds: path.map((p) => p.nodeId).filter(Boolean),
-        assignees: Object.fromEntries(path.filter((p) => p.nodeId).map((p) => [p.nodeId, (p.assignees ?? []).map((a) => a.name)])),
+        note: res.note,
+        nodes: path.map((p) => ({
+          nodeId: p.nodeId,
+          nodeName: p.nodeName,
+          status: p.status === "done" || p.status === "current" || p.status === "future" ? p.status : "future",
+          assignees: (p.assignees ?? []).map((a) => a.name).filter(Boolean),
+          canReject: p.canReject,
+          rejectTo: p.rejectTo ?? null,
+          multiMode: p.multiMode ?? null,
+          parallelGroup: p.parallelGroup ?? null,
+        })),
       })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "预测失败")
@@ -103,14 +114,15 @@ function DingtalkTrackHost({
   nodeInfo,
   replaySteps,
   instanceId,
-  predictable,
+  canPredict,
 }: {
   designerJson: unknown
   highlight?: WfHighlight
   nodeInfo?: Record<string, NodeRuntimeInfo>
   replaySteps?: string[]
   instanceId: number
-  predictable?: boolean
+  /** 可看完整链路：运行中(predictable) 或 已办结（/predict 返回全 done） */
+  canPredict?: boolean
 }) {
   const { predict, predictLoading, runPredict } = useTrackPredict(instanceId)
   return (
@@ -121,7 +133,7 @@ function DingtalkTrackHost({
         nodeInfo={nodeInfo}
         replaySteps={replaySteps}
         predict={predict}
-        onRequestPredict={predictable ? () => void runPredict() : undefined}
+        onRequestPredict={canPredict ? () => void runPredict() : undefined}
         predictLoading={predictLoading}
       />
     </div>
@@ -470,6 +482,9 @@ export default function WorkflowInstanceDetailPage() {
     .join("、")
   // 流程图是否可渲染（DINGTALK 需 designerJson，BPMN/GRAPH 需 bpmnXml）——决定「流程图」Tab 可用性
   const hasFlow = detail.designerType === "DINGTALK" ? !!detail.designerJson : !!detail.bpmnXml
+  // 可看完整链路预测：运行中(predictable) 或 已办结（/predict 返回全 done 链路）
+  const canPredictChain =
+    !!detail.predictable || ["APPROVED", "REJECTED", "TERMINATED", "CANCELED", "CANCELLED"].includes(detail.bizStatus)
 
   /* ---------- 表单来源分流（设计文档 2.4）：CODE（registry 命中）→ HostedForm；ONLINE → FormRenderer ---------- */
   // 节点绑定的是本仓库手写 CODE 表单时，把 nodeFormPerms(tri-state) + 清单 required 合成 FieldPolicyMap 交 HostedForm。
@@ -666,7 +681,7 @@ export default function WorkflowInstanceDetailPage() {
                   nodeInfo={nodeRuntimeInfo}
                   replaySteps={replaySteps}
                   instanceId={detail.id}
-                  predictable={detail.predictable}
+                  canPredict={canPredictChain}
                 />
               ) : detail.bpmnXml ? (
                 <FlowTrack

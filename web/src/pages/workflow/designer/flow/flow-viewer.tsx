@@ -56,12 +56,30 @@ const VIEWER_CSS = `
 }
 `
 
-/** ③ 预测数据（已由父层拉取的 predict 结果归一） */
+/** ③ 预测链路节点（后端 /predict 完整链路：done+current+future） */
+export interface FlowPredictNode {
+  nodeId: string
+  nodeName?: string
+  /** done=已完成 / current=当前活动 / future=后续（已结束实例全 done） */
+  status: "done" | "current" | "future"
+  /** 预计办理人名 */
+  assignees: string[]
+  /** 审批节点可驳回（缺省 true） */
+  canReject?: boolean
+  /** 驳回回退目标 */
+  rejectTo?: { nodeId: string; name: string } | null
+  /** 并签模式（非审批 null）：ALL 会签/ANY 或签/SEQUENCE 顺序/VOTE 投票 */
+  multiMode?: "ALL" | "ANY" | "SEQUENCE" | "VOTE" | (string & {}) | null
+  /** 并行网关分组 id（同组并排） */
+  parallelGroup?: string | null
+}
+
+/** ③ 预测数据（父层拉取 /predict 归一）：完整链路（从头到尾按 status 着色） */
 export interface FlowPredict {
-  /** 后续预测节点 id（从当前节点起，按预测顺序） */
-  nodeIds: string[]
-  /** nodeId → 预计办理人名 */
-  assignees?: Record<string, string[]>
+  /** 完整链路（done→current→future，按顺序） */
+  nodes: FlowPredictNode[]
+  /** 演算说明（如"流程已结束，展示完整链路"） */
+  note?: string
 }
 
 export interface FlowViewerProps {
@@ -258,6 +276,13 @@ function FlowViewerInner({ model, highlight, nodeInfo, replaySteps, predict, onR
   const steps = useMemo(() => replaySteps ?? [], [replaySteps])
   const canReplay = steps.length >= 2
 
+  // 预测链路归一：FlowViewer（BPMN/GRAPH，次要）只叠加 future 节点为蓝虚线；done/current 由 highlight 驱动
+  const predictFutureIds = useMemo(() => predict?.nodes.filter((n) => n.status === "future").map((n) => n.nodeId) ?? [], [predict])
+  const predictAssignees = useMemo(
+    () => (predict ? Object.fromEntries(predict.nodes.map((n) => [n.nodeId, n.assignees])) : {}),
+    [predict],
+  )
+
   // 回放定时推进（reduce-motion 直接终态）
   useEffect(() => {
     if (replay === null) return
@@ -276,7 +301,7 @@ function FlowViewerInner({ model, highlight, nodeInfo, replaySteps, predict, onR
   // 预测播放定时推进
   useEffect(() => {
     if (predictPlay === null || !predict) return
-    if (predictPlay >= predict.nodeIds.length) {
+    if (predictPlay >= predictFutureIds.length) {
       setPredictPlay(null)
       return
     }
@@ -296,19 +321,18 @@ function FlowViewerInner({ model, highlight, nodeInfo, replaySteps, predict, onR
   }
   const startPredictPlay = () => {
     setReplay(null)
-    if (!predict || predict.nodeIds.length === 0) return
+    if (!predict || predictFutureIds.length === 0) return
     if (prefersReducedMotion()) return
     setPredictPlay(0)
   }
 
-  // 预测可见节点（静态=全量虚线；播放中=逐个揭示）
+  // 预测可见（future）节点（静态=全量虚线；播放中=逐个揭示）
   const predictedVisible = useMemo(() => {
     if (!predict) return [] as string[]
-    const count = predictPlay === null ? predict.nodeIds.length : Math.min(predictPlay + 1, predict.nodeIds.length)
-    return predict.nodeIds.slice(0, count)
-  }, [predict, predictPlay])
+    const count = predictPlay === null ? predictFutureIds.length : Math.min(predictPlay + 1, predictFutureIds.length)
+    return predictFutureIds.slice(0, count)
+  }, [predict, predictPlay, predictFutureIds])
   const predictedSet = useMemo(() => new Set(predictedVisible), [predictedVisible])
-  const predictAssignees = predict?.assignees ?? {}
 
   const { nodes, edges, infoMap } = useMemo(() => {
     const base = fromProcessModel(model)

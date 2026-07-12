@@ -2,7 +2,7 @@
  * 流程图预览增强 · 纯映射层用例（① 节点办理信息 / ② 回放序 / ③ 预测边）。
  */
 import { describe, expect, it } from "vitest"
-import { buildNodeInfo, buildReplaySteps, predictedEdgeIds, reachableAncestors, replayFlowEdgeId, stripHtml } from "./runtime-info"
+import { buildNodeInfo, buildReplaySteps, forwardReachable, predictedEdgeIds, reachableAncestors, replayFlowEdgeId, stripHtml } from "./runtime-info"
 import type { WfTimelineItem } from "@/types/workflow"
 
 const item = (o: Partial<WfTimelineItem>): WfTimelineItem => ({ action: "APPROVE", ...o })
@@ -107,6 +107,24 @@ describe("reachableAncestors（钉钉盒式图走过路径：条件分支只亮�
   })
   it("空种子 → 空集", () => {
     expect(reachableAncestors(edges, []).size).toBe(0)
+  })
+})
+
+describe("forwardReachable（预测态后续段：当前节点正向可达）", () => {
+  const edges = [
+    { source: "start", target: "mgr" },
+    { source: "mgr", target: "cond-split" },
+    { source: "cond-split", target: "b_gt3" },
+    { source: "b_gt3", target: "gm" },
+    { source: "gm", target: "cond-merge" },
+    { source: "cond-merge", target: "cc1" },
+    { source: "cc1", target: "end" },
+  ]
+  it("从当前 gm 正向 → 后续 cond-merge/cc1/end（含种子 gm）", () => {
+    expect([...forwardReachable(edges, ["gm"])].sort()).toEqual(["cc1", "cond-merge", "end", "gm"])
+  })
+  it("空种子 → 空集", () => {
+    expect(forwardReachable(edges, []).size).toBe(0)
   })
 })
 

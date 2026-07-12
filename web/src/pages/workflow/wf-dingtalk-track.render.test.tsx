@@ -78,17 +78,47 @@ describe("② 回放 / ③ 预测 已搬到钉钉视图（课程纠偏核心）"
     expect(screen.getByRole("button", { name: /预测运行/ })).toBeTruthy()
   })
 
-  it("有 predict 数据（真实 /predict：gm/cc1 + 预计办理人）→ 「播放预测」按钮 + 预计办理人 DOM", () => {
+  it("完整链路预测（真实 /predict：mgr done + gm current + cc1 future）→ 「播放预测」+ 预计办理人 + 可驳回/或签标注", () => {
     const { container } = render(
       <DingtalkTrack
         designerJson={LEAVE_TRACK_FIXTURE.designerJson}
         highlight={LEAVE_TRACK_FIXTURE.highlight}
         nodeInfo={nodeInfo}
-        predict={{ nodeIds: ["gm", "cc1"], assignees: { gm: ["系统管理员"] } }}
+        predict={{
+          nodes: [
+            { nodeId: "mgr", status: "done", assignees: ["王经理"], canReject: true, rejectTo: { nodeId: "start", name: "张三" }, multiMode: "ANY" },
+            { nodeId: "gm", status: "current", assignees: ["系统管理员"], canReject: true, rejectTo: { nodeId: "start", name: "张三" }, multiMode: "ANY" },
+            { nodeId: "cc1", status: "future", assignees: [], multiMode: null },
+          ],
+        }}
       />,
     )
     expect(screen.getByRole("button", { name: "播放预测" })).toBeTruthy()
-    // gm 是预测节点 → 显"预计 系统管理员"
+    // gm(current) 显预计办理人 + 或签 + 可驳回标注
     expect(container.innerHTML).toContain("预计 系统管理员")
+    expect(container.innerHTML).toContain("或签")
+    expect(container.innerHTML).toContain("可驳回")
+  })
+
+  it("已办结实例预测（全 done）→ 完整链路全绿、无预测蓝节点", () => {
+    // 造全 done 链路（含 cc1，days=2 走 mgr→cc1）
+    const { container } = render(
+      <DingtalkTrack
+        designerJson={LEAVE_TRACK_FIXTURE.designerJson}
+        highlight={LEAVE_TRACK_FIXTURE.highlight}
+        nodeInfo={nodeInfo}
+        predict={{
+          note: "流程已结束，展示完整链路",
+          nodes: [
+            { nodeId: "mgr", status: "done", assignees: ["王经理"], multiMode: "ANY", canReject: true, rejectTo: { nodeId: "start", name: "张三" } },
+            { nodeId: "cc1", status: "done", assignees: [] },
+          ],
+        }}
+      />,
+    )
+    // 全 done → 无"预计"蓝节点标（future 才有）
+    expect(container.innerHTML).not.toContain("预计")
+    // 仍展示或签/可驳回标注
+    expect(container.innerHTML).toContain("或签")
   })
 })
