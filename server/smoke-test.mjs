@@ -2488,6 +2488,32 @@ async function hlCompleted(token, iid) {
           res.end(completion({ role: "assistant", content: '{"steps":[{"title":"查询我的待办"},{"title":"汇总分析结果"}]}' }))
           return
         }
+        // 批E ⑦：编排草稿（结构化 OrchModel）——含非法分支（cron 非法 → 工具置 error 卡不建流）
+        if (lastUser.includes("编排草稿")) {
+          const bad = lastUser.includes("非法")
+          res.end(completion({ role: "assistant", content: JSON.stringify(bad
+            ? { name: "坏流", triggerType: "CRON", cron: "not a cron", eventSource: null, eventType: null, eventDefCode: null, nodes: [{ type: "notify", label: "通知" }] }
+            : { name: "每日审批汇总通知", triggerType: "CRON", cron: "0 0 8 * * *", eventSource: null, eventType: null, eventDefCode: null, nodes: [{ type: "report", label: "汇总昨日审批量" }, { type: "notify", label: "通知管理员" }] }) }))
+          return
+        }
+        // 批E ⑧-1：单据打印模板草稿（结构化 BdTemplateV2）——含非法块分支（block 类型非法 → error 卡不落库）
+        if (lastUser.includes("单据打印模板")) {
+          const bad = lastUser.includes("非法")
+          res.end(completion({ role: "assistant", content: JSON.stringify(bad
+            ? { title: "坏模板", blocks: [{ type: "nonsense_block", label: "坏块", text: null }] }
+            : { title: "车辆申请单", blocks: [{ type: "title", label: "车辆申请单", text: null }, { type: "infoTable", label: "申请信息", text: null }, { type: "approvalTable", label: "审批区", text: null }] }) }))
+          return
+        }
+        // 批E ⑧-2：表单字段草稿（结构化 widgets）
+        if (lastUser.includes("表单字段草稿")) {
+          res.end(completion({ role: "assistant", content: JSON.stringify({ name: "报销单", widgets: [{ type: "input", label: "报销人", key: "applicant" }, { type: "number", label: "金额", key: "amount" }, { type: "textarea", label: "事由", key: "reason" }] }) }))
+          return
+        }
+        // 批E ⑨：审批摘要（自由文本，≤3 行）
+        if (lastUser.includes("审批摘要")) {
+          res.end(completion({ role: "assistant", content: "申请人提交请假申请，共5天，事由明确。金额与部门历史一致，暂无明显异常。建议按流程审批。" }))
+          return
+        }
         // V2 批A：慢响应脚本（会话串行化 409 测试用——首条消息占住会话时插队）
         if (lastUser.includes("慢")) {
           setTimeout(() => res.end(completion({ role: "assistant", content: "慢回复完成。" })), 1500)
@@ -2495,7 +2521,12 @@ async function hlCompleted(token, iid) {
         }
         if (!hasTool) {
           let tool = null
-          if (lastUser.includes("伪造")) tool = { name: "hack_everything", arguments: "{}" }
+          // 批E ⑦⑧⑨：对话固化自动化 / 生成模板/表单草稿 / 待办摘要
+          if (lastUser.includes("自动化")) tool = { name: "orchestration_prepare_flow", arguments: JSON.stringify({ desc: lastUser.includes("非法") ? "非法定时自动化" : "每天早8点汇总昨日审批量并通知管理员", name: "每日审批汇总" }) }
+          else if (lastUser.includes("单据模板")) tool = { name: "bizdoc_prepare_template", arguments: JSON.stringify({ desc: lastUser.includes("非法") ? "非法块模板" : "车辆申请单打印模板", bindType: "FLOW", bindCode: "leave_approval", name: "车辆申请单" }) }
+          else if (lastUser.includes("表单")) tool = { name: "form_prepare_schema", arguments: JSON.stringify({ desc: "报销单表单：报销人金额事由", name: "报销单" }) }
+          else if (lastUser.includes("摘要")) tool = { name: "task_get_detail", arguments: JSON.stringify({ taskId: (lastUser.match(/任务(\S+)/)?.[1] ?? "x") }) }
+          else if (lastUser.includes("伪造")) tool = { name: "hack_everything", arguments: "{}" }
           else if (lastUser.includes("打开")) tool = { name: "open_function", arguments: '{"query":"请假"}' }
           else if (lastUser.includes("功能")) tool = { name: "list_functions", arguments: "{}" }
           else if (lastUser.includes("待办")) tool = { name: "query_todo", arguments: "{}" }
@@ -3653,6 +3684,113 @@ async function hlCompleted(token, iid) {
   // 当日缓存：连取两次，第二次必为缓存命中（cached=true；同进程当日缓存跨 run 保持，故不断言首取 false）
   const brief2 = await call(admin.token, "GET", "/api/ai/briefing")
   check("aiV2D briefing 当日缓存(再取 cached=true)", brief2.body?.data?.cached === true, JSON.stringify(brief2.body?.data?.cached))
+
+  /* ---- AI 助手 V2 批E（平台联动压轴）：⑦对话固化自动化 ⑧生成模板/表单草稿 ⑨审批摘要+风险 ⑩确认卡嵌预测 ---- */
+
+  // 批E 专用 LLM 凭据（最新 → 成为系统默认，供无轮次上下文的摘要端点内嵌调用命中 /ai/v1）
+  const eCred = await call(admin.token, "POST", "/api/orch/credentials", {
+    name: "冒烟批E LLM", type: "LLM", baseUrl: `${SINK}/ai/v1`, apiKey: "sk-e", model: "fake-ai",
+  })
+  const eCredId = eCred.body?.data?.id
+  check("aiV2E 批E LLM 凭据创建", eCred.body?.code === 0 && !!eCredId)
+
+  // ⑦ 对话固化成自动化：FlowDraftCard → 确认建 DRAFT 编排（不启用）
+  const flowChat = await call(admin.token, "POST", "/api/ai/chat", { message: "把这个固化成自动化", credentialId: eCredId })
+  const flowCard = (flowChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "flowDraft")
+  check("aiV2E ⑦ 产 FlowDraftCard(draftId+triggerDesc+nodes[type,label])",
+    !!flowCard?.draftId && !!flowCard.triggerDesc && Array.isArray(flowCard.nodes) &&
+      flowCard.nodes.length >= 1 && flowCard.nodes.every((n) => !!n.type && n.label !== undefined),
+    JSON.stringify(flowCard))
+  const eFlowCreate = await callH(admin.token, "POST", `/api/ai/flow-drafts/${flowCard?.draftId}/create`, {}, { "Idempotency-Key": `e_flow_${TS}` })
+  const eFlowCode = eFlowCreate.body?.data?.flowCode
+  check("aiV2E ⑦ 确认建 DRAFT 编排(enabled=false+flowCode+designerPath /automation/)",
+    eFlowCreate.body?.code === 0 && eFlowCreate.body?.data?.enabled === false && !!eFlowCode &&
+      (eFlowCreate.body?.data?.designerPath ?? "").includes("/automation/"),
+    JSON.stringify(eFlowCreate.body?.data))
+  const eFlowEnabled = psql(`SELECT enabled FROM orch_flow WHERE code = '${eFlowCode}'`)
+  check("aiV2E ⑦ DB orch_flow enabled=false 未发布(version=0)",
+    ["f", "false"].includes(eFlowEnabled.trim().toLowerCase()) &&
+      Number(psql(`SELECT version FROM orch_flow WHERE code = '${eFlowCode}'`)) === 0, `${eFlowEnabled}`)
+  const eFlowCreate2 = await callH(admin.token, "POST", `/api/ai/flow-drafts/${flowCard?.draftId}/create`, {}, { "Idempotency-Key": `e_flow_${TS}` })
+  check("aiV2E ⑦ 建流幂等重放(同 Idempotency-Key→同 flowCode)", eFlowCreate2.body?.code === 0 && eFlowCreate2.body?.data?.flowCode === eFlowCode, JSON.stringify(eFlowCreate2.body?.data?.flowCode))
+  // 坏草稿（非法 cron）→ error 卡，不产 flowDraft、不建流
+  const badFlowChat = await call(admin.token, "POST", "/api/ai/chat", { message: "生成一个非法自动化", credentialId: eCredId })
+  const badFlowErr = (badFlowChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "error")
+  const badFlowDraft = (badFlowChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "flowDraft")
+  check("aiV2E ⑦ 坏草稿(非法cron)→error卡不建流", !!badFlowErr && !badFlowDraft, JSON.stringify({ e: badFlowErr?.code, d: !!badFlowDraft }))
+
+  // ⑧-1 对话生成单据模板草稿 → 确认建 DRAFT 模板
+  const tplChat = await call(admin.token, "POST", "/api/ai/chat", { message: "帮我生成一个单据模板", credentialId: eCredId })
+  const tplCard = (tplChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "templateDraft")
+  check("aiV2E ⑧ 产 templateDraft 卡(draftId+name+blocks[type,label])",
+    !!tplCard?.draftId && !!tplCard.name && Array.isArray(tplCard.blocks) && tplCard.blocks.length >= 1 &&
+      tplCard.blocks.every((b) => !!b.type && b.label !== undefined),
+    JSON.stringify(tplCard))
+  const tplCreate = await callH(admin.token, "POST", `/api/ai/template-drafts/${tplCard?.draftId}/create`, {}, { "Idempotency-Key": `e_tpl_${TS}` })
+  check("aiV2E ⑧ 确认建 DRAFT 模板(tplId+designerPath /bizdoc/tpl/t/)",
+    tplCreate.body?.code === 0 && !!tplCreate.body?.data?.tplId && (tplCreate.body?.data?.designerPath ?? "").includes("/bizdoc/tpl/t/"),
+    JSON.stringify(tplCreate.body?.data))
+  const eTplStatus = psql(`SELECT status FROM oa_bizdoc_print_tpl WHERE id = ${Number(tplCreate.body?.data?.tplId)}`)
+  check("aiV2E ⑧ DB 模板 status=DRAFT(未发布)", eTplStatus.trim() === "DRAFT", eTplStatus)
+  // 非法 schema → error 卡，不落库
+  const badTplChat = await call(admin.token, "POST", "/api/ai/chat", { message: "生成一个非法单据模板", credentialId: eCredId })
+  const badTplErr = (badTplChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "error")
+  const badTplDraft = (badTplChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "templateDraft")
+  check("aiV2E ⑧ 非法模板 schema→error卡不落库", !!badTplErr && !badTplDraft, JSON.stringify({ e: badTplErr?.code, d: !!badTplDraft }))
+
+  // ⑧-2 对话生成表单草稿 → 确认建 DRAFT 表单定义
+  const formChat = await call(admin.token, "POST", "/api/ai/chat", { message: "帮我生成一个报销表单", credentialId: eCredId })
+  const eFormCard = (formChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "formDraft")
+  check("aiV2E ⑧ 产 formDraft 卡(draftId+name+fields[label,type])",
+    !!eFormCard?.draftId && !!eFormCard.name && Array.isArray(eFormCard.fields) && eFormCard.fields.length >= 1 &&
+      eFormCard.fields.every((f) => !!f.label && !!f.type),
+    JSON.stringify(eFormCard))
+  const formCreate = await callH(admin.token, "POST", `/api/ai/form-drafts/${eFormCard?.draftId}/create`, {}, { "Idempotency-Key": `e_form_${TS}` })
+  check("aiV2E ⑧ 确认建 DRAFT 表单(formId+designerPath /workflow/form-defs)",
+    formCreate.body?.code === 0 && !!formCreate.body?.data?.formId && (formCreate.body?.data?.designerPath ?? "").includes("/workflow/form-defs"),
+    JSON.stringify(formCreate.body?.data))
+  const eFormStatus = psql(`SELECT status FROM wf_form_def WHERE id = ${Number(formCreate.body?.data?.formId)}`)
+  check("aiV2E ⑧ DB 表单 status=DRAFT(未发布)", eFormStatus.trim() === "DRAFT", eFormStatus)
+
+  // ⑨⑩ 前置：造 days=5 请假实例（经理待办 → 预测有下游总经理审批）
+  const eApTitle = `AI冒烟E审批-${TS}`
+  await call(zhangsan.token, "POST", "/api/wf/instances", {
+    defCode: "leave_approval", title: eApTitle, formData: { leaveType: "ANNUAL", days: 5, reason: "批E摘要与预测" },
+  })
+  const eTask = await findTodo(manager.token, eApTitle)
+  check("aiV2E ⑨⑩ 前置(经理待办可见)", !!eTask?.taskId, JSON.stringify(eTask))
+
+  // ⑨ 待办详情摘要端点：summary + risks[] + disclaimer + 按 taskId 缓存
+  const sum1 = await call(manager.token, "GET", `/api/ai/tasks/${eTask?.taskId}/summary`)
+  check("aiV2E ⑨ 待办摘要端点(summary+risks[]+disclaimer 仅供参考)",
+    sum1.body?.code === 0 && typeof sum1.body?.data?.summary === "string" && sum1.body.data.summary.length > 0 &&
+      Array.isArray(sum1.body?.data?.risks) && (sum1.body?.data?.disclaimer ?? "").includes("仅供参考"),
+    JSON.stringify(sum1.body?.data))
+  const sum2 = await call(manager.token, "GET", `/api/ai/tasks/${eTask?.taskId}/summary`)
+  check("aiV2E ⑨ 摘要按 taskId 缓存命中(cached=true)", sum2.body?.data?.cached === true, JSON.stringify(sum2.body?.data?.cached))
+
+  // ⑨ task_get_detail 工具：list 卡 + 卡级 aiSummary
+  const detChat = await call(manager.token, "POST", "/api/ai/chat", { message: `看下 任务${eTask?.taskId} 的摘要`, credentialId: eCredId })
+  const detCard = (detChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "list" && !!c.aiSummary)
+  check("aiV2E ⑨ task_get_detail 产 list 卡+卡级 aiSummary",
+    !!detCard && typeof detCard.aiSummary?.summary === "string" && Array.isArray(detCard.aiSummary?.risks),
+    JSON.stringify(detCard?.aiSummary))
+
+  // ⑩ approve 确认卡内嵌 aiSummary + predictChain（后续流转与预计办理人）
+  const eApChat = await call(manager.token, "POST", "/api/ai/chat", { message: `同意 任务${eTask?.taskId}`, credentialId: eCredId })
+  const eApCard = (eApChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "confirm")
+  check("aiV2E ⑨ approve 确认卡内嵌 aiSummary(summary+risks[])",
+    !!eApCard?.aiSummary && typeof eApCard.aiSummary.summary === "string" && Array.isArray(eApCard.aiSummary.risks),
+    JSON.stringify(eApCard?.aiSummary))
+  check("aiV2E ⑩ approve 确认卡内嵌 predictChain[{stepName,assigneeName}](含下游总经理审批)",
+    Array.isArray(eApCard?.predictChain) && eApCard.predictChain.length >= 1 &&
+      eApCard.predictChain.every((s) => s.stepName !== undefined && s.assigneeName !== undefined),
+    JSON.stringify(eApCard?.predictChain))
+  if (eApCard?.actionId) await call(manager.token, "POST", `/api/ai/actions/${eApCard.actionId}/cancel`)
+
+  // 批E 自清（KEEP=1 亦执行）：本 run 造的草稿编排/表单/模板（冒烟凭据由下方治理统一清）
+  psql(`DELETE FROM orch_flow WHERE code LIKE 'aiflow%'; DELETE FROM wf_form_def WHERE code LIKE 'aiform%'; `
+    + `DELETE FROM oa_bizdoc_print_tpl WHERE name IN ('车辆申请单', '单据模板草稿')`)
 
   // 批D 自清（KEEP=1 亦执行）：记忆/知识测试文档/上传文件
   psql(`DELETE FROM ai_user_memory WHERE memory_value LIKE '%SMOKE%' OR memory_key IN ('常用部门','登录密码')`)

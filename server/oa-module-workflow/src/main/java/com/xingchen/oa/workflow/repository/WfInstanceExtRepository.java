@@ -7,11 +7,21 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 
 public interface WfInstanceExtRepository extends JpaRepository<WfInstanceExt, Long> {
 
     Optional<WfInstanceExt> findByProcInstId(String procInstId);
+
+    /** 批E 审批风险：同流程 + 同部门近 N 天实例（金额分位阈值取样，排除草稿）。 */
+    List<WfInstanceExt> findByDefCodeAndInitiatorDeptIdAndCreatedAtAfter(
+            String defCode, Long initiatorDeptId, OffsetDateTime createdAt);
+
+    /** 批E 审批风险：同申请人 + 同流程近 N 天发起次数（高频申请识别，含草稿无妨）。 */
+    long countByDefCodeAndInitiatorIdAndCreatedAtAfter(
+            String defCode, Long initiatorId, OffsetDateTime createdAt);
 
     Page<WfInstanceExt> findByInitiatorId(Long initiatorId, Pageable pageable);
 

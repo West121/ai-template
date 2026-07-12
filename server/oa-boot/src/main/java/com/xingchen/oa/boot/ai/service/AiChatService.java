@@ -255,7 +255,9 @@ public class AiChatService {
     public TurnOutcome executeTurn(TurnPlan plan, TurnListener listener) {
         AiChatSession session = plan.session();
         AiChatMessage asst = plan.assistantMsg();
-        sessionHolder.set(session.getId(), asst.getId(), plan.requestId(), plan.traceId());
+        // 批E：装入本轮凭据/模型，供工具内嵌 LLM 调用（结构化草稿/审批摘要）复用同一模型
+        sessionHolder.set(session.getId(), asst.getId(), plan.requestId(), plan.traceId(),
+                plan.cred() == null ? null : plan.cred().getId(), plan.model());
         try {
             if (plan.cred() == null) {
                 String txt = "AI 助手未配置 LLM 凭据，请管理员在「自动化编排-凭据」新增一条 LLM 型凭据，"

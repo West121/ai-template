@@ -115,7 +115,9 @@ public class AiToolGateway {
             Exception[] error = new Exception[1];
             ctx.wrap(() -> {
                 if (turn != null) {
-                    sessionHolder.set(turn.sessionId(), turn.messageId(), turn.requestId(), turn.traceId());
+                    // 批E：复装凭据/模型，工具内嵌 LLM 调用复用本轮同一模型
+                    sessionHolder.set(turn.sessionId(), turn.messageId(), turn.requestId(), turn.traceId(),
+                            turn.credentialId(), turn.model());
                 }
                 try {
                     holder[0] = registry.invoke(tool, new LinkedHashMap<>(safeArgs));

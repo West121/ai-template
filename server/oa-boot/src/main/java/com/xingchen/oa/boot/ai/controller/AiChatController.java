@@ -3,6 +3,7 @@ package com.xingchen.oa.boot.ai.controller;
 import com.xingchen.oa.boot.ai.entity.AiChatMessage;
 import com.xingchen.oa.boot.ai.entity.AiChatMessagePart;
 import com.xingchen.oa.boot.ai.service.AiActionService;
+import com.xingchen.oa.boot.ai.service.AiApprovalInsightService;
 import com.xingchen.oa.boot.ai.service.AiChatService;
 import com.xingchen.oa.boot.ai.service.AiChatService.ChatResult;
 import com.xingchen.oa.boot.ai.service.AiModelService;
@@ -49,6 +50,7 @@ public class AiChatController {
     private final AiChatService chatService;
     private final AiActionService actionService;
     private final AiModelService modelService;
+    private final AiApprovalInsightService insightService;
     private final ObjectMapper objectMapper;
     /** AiAsyncConfig 虚拟线程执行器（按参数名匹配 bean aiExecutor）。 */
     private final ExecutorService aiExecutor;
@@ -207,6 +209,60 @@ public class AiChatController {
     @PostMapping("/confirm")
     public R<Map<String, Object>> confirm(@RequestBody ConfirmRequest req) {
         return R.ok(actionService.confirmLegacy(req.actionId()));
+    }
+
+    // ==================== 批E：草稿固化（EXPLICIT_UI_SUBMIT 提交，复用动作草稿二段式） ====================
+
+    /**
+     * ⑦ 建自动化编排草稿（DRAFT，不启用）。draftId=FlowDraftCard 的动作草稿 id；
+     * Idempotency-Key 头幂等。返回 {@code {flowCode, flowId, designerPath, enabled:false, ...}}（前端优先取 flowCode）。
+     */
+    @PostMapping("/flow-drafts/{draftId}/create")
+    public R<Map<String, Object>> createFlowDraft(
+            @PathVariable Long draftId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        Map<String, Object> data = draftData(draftId, idempotencyKey);
+        if (data != null && data.get("code") != null) {
+            data.put("flowCode", data.get("code")); // 前端优先 flowCode
+        }
+        return R.ok(data);
+    }
+
+    /** ⑧ 建单据模板草稿（DRAFT，不发布）。返回 {@code {tplId, designerPath:"/bizdoc/tpl/t/{id}"}}。 */
+    @PostMapping("/template-drafts/{draftId}/create")
+    public R<Map<String, Object>> createTemplateDraft(
+            @PathVariable Long draftId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        return R.ok(draftData(draftId, idempotencyKey));
+    }
+
+    /** ⑧ 建表单定义草稿（DRAFT，不发布）。返回 {@code {formId, designerPath:"/workflow/form-defs"}}。 */
+    @PostMapping("/form-drafts/{draftId}/create")
+    public R<Map<String, Object>> createFormDraft(
+            @PathVariable Long draftId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        return R.ok(draftData(draftId, idempotencyKey));
+    }
+
+    /** 确认动作草稿并抽出执行器结果（复用 §7.3 二段式：归属/TTL/幂等/原子认领）。 */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> draftData(Long draftId, String idempotencyKey) {
+        Map<String, Object> body = actionService.confirm(draftId, idempotencyKey);
+        Object data = body.get("data");
+        if (data instanceof Map) {
+            return (Map<String, Object>) data;
+        }
+        // 幂等重放路径：data 为持久化结果 JsonNode（parseResult→readTree），归一为 Map
+        if (data instanceof tools.jackson.databind.JsonNode node) {
+            return objectMapper.convertValue(node, Map.class);
+        }
+        return body;
+    }
+
+    /** ⑨ 待办 AI 摘要 + 风险（按 taskId 缓存 30min，标注仅供参考）——待办详情页直取。 */
+    @GetMapping("/tasks/{taskId}/summary")
+    public R<Map<String, Object>> taskSummary(@PathVariable String taskId) {
+        return R.ok(insightService.aiSummary(taskId));
     }
 
     // ==================== 会话 ====================

@@ -11,18 +11,28 @@ import org.springframework.stereotype.Component;
 @Component
 public class AiSessionHolder {
 
-    /** 轮次上下文（会话/助手消息/关联标识）。 */
-    public record Turn(Long sessionId, Long messageId, String requestId, String traceId) {
+    /**
+     * 轮次上下文（会话/助手消息/关联标识 + 本轮解析出的凭据/模型）。
+     * credentialId/model 由 executeTurn 装入、Gateway 在工作线程复装——供工具内嵌 LLM 调用
+     * （批E 结构化草稿 / 审批摘要）复用<b>本轮同一模型</b>，而非另解析系统默认（生产口径正确 + 冒烟确定）。
+     */
+    public record Turn(Long sessionId, Long messageId, String requestId, String traceId,
+                       Long credentialId, String model) {
     }
 
     private static final ThreadLocal<Turn> TURN = new ThreadLocal<>();
 
     public void set(Long sessionId) {
-        TURN.set(new Turn(sessionId, null, null, null));
+        TURN.set(new Turn(sessionId, null, null, null, null, null));
     }
 
     public void set(Long sessionId, Long messageId, String requestId, String traceId) {
-        TURN.set(new Turn(sessionId, messageId, requestId, traceId));
+        TURN.set(new Turn(sessionId, messageId, requestId, traceId, null, null));
+    }
+
+    public void set(Long sessionId, Long messageId, String requestId, String traceId,
+                    Long credentialId, String model) {
+        TURN.set(new Turn(sessionId, messageId, requestId, traceId, credentialId, model));
     }
 
     public Long currentSessionId() {

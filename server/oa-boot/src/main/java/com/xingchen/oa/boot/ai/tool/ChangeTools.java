@@ -1,6 +1,7 @@
 package com.xingchen.oa.boot.ai.tool;
 
 import com.xingchen.oa.boot.ai.service.AiActionService;
+import com.xingchen.oa.boot.ai.service.AiApprovalInsightService;
 import com.xingchen.oa.boot.ai.support.AiSessionHolder;
 import com.xingchen.oa.office.dto.MeetingCreateRequest;
 import com.xingchen.oa.office.dto.ScheduleCreateRequest;
@@ -38,6 +39,7 @@ public class ChangeTools {
     private final AiActionService actionService;
     private final AiSessionHolder sessionHolder;
     private final ObjectMapper objectMapper;
+    private final AiApprovalInsightService insightService;
 
     private final ProcessDefService processDefService;
     private final WfFormDefRepository formDefRepository;
@@ -114,8 +116,8 @@ public class ChangeTools {
     }
 
     @AiToolDefinition(name = "task_prepare_approve", aliases = {"approve_task"},
-            authorities = {"office:approval:approve"}, risk = AiToolRisk.CONFIRM_REQUIRED,
-            description = "办理一个待办审批任务（同意/驳回）。产出确认卡，用户确认后才真正办理。"
+            authorities = {"office:approval:approve"}, risk = AiToolRisk.CONFIRM_REQUIRED, timeoutSeconds = 30,
+            description = "办理一个待办审批任务（同意/驳回）。产出确认卡（内嵌 AI 摘要/风险 + 后续流转预测），用户确认后才真正办理。"
                     + "参数 taskId、decision(APPROVE|REJECT)、comment 可选。",
             paramsSchema = "{\"taskId\":{\"type\":\"string\",\"description\":\"待办任务 id（可先用 query_todo 获取）\"},"
                     + "\"decision\":{\"type\":\"string\",\"description\":\"APPROVE 同意 / REJECT 驳回\"},"
@@ -126,13 +128,23 @@ public class ChangeTools {
         boolean reject = "REJECT".equals(decision);
         Map<String, Object> params = new LinkedHashMap<>(args);
         // §7.4 TOCTOU：stage 时快照 Flowable 任务 assignee，确认前比对（任务被办/改派 → AI_ACTION_STALE）
+        String taskId = String.valueOf(args.get("taskId"));
         String actionId = stage("approve_task", reject ? "TASK_REJECT" : "TASK_APPROVE", params,
-                actionService.snapshotTask(String.valueOf(args.get("taskId"))));
+                actionService.snapshotTask(taskId));
         Map<String, Object> card = support.confirmCard(actionId,
                 (reject ? "驳回" : "同意") + "审批任务",
-                "将" + (reject ? "驳回" : "同意") + "任务 " + args.get("taskId")
+                "将" + (reject ? "驳回" : "同意") + "任务 " + taskId
                         + (args.get("comment") != null ? "，意见：" + args.get("comment") : ""),
                 params, reject);
+        // 亮点⑨：确认卡嵌 AI 摘要+风险（标注仅供参考）；亮点⑩：嵌后续流转预测（失败则省略字段）
+        Map<String, Object> aiSummary = insightService.aiSummary(taskId);
+        if (aiSummary != null) {
+            card.put("aiSummary", aiSummary);
+        }
+        var predictChain = insightService.predictChain(taskId);
+        if (predictChain != null && !predictChain.isEmpty()) {
+            card.put("predictChain", predictChain);
+        }
         return ToolResult.of(support.toJson(Map.of("staged", true, "actionId", actionId,
                 "note", "已生成确认卡，用户确认后才会办理")), card);
     }
