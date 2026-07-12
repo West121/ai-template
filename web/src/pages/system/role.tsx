@@ -5,6 +5,8 @@ import { toast } from "sonner"
 import { PageHeader } from "@/components/page-header"
 import { PermissionBanner } from "@/components/permission-banner"
 import { OrgPicker } from "@/components/org-picker"
+import { ErrorBoundary } from "@/components/error-boundary"
+import { DataDimensionAuthz } from "@/components/system/data-dimension-authz"
 import { DataTable, indexColumn } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { api, NetworkError, type PageResult } from "@/lib/api"
@@ -650,6 +652,17 @@ export default function RolePage() {
                 rows={3}
               />
             </div>
+
+            {/* 业务维度授权（DP1，编辑态；与上方「部门数据权限 5 档」并行，独立保存） */}
+            {editing && (
+              <div className="space-y-1.5 border-t pt-3">
+                <Label>业务维度授权</Label>
+                <p className="text-[11px] text-muted-foreground">与上方「部门数据权限（5 档）」并行——在成本中心 / 项目等业务维度上限定该角色可见范围。</p>
+                <ErrorBoundary label="dp-authz-role">
+                  <DataDimensionAuthz principalType="role" id={editing.id} canEdit={canEdit} />
+                </ErrorBoundary>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setFormOpen(false)}>

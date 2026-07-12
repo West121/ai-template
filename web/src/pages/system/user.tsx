@@ -33,6 +33,7 @@ import { PermissionBanner } from "@/components/permission-banner"
 import { Modal } from "@/components/modal"
 import { Drawer } from "@/components/drawer"
 import { ErrorBoundary } from "@/components/error-boundary"
+import { DataDimensionAuthz } from "@/components/system/data-dimension-authz"
 import { DataTable, indexColumn } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { RecordPicker, RecordPickerField, type RecordPickerColumn } from "@/components/record-picker"
@@ -1477,6 +1478,16 @@ export default function UserPage() {
                 </FormItem>
               )}
             />
+            {/* 业务维度授权（DP1；与「部门数据权限 5 档 / 直属上级」并行，独立保存） */}
+            {editing && (
+              <div className="space-y-1.5 border-t pt-3 @md:col-span-2">
+                <FormLabel>业务维度授权</FormLabel>
+                <p className="text-[11px] text-muted-foreground">在成本中心 / 项目等业务维度上限定该用户可见范围（用户级与角色维度授权取并集，未配=不限）。</p>
+                <ErrorBoundary label="dp-authz-user">
+                  <DataDimensionAuthz principalType="user" id={editing.id} canEdit={canEdit} />
+                </ErrorBoundary>
+              </div>
+            )}
           </form>
         </Form>
       </Modal>
