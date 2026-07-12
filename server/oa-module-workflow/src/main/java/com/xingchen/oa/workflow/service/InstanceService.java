@@ -42,6 +42,7 @@ import com.xingchen.oa.workflow.repository.WfInstanceExtRepository;
 import com.xingchen.oa.workflow.repository.WfOperationRepository;
 import com.xingchen.oa.workflow.repository.WfProcessExtRepository;
 import com.xingchen.oa.workflow.repository.WfTaskReadRepository;
+import com.xingchen.oa.workflow.support.DesignerJsonEnricher;
 import com.xingchen.oa.workflow.support.UserNameResolver;
 import com.xingchen.oa.workflow.support.WfSupport;
 import lombok.RequiredArgsConstructor;
@@ -98,6 +99,7 @@ public class InstanceService {
     private final RepositoryService repositoryService;
     private final UserNameResolver nameResolver;
     private final AssigneeResolver assigneeResolver;
+    private final DesignerJsonEnricher designerJsonEnricher;
     private final WfAudit audit;
     private final ObjectMapper objectMapper;
 
@@ -463,9 +465,10 @@ public class InstanceService {
         // 跟踪图分流：DINGTALK 定义额外回传 designerJson（钉钉模型），前端据 designerType 选钉钉跟踪图 / bpmn 图
         String designerType = def != null && StringUtils.hasText(def.getDesignerType())
                 ? def.getDesignerType() : WfProcessExt.TYPE_DINGTALK;
+        // 返回时动态给办理人规则 refs（USER/DEPT/ROLE/POST）补 name，避免前端跟踪图退化占位「成员#N」；不改存储。
         Object designerJson = def != null && WfProcessExt.TYPE_DINGTALK.equals(designerType)
                 && StringUtils.hasText(def.getDesignerJson())
-                ? parseJson(def.getDesignerJson()) : null;
+                ? designerJsonEnricher.enrich(def.getDesignerJson()) : null;
 
         return new InstanceDetailResponse(
                 inst.getId(), pid, inst.getDefCode(), inst.getDefName(), inst.getTitle(), inst.getBizStatus(),

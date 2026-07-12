@@ -12,6 +12,7 @@ import com.xingchen.oa.workflow.dto.ProcessDefRequest;
 import com.xingchen.oa.workflow.dto.ProcessDefResponse;
 import com.xingchen.oa.workflow.entity.WfProcessExt;
 import com.xingchen.oa.workflow.repository.WfProcessExtRepository;
+import com.xingchen.oa.workflow.support.DesignerJsonEnricher;
 import com.xingchen.oa.workflow.support.WfSupport;
 import lombok.RequiredArgsConstructor;
 import org.flowable.bpmn.converter.BpmnXMLConverter;
@@ -47,21 +48,32 @@ public class ProcessDefService {
     private final BpmnToGraphConverter bpmnToGraphConverter;
     private final RepositoryService repositoryService;
     private final ObjectMapper objectMapper;
+    private final DesignerJsonEnricher designerJsonEnricher;
+
+    /**
+     * 返回时给 designerJson / flowConfig 里的办理人规则 refs（USER/DEPT/ROLE/POST）动态补 name，
+     * 避免设计器画布 / 跟踪图对存量（refs 仅 id）退化占位「成员#N」。仅补展示 name，不改存储。
+     */
+    private ProcessDefResponse enriched(ProcessDefResponse r) {
+        return r.withEnriched(
+                designerJsonEnricher.enrichToString(r.designerJson()),
+                designerJsonEnricher.enrichToString(r.flowConfig()));
+    }
 
     public PageResult<ProcessDefResponse> page(String keyword, int pageNum, int pageSize) {
         String kw = keyword == null ? "" : keyword;
         Page<WfProcessExt> page = repository.findByNameContainingOrDefCodeContaining(kw, kw,
                 PageRequest.of(Math.max(pageNum - 1, 0), pageSize, Sort.by(Sort.Direction.DESC, "id")));
-        return new PageResult<>(page.getContent().stream().map(ProcessDefResponse::of).toList(),
+        return new PageResult<>(page.getContent().stream().map(ProcessDefResponse::of).map(this::enriched).toList(),
                 page.getTotalElements(), pageNum, pageSize);
     }
 
     public ProcessDefResponse get(Long id) {
-        return ProcessDefResponse.of(find(id));
+        return enriched(ProcessDefResponse.of(find(id)));
     }
 
     public ProcessDefResponse latest(String defCode) {
-        return repository.findByDefCode(defCode).map(ProcessDefResponse::of)
+        return repository.findByDefCode(defCode).map(ProcessDefResponse::of).map(this::enriched)
                 .orElseThrow(() -> new BusinessException(404, "流程定义不存在: " + defCode));
     }
 

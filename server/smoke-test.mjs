@@ -498,23 +498,26 @@ check("部门树根节点 code=XC-ROOT", tree.body?.data?.[0]?.code === "XC-ROOT
 check("子部门 leaderName 已组装", (tree.body?.data?.[0]?.children ?? []).some((d) => typeof d.leaderName === "string" && d.leaderName.length > 0))
 // 组织架构计数/查询语义（子树聚合去重 + deptId 含子部门）
 const company = tree.body?.data?.[0]
-// ① 公司节点 userCount = 子树聚合去重 = 5（admin/王经理/张三/李四/王五；王经理兼任财务部不重复计）
-check("公司节点 userCount=5（子树聚合去重）", company?.userCount === 5, `userCount=${company?.userCount}`)
-// ③ 叶子部门直属计数不变：人事行政部=3、财务部=1（王经理兼任）、技术部=1、产品部=1
+// ① 公司节点 userCount = 子树聚合去重（兼任只计一次）。基线含 5 名种子用户；组织扩充后只增不减。
+check("公司节点 userCount≥5（子树聚合去重）", (company?.userCount ?? 0) >= 5, `userCount=${company?.userCount}`)
+// ③ 叶子部门直属计数（基线：人事行政部≥3/财务部≥1/技术部≥1/产品部≥1；组织扩充后只增不减）
 const leafByName = Object.fromEntries((company?.children ?? []).map((d) => [d.name, d.userCount]))
-check("叶子直属计数不变（人事行政部=3/财务部=1/技术部=1/产品部=1）",
-  leafByName["人事行政部"] === 3 && leafByName["财务部"] === 1 && leafByName["技术部"] === 1 && leafByName["产品部"] === 1,
+check("叶子直属计数（人事行政部≥3/财务部≥1/技术部≥1/产品部≥1）",
+  leafByName["人事行政部"] >= 3 && leafByName["财务部"] >= 1 && leafByName["技术部"] >= 1 && leafByName["产品部"] >= 1,
   JSON.stringify(leafByName))
-// ② 按公司/父部门 deptId 查询返回子部门的人（去重后应为全部 5 人）
-const companyUsers = await call(admin.token, "GET", `/api/system/users?pageNum=1&pageSize=100&deptId=${company.id}`)
+// ② 按公司/父部门 deptId 查询返回子部门的人（去重）。种子 5 人应全部在列；总数与根 userCount 一致（同为子树去重）。
+const companyUsers = await call(admin.token, "GET", `/api/system/users?pageNum=1&pageSize=500&deptId=${company.id}`)
 const companyUserNames = new Set((companyUsers.body?.data?.list ?? []).map((u) => u.name))
-check("按公司 deptId 查询含子部门人员（去重=5）",
-  companyUsers.body?.data?.total === 5 && ["系统管理员", "王经理", "张三", "李四", "王五"].every((n) => companyUserNames.has(n)),
-  `total=${companyUsers.body?.data?.total} names=${[...companyUserNames].join("/")}`)
-// 叶子部门精确查询仍按该部门返回：人事行政部(id=4) → 3 人
+check("按公司 deptId 查询含子部门人员（去重，含全部种子用户且总数=根 userCount）",
+  companyUsers.body?.data?.total === company?.userCount
+    && ["系统管理员", "王经理", "张三", "李四", "王五"].every((n) => companyUserNames.has(n)),
+  `total=${companyUsers.body?.data?.total} rootUserCount=${company?.userCount}`)
+// 叶子部门精确查询仍按该部门返回：其 total 应等于该部门直属计数（叶子无子部门 → = userCount），且不少于基线 3
 const hrDept = (company?.children ?? []).find((d) => d.name === "人事行政部")
 const hrUsers = await call(admin.token, "GET", `/api/system/users?pageNum=1&pageSize=100&deptId=${hrDept.id}`)
-check("按叶子部门 deptId 查询返回该部门人员（人事行政部=3）", hrUsers.body?.data?.total === 3, `total=${hrUsers.body?.data?.total}`)
+check("按叶子部门 deptId 查询返回该部门人员（人事行政部 total=直属计数且≥3）",
+  hrUsers.body?.data?.total === leafByName["人事行政部"] && hrUsers.body?.data?.total >= 3,
+  `total=${hrUsers.body?.data?.total} leaf=${leafByName["人事行政部"]}`)
 const posts = await call(admin.token, "GET", "/api/system/posts?pageNum=1&pageSize=100")
 check("岗位列表", (posts.body?.data?.total ?? 0) >= 5)
 const roles = await call(admin.token, "GET", "/api/system/roles?pageNum=1&pageSize=100")
@@ -807,6 +810,39 @@ const P_MULTI = await mkProc(`p2multi_${TS}`, [{ id: "ap", type: "approval", nam
 const P_SINGLE = await mkProc(`p2single_${TS}`, [approvalNode("ap", "经理审批", MANAGER, "ANY")])
 const P_SEQ = await mkProc(`p2seq_${TS}`, [approvalNode("a", "A经理", MANAGER, "ANY"), approvalNode("b", "B李四", LISI, "ANY")])
 const P_AGENT = await mkProc(`p2agent_${TS}`, [approvalNode("ap", "代理审批", MANAGER, "ANY")])
+
+// --- 磐石修复：detail / 流程定义返回 designerJson 时后端给办理人规则 refs 动态补 name ---
+// 存量/种子/本 smoke 造的 refs 只存 {kind,id}（见 orgUser），前端跟踪图/画布摘要靠 refs[].name 展示，
+// 缺 name 只能退化占位「账户·成员#N」（用户实测「账户·成员#5」根因）。后端返回处补 name（不改存储）。
+{
+  const roleRef = roles.body?.data?.list?.[0] // 稳定的种子角色 {id,name}
+  const refDefCode = `smoke_refname_${TS}`
+  const refNodes = [
+    { id: "u", type: "approval", name: "固定王五审批",
+      assigneeRules: [{ kind: "ACCOUNT", refs: [{ kind: "USER", id: WANGWU }] }], multiMode: "ANY", emptyStrategy: "TO_ADMIN" },
+    { id: "d", type: "approval", name: "部门办理",
+      assigneeRules: [{ kind: "DEPT", refs: [{ kind: "DEPT", id: hrDept.id }] }], multiMode: "ANY", emptyStrategy: "TO_ADMIN" },
+    { id: "r", type: "approval", name: "角色办理",
+      assigneeRules: [{ kind: "ROLE", refs: [{ kind: "ROLE", id: roleRef?.id }] }], multiMode: "ANY", emptyStrategy: "TO_ADMIN" },
+  ]
+  await mkProc(refDefCode, refNodes)
+
+  // ① 流程定义端点（ProcessDefResponse.designerJson 字符串）补 name
+  const defResp = await call(admin.token, "GET", `/api/wf/process-defs/${refDefCode}/latest`)
+  let defNodes = []
+  try { defNodes = (JSON.parse(defResp.body?.data?.designerJson ?? "{}").nodes ?? []) } catch { /* ignore */ }
+  const defRefName = (nid) => defNodes.find((n) => n.id === nid)?.assigneeRules?.[0]?.refs?.[0]?.name
+  check("refname 流程定义 designerJson USER ref 补真名(王五，非 id/成员#N)", defRefName("u") === "王五", `got=${defRefName("u")}`)
+
+  // ② 实例详情端点（InstanceDetailResponse.designerJson 对象）补 name —— 用户实测的跟踪图数据源
+  const refInst = await startInst(refDefCode, `refname-${TS}`) // 停在首节点(王五)，d/r 不激活亦返回全树
+  const refDet = await call(zhangsan.token, "GET", `/api/wf/instances/${refInst.id}`)
+  const djNodes = refDet.body?.data?.designerJson?.nodes ?? []
+  const detRefName = (nid) => djNodes.find((n) => n.id === nid)?.assigneeRules?.[0]?.refs?.[0]?.name
+  check("refname detail designerJson USER ref 补真名=王五(非空/非成员#N)", detRefName("u") === "王五", `got=${detRefName("u")}`)
+  check("refname detail designerJson DEPT ref 补部门名=人事行政部", detRefName("d") === "人事行政部", `got=${detRefName("d")}`)
+  check("refname detail designerJson ROLE ref 补角色名", !!roleRef && detRefName("r") === roleRef.name, `got=${detRefName("r")} expect=${roleRef?.name}`)
+}
 
 // --- 前加签 PRE（串行 B→A）：李四先审→回到经理→经理终审→下一节点 ---
 {

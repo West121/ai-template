@@ -31,4 +31,11 @@ public record ProcessDefResponse(
                 e.getStatus(), e.getProcessDefinitionId(), e.getRemark(), e.getCreatedAt(),
                 WfProcessExt.canonicalFormType(e.getFormType()), e.getFormSubmitPath(), e.getFormViewPath(), e.getFlowConfig());
     }
+
+    /** 返回时补 name 用：以补全后的 designerJson / flowConfig 生成副本，其余字段不变。 */
+    public ProcessDefResponse withEnriched(String enrichedDesignerJson, String enrichedFlowConfig) {
+        return new ProcessDefResponse(id, defCode, name, category, icon, formCode, formVersion, designerType,
+                enrichedDesignerJson, bpmnXml, status, processDefinitionId, remark, createdAt,
+                formType, formSubmitPath, formViewPath, enrichedFlowConfig);
+    }
 }
