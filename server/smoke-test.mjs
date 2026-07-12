@@ -4446,6 +4446,20 @@ async function hlCompleted(token, iid) {
   check("kb EDITOR(manager) 可保存正文", mgrSave.body?.code === 0 && mgrSave.body.data?.version === 4, JSON.stringify(mgrSave.body?.code))
   const adminSave = await call(admin.token, "PUT", `/api/kb/docs/${did}/content`, { contentJson: { type: "doc", content: [] }, contentText: "VIEWER 越权" })
   check("kb 红线:VIEWER(admin) 保存正文 403", adminSave.body?.code === 403, JSON.stringify(adminSave.body))
+
+  // 25.7b 批4b：CRDT 实时协同 WebSocket 握手鉴权（轻断言——端点存在 + 鉴权红线；
+  // 两端 y-sync 同步/持久化的完整验证见 scratchpad/kb-collab-verify.mjs）。此处 admin 仍是 VIEWER。
+  const wsUrl = (t) => `${BASE}/ws/kb/doc/${did}${t ? `?token=${encodeURIComponent(t)}` : ""}`
+  const wsNoToken = await fetch(wsUrl(null))
+  check("kb批4b WS 握手:无 token→401(拒绝匿名)", wsNoToken.status === 401, `status=${wsNoToken.status}`)
+  const wsViewer = await fetch(wsUrl(admin.token))
+  check("kb批4b WS 握手:VIEWER(admin)→403(非 EDITOR 拒绝)", wsViewer.status === 403, `status=${wsViewer.status}`)
+  const wsEditor = await fetch(wsUrl(zhangsan.token))
+  // EDITOR 鉴权通过后交给握手器；非 upgrade 的普通 GET → 400（Bad Request），证明已越过鉴权闸口
+  check("kb批4b WS 握手:EDITOR 鉴权通过(非 upgrade→400)", wsEditor.status === 400, `status=${wsEditor.status}`)
+  const wsBadDoc = await fetch(`${BASE}/ws/kb/doc/99999999?token=${encodeURIComponent(zhangsan.token)}`)
+  check("kb批4b WS 握手:不存在文档→404", wsBadDoc.status === 404, `status=${wsBadDoc.status}`)
+
   const removeMember = await call(zhangsan.token, "DELETE", `/api/kb/spaces/${spaceId}/members/${viewerMemberId}`)
   check("kb 移除成员", removeMember.body?.code === 0)
 

@@ -49,7 +49,10 @@ public class SecurityConfig {
                                 "/actuator/health",
                                 // 编排 Webhook 入站 / wait 恢复回调：免登录，token 鉴权 + 限流护栏在 OrchHookController
                                 "/api/orch/hooks/*",
-                                "/api/orch/resume/*"
+                                "/api/orch/resume/*",
+                                // 知识库实时协同 WebSocket（CRDT 批4b）：token 在 query 而非 Authorization 头，
+                                // 不走 JwtAuthFilter；握手鉴权（JWT + 文档 EDITOR 权限）在 KbCollabHandshakeInterceptor
+                                "/ws/kb/doc/*"
                         ).permitAll()
                         .anyRequest().authenticated()
                 )

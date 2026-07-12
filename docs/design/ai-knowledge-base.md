@@ -122,3 +122,31 @@ pgvector 语义。防白屏:list/related 均可能空数组,渲染须容 `[]`。
 ### 9.4 分块嵌入(自动,无独立端点)
 - 保存正文(`PUT /api/kb/docs/{id}/content`)后自动重建 `kb_doc_embedding` 分块(先删后插);有嵌入凭据写
   `embedding`,无则留空(全文降级)。删文档/删空间级联删分块。前端无需感知。
+
+## 10. 批4b 实时协同(CRDT)后端契约(后端已落地,供前端)
+
+方案A 落地:Spring 原生 WebSocket 承载 Yjs `y-websocket` 二进制协议,**后端纯 relay 不解析 CRDT**
+(`com.xingchen.oa.boot.kb.collab`)。前端用 TipTap `Collaboration`/`CollaborationCursor` + `y-websocket`
+`WebsocketProvider` 连本端点;连不上退**单人编辑锁**(REST `PUT /content` 始终可用,协同不影响它)。
+
+### 10.1 端点与握手鉴权
+- WebSocket 端点:`ws(s)://<host>/ws/kb/doc/{docId}`。y-websocket 用法:
+  `new WebsocketProvider("ws://host/ws/kb/doc", String(docId), ydoc, { params: { token } })`
+  (provider 拼成 `.../ws/kb/doc/{docId}?token=...`)。
+- **token 走 query 参数 `?token=<JWT>`**(WebSocket 不便带 Authorization 头;后端也兼容 `Authorization: Bearer`)。
+  token 即登录 JWT(与 REST 同一个 auth-store token)。
+- 握手鉴权红线:**无/非法 token → 401**;**对该文档所在空间无 EDITOR/ADMIN → 403**;文档不存在 → 404。
+  握手被拒(非 101)即视为协同不可用 → 前端降级单人锁。EDITOR/ADMIN(或空间 owner)→ 101 升级成功。
+
+### 10.2 协议与行为(前端按标准 y-websocket 即可,无需定制)
+- 承载标准 `y-protocols`:`messageSync`(SyncStep1/Step2/Update)+ `messageAwareness`(在线光标/头像)。
+  后端把一个 session 的二进制消息广播给同房间其它 session。
+- 新连入即可拿到**已存内容**:后端从 `kb_doc_content.ydoc` 回放历史帧 + 发一条空 SyncStep2 翻转
+  `provider.synced=true` + 发 SyncStep1(空 SV)索要客户端全量(并入离线编辑)。**即便无其他在线客户端也能拿到内容**。
+- **awareness** 广播支持(`CollaborationCursor` 直接可用);awareness 为瞬态,**不持久化**。
+
+### 10.3 持久化与版本
+- 后端定期(15s)+ 房间最后一人离开时,把在线态快照落 `kb_doc_content.ydoc`(仅更新 ydoc 列,不动
+  content_json/content_text)。日志过大时向唯一在线客户端拉全量压实,不需 Java 解析 CRDT。
+- **协同期间不产版本**(§4);显式"保存版本"/快照仍走批4a 的 `kb_doc_version`。若要把协同结果固化为可检索正文/
+  版本,前端在合适时机(如失焦/手动保存)照旧调 `PUT /api/kb/docs/{id}/content`(REST 与协同并存,互不覆盖)。
