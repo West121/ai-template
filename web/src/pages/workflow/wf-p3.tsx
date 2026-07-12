@@ -8,7 +8,7 @@
  *
  * 后端 P3 端点未就绪时优雅降级（提示接口未就绪，不造假数据）。
  */
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   Bot,
@@ -42,9 +42,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { WF_STATUS_META, type FormSchema, type WfFormData } from "@/types/workflow"
-import type { WfInstanceDetailP3, WfPredictNode, WfPredictResult, WfSubInstance } from "@/types/workflow-p3"
+import { OrgPicker, OrgPickerField, type OrgRef } from "@/components/org-picker"
+import { WF_STATUS_META, type FormSchema, type WfFormData, type WfOrgRef } from "@/types/workflow"
+import type { WfInstanceDetailP3, WfPredictNode, WfPredictResult, WfResurrectPreview, WfSubInstance } from "@/types/workflow-p3"
+import { fetchResurrectPreview } from "./wf-resurrect"
 import { WfPrintView } from "./wf-print"
+
+/** org-picker 的 OrgRef（type）→ 后端契约 WfOrgRef（kind） */
+const toWfOrgRef = (refs: OrgRef[]): WfOrgRef[] => refs.map((r) => ({ kind: r.type, id: r.id, name: r.name }))
 
 /* ---------------- 节点类型 → 图标 ---------------- */
 
@@ -198,21 +203,65 @@ function ResurrectDialog({
   onClose: () => void
   onReload: () => void
 }) {
-  // 候选唤醒节点：优先 jumpTargets，否则从时间线去重节点
-  const candidates =
-    detail.jumpTargets && detail.jumpTargets.length > 0
-      ? detail.jumpTargets.map((t) => ({ nodeId: t.nodeId, name: t.name }))
-      : Array.from(
-          new Map(
-            (detail.timeline ?? [])
-              .filter((t) => t.nodeId)
-              .map((t) => [t.nodeId, { nodeId: t.nodeId as string, name: t.nodeName ?? (t.nodeId as string) }]),
-          ).values(),
-        )
+  // 候选唤醒节点：优先 jumpTargets，否则从时间线去重节点（memo 稳定引用，供预览 effect 依赖）
+  const candidates = useMemo(
+    () =>
+      detail.jumpTargets && detail.jumpTargets.length > 0
+        ? detail.jumpTargets.map((t) => ({ nodeId: t.nodeId, name: t.name }))
+        : Array.from(
+            new Map(
+              (detail.timeline ?? [])
+                .filter((t) => t.nodeId)
+                .map((t) => [t.nodeId, { nodeId: t.nodeId as string, name: t.nodeName ?? (t.nodeId as string) }]),
+            ).values(),
+          ),
+    [detail.jumpTargets, detail.timeline],
+  )
 
   const [nodeId, setNodeId] = useState("")
   const [comment, setComment] = useState("")
   const [submitting, setSubmitting] = useState(false)
+
+  // 唤醒重新选人：选节点 → 拉预览 → 默认回填 historyAssignees → 可改人/角色/部门（不改=沿用规则）
+  const [preview, setPreview] = useState<WfResurrectPreview | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewDemo, setPreviewDemo] = useState(false)
+  const [assignees, setAssignees] = useState<OrgRef[]>([])
+  const [touched, setTouched] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
+
+  // 选中节点变化 → 拉预览并默认回填（真实数据回填真实办理人；演示数据仅展示历史，不预填避免占位 id 提交）
+  useEffect(() => {
+    if (!nodeId) {
+      setPreview(null)
+      setAssignees([])
+      setTouched(false)
+      return
+    }
+    let disposed = false
+    setPreviewLoading(true)
+    const nodeName = candidates.find((c) => c.nodeId === nodeId)?.name
+    void fetchResurrectPreview(detail.id, nodeId, nodeName, detail.timeline)
+      .then((res) => {
+        if (disposed) return
+        setPreview(res.data)
+        setPreviewDemo(res.demo)
+        setAssignees(res.demo ? [] : res.data.historyAssignees.map((h) => ({ type: "USER", id: h.id, name: h.name })))
+        setTouched(false)
+      })
+      .catch(() => {
+        if (!disposed) {
+          setPreview(null)
+          toast.error("唤醒预览加载失败")
+        }
+      })
+      .finally(() => {
+        if (!disposed) setPreviewLoading(false)
+      })
+    return () => {
+      disposed = true
+    }
+  }, [nodeId, detail.id, detail.timeline, candidates])
 
   const submit = async () => {
     if (!nodeId) {
@@ -221,11 +270,17 @@ function ResurrectDialog({
     }
     setSubmitting(true)
     try {
+      // 演示预填且未改动 → 不带 assignees（避免提交占位 id，沿用规则）；否则带所选（空=沿用规则）
+      const useAssignees = previewDemo && !touched ? [] : assignees
       await api(`/api/wf/instances/${detail.id}/resurrect`, {
         method: "POST",
-        body: JSON.stringify({ nodeId, comment: comment.trim() || undefined }),
+        body: JSON.stringify({
+          nodeId,
+          comment: comment.trim() || undefined,
+          assignees: useAssignees.length ? toWfOrgRef(useAssignees) : undefined,
+        }),
       })
-      toast.success("已唤醒：按快照重建实例并定位重审")
+      toast.success(useAssignees.length ? "已唤醒：定位重审并指派所选办理人" : "已唤醒：按快照重建并沿用节点规则")
       onClose()
       onReload()
     } catch (err) {
@@ -236,6 +291,7 @@ function ResurrectDialog({
   }
 
   return (
+    <>
     <Modal
       open={open}
       onOpenChange={(o) => !o && !submitting && onClose()}
@@ -275,6 +331,57 @@ function ResurrectDialog({
             <Input value={nodeId} onChange={(e) => setNodeId(e.target.value)} placeholder="输入节点 id" />
           )}
         </div>
+
+        {/* 重新选人：选节点后展示（默认回填原节点上次办理人，可改人/角色/部门；不改=沿用规则） */}
+        {nodeId && (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs">重审办理人</Label>
+              {previewLoading && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
+            </div>
+            <OrgPickerField
+              value={assignees}
+              multiple
+              placeholder="沿用节点规则（点击可改为指定成员 / 角色 / 部门）"
+              onOpen={() => setPickerOpen(true)}
+              onRemove={(ref) => {
+                setTouched(true)
+                setAssignees((prev) => prev.filter((r) => !(r.type === ref.type && r.id === ref.id)))
+              }}
+            />
+            {/* 演示预填提示：接口未就绪，仅展示历史办理人，选真实成员后方可指派 */}
+            {previewDemo && preview && preview.historyAssignees.length > 0 && (
+              <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                原节点上次办理人：{preview.historyAssignees.map((h) => h.name).join("、")}
+                <span className="text-muted-foreground">（预览接口就绪后自动回填；当前请手动选择真实成员，否则沿用规则）</span>
+              </p>
+            )}
+            {/* 规则试算提示 + 沿用规则清空 */}
+            <div className="flex items-center justify-between gap-2">
+              <p className="min-w-0 truncate text-[11px] text-muted-foreground">
+                {assignees.length === 0
+                  ? "未指定 → 沿用节点规则"
+                  : preview?.ruleAssignees?.length
+                    ? `规则将指派：${preview.ruleAssignees.map((r) => r.name).join("、")}`
+                    : "已指定重审办理人"}
+              </p>
+              {assignees.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 shrink-0 px-1.5 text-[11px] text-muted-foreground"
+                  onClick={() => {
+                    setTouched(true)
+                    setAssignees([])
+                  }}
+                >
+                  沿用规则
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="space-y-1.5">
           <Label className="text-xs">唤醒说明（可选）</Label>
           <Textarea
@@ -286,6 +393,18 @@ function ResurrectDialog({
         </div>
       </div>
     </Modal>
+    {/* 重新选人：复用组织选择器（成员/部门/角色 2D 模型） */}
+    <OrgPicker
+      open={pickerOpen}
+      onOpenChange={setPickerOpen}
+      title="选择重审办理人"
+      value={assignees}
+      onConfirm={(refs) => {
+        setTouched(true)
+        setAssignees(refs)
+      }}
+    />
+    </>
   )
 }
 

@@ -161,26 +161,33 @@ export function SequenceFlowEdge({
   const isDefault = d?.isDefault ?? false
   const isError = d?.validation === "error"
   const highlight = d?.highlight
+  const flow = d?.flow === true // ② 回放：正在走过的边（流光扫过，单次）
   const summary = d?.expression?.trim()
     ? d.expression.trim()
     : summarizeCondition(d?.condition, isDefault, fieldLabel)
   const label = isDefault ? "默认" : summary
 
-  // 描边优先级：校验错误(destructive) > 运行时跟踪高亮(completed 绿 / active 主题色) > 选中(primary) > 常态
+  // 描边优先级：校验错误(destructive) > 预测(蓝虚线) > 运行时跟踪高亮(completed 绿 / active 主题色) > 选中(primary) > 常态
   const stroke = isError
     ? "var(--destructive)"
-    : highlight === "active"
-      ? "var(--primary)"
-      : highlight === "completed"
-        ? "#10b981"
-        : selected
-          ? "var(--primary)"
-          : undefined
-  const strokeWidth = isError || highlight || selected ? 2.5 : 1.5
+    : highlight === "predicted"
+      ? "#60a5fa"
+      : highlight === "active" || flow
+        ? "var(--primary)"
+        : highlight === "completed"
+          ? "#10b981"
+          : selected
+            ? "var(--primary)"
+            : undefined
+  const strokeWidth = isError || highlight || selected || flow ? 2.5 : 1.5
+  // 预测边虚线；回放流光边动画虚线（wf-edge-flow 由 FlowViewer <style> 定义）
+  const edgeStyle: React.CSSProperties = { stroke, strokeWidth }
+  if (highlight === "predicted") edgeStyle.strokeDasharray = "6 4"
+  const edgeClass = flow ? "wf-edge-flow" : undefined
 
   return (
     <>
-      <BaseEdge id={id} path={path} markerEnd={markerEnd} style={{ stroke, strokeWidth }} />
+      <BaseEdge id={id} path={path} markerEnd={markerEnd} className={edgeClass} style={edgeStyle} />
       {label && (
         <EdgeLabelRenderer>
           <div

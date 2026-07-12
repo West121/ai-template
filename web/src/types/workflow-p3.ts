@@ -7,7 +7,7 @@
  *  - 运行时端点：predict / resurrect / instances(bizTime) / wf/seals
  *  - 详情扩展：WfInstanceDetailP3（子流程入口 / 预测·唤醒可用性 / 已用章 / 业务时间 / 节点表单权限）
  */
-import type { FieldPerm, WfInstanceDetail } from "./workflow"
+import type { FieldPerm, WfInstanceDetail, WfOrgRef } from "./workflow"
 
 /* ================= P3-C 实例详情扩展 ================= */
 
@@ -78,11 +78,23 @@ export interface WfPredictResult {
   note?: string
 }
 
+/** GET instances/{id}/resurrect-preview?nodeId= 唤醒预览（原节点上次办理人 + 规则试算） */
+export interface WfResurrectPreview {
+  /** 定位节点名（展示） */
+  nodeName?: string
+  /** 原节点上次办理人（默认回填的重选对象） */
+  historyAssignees: { id: number; name: string }[]
+  /** 规则试算办理人（不改人时沿用规则；仅展示提示） */
+  ruleAssignees?: { name: string; kind?: string }[]
+}
+
 /** POST instances/{id}/resurrect 唤醒（已结束实例按快照重建 + 定位节点重审） */
 export interface WfResurrectInput {
   /** 唤醒后定位到的节点 id */
   nodeId: string
   comment?: string
+  /** 重新指定的办理人（人/角色/部门）；**缺省=沿用节点规则**，向后兼容 */
+  assignees?: WfOrgRef[]
 }
 
 /** POST instances 穿越时空补审：在发起入参上附业务时间（ISO 日期） */

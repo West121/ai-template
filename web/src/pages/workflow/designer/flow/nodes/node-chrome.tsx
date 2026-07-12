@@ -21,10 +21,11 @@ export const FormFieldsContext = createContext<FormFieldOption[]>([])
 export type ValidationRingState = "error" | "warning"
 
 /**
- * 运行时跟踪高亮态（只读 FlowViewer 用）：completed → 绿描边，active → 主题色脉冲。
+ * 运行时跟踪高亮态（只读 FlowViewer 用）：completed → 绿描边，active → 主题色脉冲，
+ * predicted → 蓝色虚线（流程预测的后续节点/边，区别已完成绿实线）。
  * 与设计器编辑态解耦：设计器节点 data.highlight 恒为 undefined，仅实例详情跟踪图注入。
  */
-export type NodeHighlightState = "completed" | "active"
+export type NodeHighlightState = "completed" | "active" | "predicted"
 
 /**
  * 连线锚点基础样式（各节点按主题色再叠加 bg）。
@@ -77,6 +78,8 @@ export function nodeRing(
   if (validation === "warning") return "ring-2 ring-amber-500 ring-offset-2 ring-offset-background"
   if (highlight === "active") return "ring-2 ring-primary wf-hl-active"
   if (highlight === "completed") return "ring-2 ring-emerald-500"
+  // 预测节点：蓝色虚线（outline 才能虚线；ring 无虚线态）
+  if (highlight === "predicted") return "outline outline-2 outline-dashed outline-offset-2 outline-blue-400 wf-hl-predicted"
   return selectedRing(selected)
 }
 

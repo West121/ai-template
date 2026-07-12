@@ -51,8 +51,10 @@ import type { WfInstanceDetailP3 } from "@/types/workflow-p3"
 import { SubInstanceLinks, WfP3Bar } from "./wf-p3"
 import { SealStrip } from "./wf-print"
 import { DingtalkTrack } from "./wf-dingtalk-track"
-import { FlowViewer } from "./designer/flow/flow-viewer"
+import { FlowViewer, type FlowPredict } from "./designer/flow/flow-viewer"
 import type { ProcessModel } from "./designer/flow/model"
+import { buildNodeInfo, buildReplaySteps, type NodeRuntimeInfo } from "./designer/flow/runtime-info"
+import type { WfPredictResult } from "@/types/workflow-p3"
 
 /* ================= 跟踪图：react-flow 只读 FlowViewer + 高亮 ================= */
 
@@ -73,10 +75,47 @@ const modelCache = new Map<string, ProcessModel>()
  * ProcessModel，喂只读 FlowViewer 渲染 + 高亮当前节点/已完成路径。
  * 高亮 id（highlight.completed/active）与 ProcessModel 节点/边 id 对齐（== BPMN 元素 id）。
  */
-function FlowTrack({ xml, highlight }: { xml: string; highlight?: WfHighlight }) {
+function FlowTrack({
+  xml,
+  highlight,
+  nodeInfo,
+  replaySteps,
+  instanceId,
+  predictable,
+}: {
+  xml: string
+  highlight?: WfHighlight
+  /** ① 节点办理信息（timeline 映射，瞬态叠加） */
+  nodeInfo?: Record<string, NodeRuntimeInfo>
+  /** ② 回放时间序 */
+  replaySteps?: string[]
+  /** ③ 预测：实例 id + 是否可预测 */
+  instanceId: number
+  predictable?: boolean
+}) {
   const [model, setModel] = useState<ProcessModel | null>(() => modelCache.get(xml) ?? null)
   const [loadError, setLoadError] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
+  // ③ 流程预测（复用 /predict；拉取后 FlowViewer 显蓝虚线 + 可播放）
+  const [predict, setPredict] = useState<FlowPredict | null>(null)
+  const [predictLoading, setPredictLoading] = useState(false)
+  const runPredict = useCallback(async () => {
+    setPredictLoading(true)
+    try {
+      const res = await api<WfPredictResult>(`/api/wf/instances/${instanceId}/predict`, { method: "POST" })
+      const path = res.path ?? []
+      setPredict({
+        nodeIds: path.map((p) => p.nodeId).filter(Boolean),
+        assignees: Object.fromEntries(
+          path.filter((p) => p.nodeId).map((p) => [p.nodeId, (p.assignees ?? []).map((a) => a.name)]),
+        ),
+      })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "预测失败")
+    } finally {
+      setPredictLoading(false)
+    }
+  }, [instanceId])
 
   useEffect(() => {
     const cached = modelCache.get(xml)
@@ -124,6 +163,11 @@ function FlowTrack({ xml, highlight }: { xml: string; highlight?: WfHighlight })
       <FlowViewer
         model={model}
         highlight={highlight}
+        nodeInfo={nodeInfo}
+        replaySteps={replaySteps}
+        predict={predict}
+        onRequestPredict={predictable ? () => void runPredict() : undefined}
+        predictLoading={predictLoading}
         heightClass={fullscreen ? "min-h-0 flex-1" : "h-105"}
       />
       <div className="absolute top-3 right-3 z-10">
@@ -275,6 +319,12 @@ export default function WorkflowInstanceDetailPage() {
     () => (detail?.timeline ?? []).filter((t) => ["CC", "URGE"].includes(t.action ?? "")),
     [detail?.timeline],
   )
+  // 流程图预览增强：① 节点办理信息（timeline→nodeId 映射）② 回放时间序（纯映射，瞬态注入 FlowViewer）
+  const nodeRuntimeInfo = useMemo(
+    () => buildNodeInfo(detail?.timeline, detail?.highlight, detail?.currentNodes),
+    [detail?.timeline, detail?.highlight, detail?.currentNodes],
+  )
+  const replaySteps = useMemo(() => buildReplaySteps(detail?.timeline), [detail?.timeline])
 
   const isInitiator = detail != null && userId != null && detail.initiatorId === userId
   /** 被驳回到发起人：实例状态为 REJECTED 且我是发起人 → 表单可编辑 + 重新提交 */
@@ -591,7 +641,14 @@ export default function WorkflowInstanceDetailPage() {
           // 钉钉定义：渲染只读钉钉风格跟踪图（复用 dingtalk 画布布局，按 highlight 高亮节点 id）
           <DingtalkTrack designerJson={detail.designerJson} highlight={detail.highlight} />
         ) : detail.bpmnXml ? (
-          <FlowTrack xml={detail.bpmnXml} highlight={detail.highlight} />
+          <FlowTrack
+            xml={detail.bpmnXml}
+            highlight={detail.highlight}
+            nodeInfo={nodeRuntimeInfo}
+            replaySteps={replaySteps}
+            instanceId={detail.id}
+            predictable={detail.predictable}
+          />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
             <GitBranch className="size-8 opacity-30" />

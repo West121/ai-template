@@ -108,6 +108,8 @@ export interface WfEdgeData extends Record<string, unknown> {
   validation?: WfValidationState
   /** 运行时跟踪高亮态（瞬态、仅渲染用，不序列化；只读 FlowViewer 注入，同 WfNodeData.highlight） */
   highlight?: NodeHighlightState
+  /** ② 回放流光：正在走过的边（瞬态，单次动画；FlowViewer 回放控制器注入） */
+  flow?: boolean
 }
 
 export type WfRfNode = Node<WfNodeData>
