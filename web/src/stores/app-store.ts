@@ -47,15 +47,20 @@ interface AppState extends AppSettings {
   updateSettings: (partial: Partial<AppSettings>) => void
   resetSettings: () => void
   toggleSidebar: () => void
+  /** 系统·用户管理 左部门树宽度（可拖，持久化；不随主题 reset 清除） */
+  sysDeptTreeWidth: number
+  setSysDeptTreeWidth: (width: number) => void
 }
 
 export const useAppStore = create<AppState>()(
   persist(
     (set) => ({
       ...DEFAULT_SETTINGS,
+      sysDeptTreeWidth: 240,
       updateSettings: (partial) => set(partial),
       resetSettings: () => set(DEFAULT_SETTINGS),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+      setSysDeptTreeWidth: (width) => set({ sysDeptTreeWidth: width }),
     }),
     { name: "oa-app-settings" },
   ),

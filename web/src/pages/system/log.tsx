@@ -1,14 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ColumnDef } from "@tanstack/react-table"
-import { CloudOff, RotateCw, ShieldAlert, TerminalSquare } from "lucide-react"
+import { CloudOff, RotateCw, ShieldAlert, TerminalSquare, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { PageHeader } from "@/components/page-header"
 import { Modal } from "@/components/modal"
-import { DataTable } from "@/components/data-table/data-table"
+import { DataTable, indexColumn } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { api, NetworkError, type PageResult } from "@/lib/api"
+import { runBatch, toastBatch } from "@/lib/batch"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Card, CardContent } from "@/components/ui/card"
 import {
   Select,
@@ -69,6 +80,8 @@ export default function LogPage() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [operDetail, setOperDetail] = useState<OperLog | null>(null)
+  // 批量清理确认：kind 决定命中操作日志 / 登录日志端点
+  const [batchDel, setBatchDel] = useState<{ kind: "oper" | "login"; ids: number[]; clear: () => void } | null>(null)
 
   // 运行日志
   const [runtimeLines, setRuntimeLines] = useState<string[]>([])
@@ -113,6 +126,21 @@ export default function LogPage() {
     }
   }, [])
 
+  const confirmBatchDelete = async () => {
+    if (!batchDel) return
+    // 操作日志 → /api/infra/logs/oper，登录日志 → /api/infra/logs/login
+    const base = batchDel.kind === "oper" ? "/api/infra/logs/oper" : "/api/infra/logs/login"
+    const result = await runBatch({
+      ids: batchDel.ids,
+      batchPath: `${base}/batch-delete`,
+      single: (id) => api(`${base}/${id}`, { method: "DELETE" }),
+    })
+    toastBatch(result, "清理")
+    batchDel.clear()
+    setBatchDel(null)
+    void load()
+  }
+
   useEffect(() => {
     if (offline) {
       setLoading(false)
@@ -138,6 +166,7 @@ export default function LogPage() {
 
   const operColumns = useMemo<ColumnDef<OperLog, unknown>[]>(
     () => [
+      indexColumn<OperLog>(),
       {
         accessorKey: "username",
         meta: { title: "操作人" },
@@ -221,6 +250,7 @@ export default function LogPage() {
 
   const loginColumns = useMemo<ColumnDef<LoginLog, unknown>[]>(
     () => [
+      indexColumn<LoginLog>(),
       {
         accessorKey: "username",
         meta: { title: "账号" },
@@ -368,6 +398,17 @@ export default function LogPage() {
               onRowClick={(row) => setOperDetail(row)}
               onRefresh={() => void load()}
               exportFileName="操作日志"
+              enableSelection
+              batchSlot={(rows, clear) => (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1 rounded-full px-2.5 text-xs text-destructive hover:text-destructive"
+                  onClick={() => setBatchDel({ kind: "oper", ids: rows.map((r) => r.id), clear })}
+                >
+                  <Trash2 className="size-3.5" /> 清理
+                </Button>
+              )}
             />
           </TabsContent>
 
@@ -381,6 +422,17 @@ export default function LogPage() {
               searchPlaceholder="搜索账号 / IP / 地点"
               onRefresh={() => void load()}
               exportFileName="登录日志"
+              enableSelection
+              batchSlot={(rows, clear) => (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1 rounded-full px-2.5 text-xs text-destructive hover:text-destructive"
+                  onClick={() => setBatchDel({ kind: "login", ids: rows.map((r) => r.id), clear })}
+                >
+                  <Trash2 className="size-3.5" /> 清理
+                </Button>
+              )}
             />
           </TabsContent>
 
@@ -492,6 +544,27 @@ export default function LogPage() {
           </div>
         )}
       </Modal>
+
+      {/* 批量清理确认（带选中数） */}
+      <AlertDialog open={!!batchDel} onOpenChange={(o) => !o && setBatchDel(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>清理选中的 {batchDel?.ids.length ?? 0} 条日志？此操作不可恢复。</AlertDialogTitle>
+            <AlertDialogDescription>
+              将删除所选{batchDel?.kind === "login" ? "登录" : "操作"}日志记录，无法找回。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => void confirmBatchDelete()}
+            >
+              清理
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

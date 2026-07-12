@@ -7,11 +7,22 @@ import { PageHeader } from "@/components/page-header"
 import { PermissionBanner } from "@/components/permission-banner"
 import { Modal } from "@/components/modal"
 import { FileUploader, formatFileSize, getFileIcon } from "@/components/file-uploader"
-import { DataTable } from "@/components/data-table/data-table"
+import { DataTable, indexColumn } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { api, NetworkError, type PageResult } from "@/lib/api"
+import { runBatch, toastBatch } from "@/lib/batch"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
@@ -74,6 +85,7 @@ export default function FilePage() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<FileRecord | null>(null)
+  const [batchDel, setBatchDel] = useState<{ ids: number[]; clear: () => void } | null>(null)
 
   const offline = useAuthStore((s) => s.offline)
   const canEdit = useHasPerm("system:file:edit")
@@ -114,8 +126,22 @@ export default function FilePage() {
     }
   }
 
+  const confirmBatchDelete = async () => {
+    if (!batchDel) return
+    const result = await runBatch({
+      ids: batchDel.ids,
+      batchPath: "/api/infra/files/batch-delete",
+      single: (id) => api(`/api/infra/files/${id}`, { method: "DELETE" }),
+    })
+    toastBatch(result, "删除")
+    batchDel.clear()
+    setBatchDel(null)
+    void load()
+  }
+
   const columns = useMemo<ColumnDef<FileRecord, unknown>[]>(
     () => [
+      indexColumn<FileRecord>(),
       {
         accessorKey: "originalName",
         meta: { title: "文件名" },
@@ -261,6 +287,17 @@ export default function FilePage() {
           advancedFilter
           onRefresh={() => void load()}
           exportFileName="文件列表"
+          enableSelection={canEdit}
+          batchSlot={(rows, clear) => (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 rounded-full px-2.5 text-xs text-destructive hover:text-destructive"
+              onClick={() => setBatchDel({ ids: rows.map((r) => r.id), clear })}
+            >
+              <Trash2 className="size-3.5" /> 删除
+            </Button>
+          )}
         />
       )}
 
@@ -299,6 +336,25 @@ export default function FilePage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 批量删除确认（带选中数，强提示删存储对象） */}
+      <AlertDialog open={!!batchDel} onOpenChange={(o) => !o && setBatchDel(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除选中的 {batchDel?.ids.length ?? 0} 个文件？</AlertDialogTitle>
+            <AlertDialogDescription>将同时删除存储对象，不可恢复。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => void confirmBatchDelete()}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

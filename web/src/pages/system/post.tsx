@@ -4,10 +4,21 @@ import { CloudOff, Pencil, Plus, RotateCw, ShieldAlert, Trash2 } from "lucide-re
 import { toast } from "sonner"
 import { PageHeader } from "@/components/page-header"
 import { PermissionBanner } from "@/components/permission-banner"
-import { DataTable } from "@/components/data-table/data-table"
+import { DataTable, indexColumn } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { api, NetworkError, type PageResult } from "@/lib/api"
+import { runBatch, toastBatch } from "@/lib/batch"
 import { Button } from "@/components/ui/button"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
@@ -50,6 +61,7 @@ export default function PostPage() {
   const [form, setForm] = useState<PostForm>(emptyForm)
   const [submitting, setSubmitting] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<PostRow | null>(null)
+  const [batchDel, setBatchDel] = useState<{ rows: PostRow[]; clear: () => void } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -127,8 +139,23 @@ export default function PostPage() {
     }
   }
 
+  const confirmBatchDelete = async () => {
+    if (!batchDel) return
+    const ids = batchDel.rows.map((r) => r.id)
+    const result = await runBatch({
+      ids,
+      batchPath: "/api/system/posts/batch-delete",
+      single: (id) => api(`/api/system/posts/${id}`, { method: "DELETE" }),
+    })
+    toastBatch(result, "删除")
+    batchDel.clear()
+    setBatchDel(null)
+    void load()
+  }
+
   const columns: ColumnDef<PostRow, unknown>[] = useMemo(
     () => [
+      indexColumn<PostRow>(),
       {
         accessorKey: "code",
         meta: { title: "岗位编码", filterType: "text" },
@@ -241,6 +268,17 @@ export default function PostPage() {
           advancedFilter
           onRefresh={() => void load()}
           exportFileName="岗位列表"
+          enableSelection={canEdit}
+          batchSlot={(rows, clear) => (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 rounded-full px-2.5 text-xs text-destructive hover:text-destructive"
+              onClick={() => setBatchDel({ rows, clear })}
+            >
+              <Trash2 className="size-3.5" /> 删除
+            </Button>
+          )}
           actionSlot={
             <Button size="sm" className="h-8 gap-1" disabled={!canEdit} onClick={openCreate}>
               <Plus className="size-4" />
@@ -325,6 +363,22 @@ export default function PostPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 批量删除确认（带选中数） */}
+      <AlertDialog open={!!batchDel} onOpenChange={(o) => !o && setBatchDel(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除选中的 {batchDel?.rows.length ?? 0} 个岗位？</AlertDialogTitle>
+            <AlertDialogDescription>此操作不可恢复。仍有在岗人员的岗位将删除失败并逐条反馈。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-white hover:bg-destructive/90" onClick={() => void confirmBatchDelete()}>
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

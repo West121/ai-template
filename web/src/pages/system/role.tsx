@@ -1,13 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ColumnDef } from "@tanstack/react-table"
-import { Building2, CloudOff, Pencil, Plus, RotateCw, ShieldAlert, ShieldCheck, Trash2, X } from "lucide-react"
+import { Building2, CircleCheck, CircleSlash, CloudOff, Pencil, Plus, RotateCw, ShieldAlert, ShieldCheck, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/page-header"
 import { PermissionBanner } from "@/components/permission-banner"
 import { OrgPicker } from "@/components/org-picker"
-import { DataTable } from "@/components/data-table/data-table"
+import { DataTable, indexColumn } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { api, NetworkError, type PageResult } from "@/lib/api"
+import { runBatch, toastBatch } from "@/lib/batch"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -166,6 +177,7 @@ export default function RolePage() {
   const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set())
 
   const [deleteTarget, setDeleteTarget] = useState<RoleRow | null>(null)
+  const [batchDel, setBatchDel] = useState<{ rows: RoleRow[]; clear: () => void } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -303,8 +315,51 @@ export default function RolePage() {
     }
   }
 
+  // 批量启用/停用：优先 batch-status，未实现则逐条 PUT 整行（后端 RoleRequest 要求 code/name/dataScope 非空）
+  const batchToggleStatus = async (rows: RoleRow[], enabled: boolean, clear: () => void) => {
+    const ids = rows.map((r) => r.id)
+    const byId = new Map(rows.map((r) => [r.id, r]))
+    const result = await runBatch({
+      ids,
+      batchPath: "/api/system/roles/batch-status",
+      batchBody: (list) => ({ ids: list, enabled }),
+      single: (id) => {
+        const r = byId.get(id)
+        return api(`/api/system/roles/${id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            code: r?.code,
+            name: r?.name,
+            dataScope: r?.dataScope,
+            remark: r?.remark || undefined,
+            enabled,
+            customDeptIds: r?.dataScope === "CUSTOM" ? r?.customDeptIds : undefined,
+          }),
+        })
+      },
+    })
+    toastBatch(result, enabled ? "启用" : "停用")
+    clear()
+    void load()
+  }
+
+  const confirmBatchDelete = async () => {
+    if (!batchDel) return
+    const ids = batchDel.rows.map((r) => r.id)
+    const result = await runBatch({
+      ids,
+      batchPath: "/api/system/roles/batch-delete",
+      single: (id) => api(`/api/system/roles/${id}`, { method: "DELETE" }),
+    })
+    toastBatch(result, "删除")
+    batchDel.clear()
+    setBatchDel(null)
+    void load()
+  }
+
   const columns: ColumnDef<RoleRow, unknown>[] = useMemo(
     () => [
+      indexColumn<RoleRow>(),
       {
         accessorKey: "name",
         meta: { title: "角色名称", filterType: "text" },
@@ -462,6 +517,36 @@ export default function RolePage() {
           advancedFilter
           onRefresh={() => void load()}
           exportFileName="角色列表"
+          enableSelection={canEdit}
+          batchSlot={(rows, clear) => (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1 rounded-full px-2.5 text-xs"
+                onClick={() => void batchToggleStatus(rows, true, clear)}
+              >
+                <CircleCheck className="size-3.5" /> 启用
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1 rounded-full px-2.5 text-xs"
+                onClick={() => void batchToggleStatus(rows, false, clear)}
+              >
+                <CircleSlash className="size-3.5" /> 停用
+              </Button>
+              <span className="h-4 w-px bg-border" />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1 rounded-full px-2.5 text-xs text-destructive hover:text-destructive"
+                onClick={() => setBatchDel({ rows, clear })}
+              >
+                <Trash2 className="size-3.5" /> 删除
+              </Button>
+            </>
+          )}
           actionSlot={
             <Button size="sm" className="h-8 gap-1" disabled={!canEdit} onClick={openCreate}>
               <Plus className="size-4" />
@@ -646,6 +731,27 @@ export default function RolePage() {
           })
         }}
       />
+
+      {/* 批量删除确认（带选中数） */}
+      <AlertDialog open={!!batchDel} onOpenChange={(o) => !o && setBatchDel(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除选中的 {batchDel?.rows.length ?? 0} 个角色？</AlertDialogTitle>
+            <AlertDialogDescription>
+              此操作不可恢复。仍有关联用户的角色将删除失败并逐条反馈。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => void confirmBatchDelete()}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

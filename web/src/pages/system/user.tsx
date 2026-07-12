@@ -1,15 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import type { ColumnDef } from "@tanstack/react-table"
 import {
   BriefcaseBusiness,
+  Building2,
+  ChevronDown,
+  CircleCheck,
+  CircleSlash,
   Copy,
   Ellipsis,
+  FolderInput,
   IdCard,
   KeyRound,
   Pencil,
   Plus,
   Trash2,
+  UserCog,
+  X,
 } from "lucide-react"
 import { useForm } from "react-hook-form"
 import { toast } from "sonner"
@@ -18,17 +32,31 @@ import { PageHeader } from "@/components/page-header"
 import { PermissionBanner } from "@/components/permission-banner"
 import { Modal } from "@/components/modal"
 import { Drawer } from "@/components/drawer"
-import { DataTable } from "@/components/data-table/data-table"
+import { ErrorBoundary } from "@/components/error-boundary"
+import { DataTable, indexColumn } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { RecordPicker, RecordPickerField, type RecordPickerColumn } from "@/components/record-picker"
+import { OrgPicker, type OrgRef } from "@/components/org-picker"
+import { DeptTree, type DeptNode } from "@/components/system/dept-tree"
 import { OfflineFallback } from "@/components/offline-fallback"
 import { ErrorState } from "@/components/error-state"
 import { useApiData } from "@/hooks/use-api-data"
 import { api, type PageResult } from "@/lib/api"
+import { runBatch, toastBatch } from "@/lib/batch"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import {
   Dialog,
   DialogContent,
@@ -62,9 +90,16 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import { useHasPerm } from "@/stores/auth-store"
+import { useAppStore } from "@/stores/app-store"
+import { useAuthStore, useHasPerm } from "@/stores/auth-store"
 
 interface UserRow extends Record<string, unknown> {
   id: number
@@ -96,15 +131,6 @@ const genderLabels: Record<string, string> = {
   MALE: "男",
   FEMALE: "女",
   UNKNOWN: "保密",
-}
-
-interface DeptNode {
-  id: number
-  name: string
-  parentId?: number | null
-  sort?: number
-  userCount?: number
-  children?: DeptNode[]
 }
 
 interface DeptOption {
@@ -238,8 +264,11 @@ const editDefaults: EditFormValues = {
 }
 
 export default function UserPage() {
-  const [deptFilter, setDeptFilter] = useState("all")
+  // 左树选中部门（受控）：null=全部部门；含子部门开关默认勾选
+  const [selectedDept, setSelectedDept] = useState<{ id: number; name: string } | null>(null)
+  const [includeSub, setIncludeSub] = useState(true)
   const [statusFilter, setStatusFilter] = useState("all")
+  const [deptSheetOpen, setDeptSheetOpen] = useState(false)
 
   // 下拉选项数据
   const [deptOptions, setDeptOptions] = useState<DeptOption[]>([])
@@ -247,6 +276,34 @@ export default function UserPage() {
   const [roleOptions, setRoleOptions] = useState<RoleOption[]>([])
 
   const canEdit = useHasPerm("system:user:edit")
+  const deptCanEdit = useHasPerm("system:dept:edit")
+  const currentUserId = useAuthStore((s) => s.userId)
+
+  // 左树宽度（可拖，持久化到 app-store）；拖拽期间用 liveWidth 过渡，抬起再落库
+  const treeWidth = useAppStore((s) => s.sysDeptTreeWidth)
+  const setTreeWidth = useAppStore((s) => s.setSysDeptTreeWidth)
+  const [liveWidth, setLiveWidth] = useState<number | null>(null)
+  const dragRef = useRef<{ startX: number; startW: number } | null>(null)
+  const effectiveWidth = liveWidth ?? treeWidth
+
+  const onDragDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    dragRef.current = { startX: e.clientX, startW: effectiveWidth }
+    e.currentTarget.setPointerCapture(e.pointerId)
+    e.preventDefault()
+  }
+  const onDragMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current
+    if (!d) return
+    setLiveWidth(Math.min(420, Math.max(200, d.startW + (e.clientX - d.startX))))
+  }
+  const onDragUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current
+    if (!d) return
+    setTreeWidth(Math.min(420, Math.max(200, d.startW + (e.clientX - d.startX))))
+    dragRef.current = null
+    setLiveWidth(null)
+    e.currentTarget.releasePointerCapture(e.pointerId)
+  }
 
   // 新增用户
   const [createOpen, setCreateOpen] = useState(false)
@@ -278,6 +335,13 @@ export default function UserPage() {
   const [resetResult, setResetResult] = useState<{ name: string; password: string } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null)
 
+  // 批量操作目标（保留选中行原始数据 + 清空选中的回调）
+  const [moveDeptTarget, setMoveDeptTarget] = useState<{ rows: UserRow[]; clear: () => void } | null>(null)
+  const [moveDeptPickerOpen, setMoveDeptPickerOpen] = useState(false)
+  const [setRoleTarget, setSetRoleTarget] = useState<{ rows: UserRow[]; clear: () => void } | null>(null)
+  const [batchRoleIds, setBatchRoleIds] = useState<number[]>([])
+  const [batchDelTarget, setBatchDelTarget] = useState<{ rows: UserRow[]; clear: () => void } | null>(null)
+
   // 任职管理 Drawer
   const [assignTarget, setAssignTarget] = useState<UserRow | null>(null)
   const [assignments, setAssignments] = useState<AssignmentRow[]>([])
@@ -289,10 +353,13 @@ export default function UserPage() {
 
   const { data, loading, error, offline, reload, setData } = useApiData<PageResult<UserRow>>(() => {
     const params = new URLSearchParams({ pageNum: "1", pageSize: "100" })
-    if (deptFilter !== "all") params.set("deptId", deptFilter)
+    if (selectedDept) {
+      params.set("deptId", String(selectedDept.id))
+      params.set("includeSubDept", includeSub ? "true" : "false")
+    }
     if (statusFilter !== "all") params.set("enabled", statusFilter === "enabled" ? "true" : "false")
     return api<PageResult<UserRow>>(`/api/system/users?${params.toString()}`)
-  }, [deptFilter, statusFilter])
+  }, [selectedDept, includeSub, statusFilter])
   const rows = data?.list ?? []
 
   const loadOptions = useCallback(async () => {
@@ -302,7 +369,7 @@ export default function UserPage() {
         api<PageResult<PostOption>>("/api/system/posts?pageNum=1&pageSize=100"),
         api<PageResult<RoleOption>>("/api/system/roles?pageNum=1&pageSize=100"),
       ])
-      setDeptOptions(flattenDepts(tree))
+      setDeptOptions(flattenDepts(Array.isArray(tree) ? tree : []))
       setPostOptions(posts.list)
       setRoleOptions(roles.list)
     } catch {
@@ -313,6 +380,12 @@ export default function UserPage() {
   useEffect(() => {
     if (!offline) void loadOptions()
   }, [loadOptions, offline])
+
+  /* ---------- 左树选中 ---------- */
+
+  const handleSelectDept = useCallback((id: number | null, node: DeptNode | null) => {
+    setSelectedDept(id === null || !node ? null : { id, name: node.name })
+  }, [])
 
   /* ---------- 新增 / 编辑 ---------- */
 
@@ -466,6 +539,90 @@ export default function UserPage() {
     }
   }
 
+  /* ---------- 批量操作（启停 / 移部门 / 设角色 / 删除） ---------- */
+
+  const batchStatus = async (batchRows: UserRow[], enabled: boolean, clear: () => void) => {
+    const result = await runBatch({
+      ids: batchRows.map((r) => r.id),
+      batchPath: "/api/system/users/batch-status",
+      batchBody: (ids) => ({ ids, enabled }),
+      single: (id) =>
+        api(`/api/system/users/${id}/enabled`, {
+          method: "PUT",
+          body: JSON.stringify({ enabled }),
+        }),
+    })
+    toastBatch(result, enabled ? "启用" : "停用")
+    clear()
+    reload()
+  }
+
+  const confirmMoveDept = async (refs: OrgRef[]) => {
+    const dept = refs[0]
+    if (!moveDeptTarget || !dept) return
+    const result = await runBatch({
+      ids: moveDeptTarget.rows.map((r) => r.id),
+      batchPath: "/api/system/users/batch-move-dept",
+      batchBody: (ids) => ({ ids, deptId: dept.id }),
+      single: (id) =>
+        api(`/api/system/users/${id}/dept`, {
+          method: "PUT",
+          body: JSON.stringify({ deptId: dept.id }),
+        }),
+    })
+    toastBatch(result, `移动到「${dept.name}」`)
+    moveDeptTarget.clear()
+    setMoveDeptTarget(null)
+    reload()
+  }
+
+  const confirmSetRole = async () => {
+    if (!setRoleTarget) return
+    if (batchRoleIds.length === 0) {
+      toast.error("请至少选择一个角色")
+      return
+    }
+    const result = await runBatch({
+      ids: setRoleTarget.rows.map((r) => r.id),
+      batchPath: "/api/system/users/batch-set-role",
+      batchBody: (ids) => ({ ids, roleIds: batchRoleIds }),
+      single: (id) =>
+        api(`/api/system/users/${id}/roles`, {
+          method: "PUT",
+          body: JSON.stringify({ roleIds: batchRoleIds }),
+        }),
+    })
+    toastBatch(result, "设置角色")
+    setRoleTarget.clear()
+    setSetRoleTarget(null)
+    reload()
+  }
+
+  const openBatchDelete = (batchRows: UserRow[], clear: () => void) => {
+    // 防误删自己：过滤掉当前登录用户
+    const safeRows = currentUserId != null ? batchRows.filter((r) => r.id !== currentUserId) : batchRows
+    if (safeRows.length === 0) {
+      toast.error("不能删除当前登录用户")
+      clear()
+      return
+    }
+    if (safeRows.length < batchRows.length) toast.warning("已自动排除当前登录用户")
+    setBatchDelTarget({ rows: safeRows, clear })
+  }
+
+  const confirmBatchDelete = async () => {
+    if (!batchDelTarget) return
+    const result = await runBatch({
+      ids: batchDelTarget.rows.map((r) => r.id),
+      batchPath: "/api/system/users/batch-delete",
+      single: (id) => api(`/api/system/users/${id}`, { method: "DELETE" }),
+    })
+    toastBatch(result, "删除")
+    batchDelTarget.clear()
+    setBatchDelTarget(null)
+    reload()
+  }
+
   /* ---------- 任职管理 ---------- */
 
   const loadAssignments = useCallback(async (userId: number) => {
@@ -541,6 +698,12 @@ export default function UserPage() {
     )
   }
 
+  const toggleBatchRole = (roleId: number) => {
+    setBatchRoleIds((prev) =>
+      prev.includes(roleId) ? prev.filter((id) => id !== roleId) : [...prev, roleId],
+    )
+  }
+
   // 状态派生字段：advancedFilter 的 select 条件按中文值求值
   const tableRows = useMemo<UserTableRow[]>(
     () => (data?.list ?? []).map((row) => ({ ...row, enabledText: row.enabled ? "启用" : "停用" })),
@@ -553,6 +716,7 @@ export default function UserPage() {
 
   const columns: ColumnDef<UserTableRow, unknown>[] = useMemo(
     () => [
+      indexColumn<UserTableRow>(),
       {
         accessorKey: "username",
         meta: { title: "用户名", filterType: "text" },
@@ -697,55 +861,180 @@ export default function UserPage() {
       ) : error ? (
         <ErrorState message={error} onRetry={reload} />
       ) : (
-        <DataTable
-          columns={columns}
-          data={tableRows}
-          searchKeys={["username", "name", "empNo", "phone"]}
-          searchPlaceholder="搜索姓名 / 账号 / 工号 / 手机号"
-          loading={loading}
-          onRefresh={() => reload()}
-          exportFileName="用户列表"
-          advancedFilter
-          groupOptions={[
-            { id: "primaryDeptName", label: "部门" },
-            { id: "primaryPostName", label: "岗位" },
-          ]}
-          filterSlot={
-            <>
-              <Select value={deptFilter} onValueChange={setDeptFilter}>
-                <SelectTrigger size="sm" className="h-8 w-36 text-sm">
-                  <SelectValue placeholder="部门" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">全部部门</SelectItem>
-                  {deptOptions.map((dept) => (
-                    <SelectItem key={dept.id} value={String(dept.id)}>
-                      {"　".repeat(dept.depth)}
-                      {dept.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger size="sm" className="h-8 w-28 text-sm">
-                  <SelectValue placeholder="状态" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">全部状态</SelectItem>
-                  <SelectItem value="enabled">启用</SelectItem>
-                  <SelectItem value="disabled">停用</SelectItem>
-                </SelectContent>
-              </Select>
-            </>
-          }
-          actionSlot={
-            <Button size="sm" className="h-8 gap-1" disabled={!canEdit} onClick={openCreate}>
-              <Plus className="size-4" />
-              新增用户
-            </Button>
-          }
-        />
+        <div className="flex flex-col gap-4 md:flex-row md:items-start">
+          {/* 左：部门树（md+ 常驻，< md 收进抽屉） */}
+          <ErrorBoundary label="部门树">
+            <aside style={{ width: effectiveWidth }} className="hidden shrink-0 md:block">
+              <div className="flex max-h-[calc(100dvh-11rem)] min-h-[480px] flex-col overflow-hidden rounded-lg border bg-card">
+                <DeptTree
+                  selectedId={selectedDept?.id ?? null}
+                  onSelect={handleSelectDept}
+                  onChanged={reload}
+                  canEdit={deptCanEdit}
+                  className="min-h-0 flex-1"
+                />
+              </div>
+            </aside>
+          </ErrorBoundary>
+
+          {/* 可拖分隔条（md+）：范围 200~420，落 app-store */}
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="拖动调整部门树宽度"
+            onPointerDown={onDragDown}
+            onPointerMove={onDragMove}
+            onPointerUp={onDragUp}
+            className="hidden w-1.5 shrink-0 cursor-ew-resize touch-none self-stretch rounded bg-border transition-colors hover:bg-primary/40 md:block"
+          />
+
+          {/* 右：用户表 */}
+          <ErrorBoundary label="用户表">
+            <div className="min-w-0 flex-1">
+              <DataTable
+                columns={columns}
+                data={tableRows}
+                searchKeys={["username", "name", "empNo", "phone"]}
+                searchPlaceholder="搜索姓名 / 账号 / 工号 / 手机号"
+                loading={loading}
+                onRefresh={() => reload()}
+                exportFileName="用户列表"
+                advancedFilter
+                enableSelection={canEdit}
+                groupOptions={[
+                  { id: "primaryDeptName", label: "部门" },
+                  { id: "primaryPostName", label: "岗位" },
+                ]}
+                filterSlot={
+                  <>
+                    {/* 移动端：部门抽屉入口 */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1 md:hidden"
+                      onClick={() => setDeptSheetOpen(true)}
+                    >
+                      <Building2 className="size-3.5" />
+                      部门{selectedDept ? `：${selectedDept.name}` : ""}
+                      <ChevronDown className="size-3.5" />
+                    </Button>
+                    {/* 当前部门范围 Badge（可清除回全部） */}
+                    {selectedDept && (
+                      <Badge variant="secondary" className="h-8 gap-1 rounded-md px-2 text-xs font-normal">
+                        当前：{selectedDept.name}
+                        <button
+                          type="button"
+                          aria-label="清除部门筛选"
+                          className="rounded-full p-0.5 hover:bg-foreground/10"
+                          onClick={() => setSelectedDept(null)}
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </Badge>
+                    )}
+                    <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Checkbox
+                        checked={includeSub}
+                        onCheckedChange={(v) => setIncludeSub(!!v)}
+                        aria-label="含子部门"
+                      />
+                      含子部门
+                    </label>
+                    <Select value={statusFilter} onValueChange={setStatusFilter}>
+                      <SelectTrigger size="sm" className="h-8 w-28 text-sm">
+                        <SelectValue placeholder="状态" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">全部状态</SelectItem>
+                        <SelectItem value="enabled">启用</SelectItem>
+                        <SelectItem value="disabled">停用</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </>
+                }
+                batchSlot={(batchRows, clear) => (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 gap-1 rounded-full px-2.5 text-xs"
+                      onClick={() => void batchStatus(batchRows, true, clear)}
+                    >
+                      <CircleCheck className="size-3.5" /> 启用
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 gap-1 rounded-full px-2.5 text-xs"
+                      onClick={() => void batchStatus(batchRows, false, clear)}
+                    >
+                      <CircleSlash className="size-3.5" /> 停用
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 gap-1 rounded-full px-2.5 text-xs"
+                      onClick={() => {
+                        setMoveDeptTarget({ rows: batchRows, clear })
+                        setMoveDeptPickerOpen(true)
+                      }}
+                    >
+                      <FolderInput className="size-3.5" /> 移部门
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 gap-1 rounded-full px-2.5 text-xs"
+                      onClick={() => {
+                        setBatchRoleIds([])
+                        setSetRoleTarget({ rows: batchRows, clear })
+                      }}
+                    >
+                      <UserCog className="size-3.5" /> 设角色
+                    </Button>
+                    <span className="h-4 w-px bg-border" />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 gap-1 rounded-full px-2.5 text-xs text-destructive hover:text-destructive"
+                      onClick={() => openBatchDelete(batchRows, clear)}
+                    >
+                      <Trash2 className="size-3.5" /> 删除
+                    </Button>
+                  </>
+                )}
+                actionSlot={
+                  <Button size="sm" className="h-8 gap-1" disabled={!canEdit} onClick={openCreate}>
+                    <Plus className="size-4" />
+                    新增用户
+                  </Button>
+                }
+              />
+            </div>
+          </ErrorBoundary>
+        </div>
       )}
+
+      {/* 移动端部门抽屉 */}
+      <Sheet open={deptSheetOpen} onOpenChange={setDeptSheetOpen}>
+        <SheetContent side="left" className="w-[300px] gap-0 p-0 sm:max-w-[300px]">
+          <SheetHeader className="border-b p-3">
+            <SheetTitle className="text-sm">选择部门</SheetTitle>
+          </SheetHeader>
+          <ErrorBoundary label="部门树-移动">
+            <DeptTree
+              selectedId={selectedDept?.id ?? null}
+              onSelect={(id, node) => {
+                handleSelectDept(id, node)
+                setDeptSheetOpen(false)
+              }}
+              onChanged={reload}
+              canEdit={deptCanEdit}
+              className="min-h-0 flex-1"
+            />
+          </ErrorBoundary>
+        </SheetContent>
+      </Sheet>
 
       {/* 新增用户：Modal + react-hook-form + zod，两列完整档案表单 */}
       <Modal
@@ -1428,6 +1717,76 @@ export default function UserPage() {
           </div>
         </div>
       </Drawer>
+
+      {/* 批量：移部门（OrgPicker 单选部门） */}
+      <OrgPicker
+        open={moveDeptPickerOpen}
+        onOpenChange={(open) => {
+          setMoveDeptPickerOpen(open)
+          if (!open) setMoveDeptTarget(null)
+        }}
+        title={`移动 ${moveDeptTarget?.rows.length ?? 0} 名用户到部门`}
+        multiple={false}
+        types={["DEPT"]}
+        value={[]}
+        onConfirm={(refs) => void confirmMoveDept(refs)}
+      />
+
+      {/* 批量：设角色（角色多选） */}
+      <Dialog open={!!setRoleTarget} onOpenChange={(open) => !open && setSetRoleTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>批量设置角色</DialogTitle>
+            <DialogDescription>
+              为选中的 {setRoleTarget?.rows.length ?? 0} 名用户统一设置角色（覆盖其主任职角色）。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-2 rounded-md border p-3 @sm:grid-cols-3">
+            {roleOptions.map((role) => (
+              <div key={role.id} className="flex items-center gap-2">
+                <Checkbox
+                  id={`batch-role-${role.id}`}
+                  checked={batchRoleIds.includes(role.id)}
+                  onCheckedChange={() => toggleBatchRole(role.id)}
+                />
+                <Label htmlFor={`batch-role-${role.id}`} className="cursor-pointer text-sm font-normal">
+                  {role.name}
+                </Label>
+              </div>
+            ))}
+            {roleOptions.length === 0 && (
+              <span className="col-span-full text-xs text-muted-foreground">角色数据加载中…</span>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSetRoleTarget(null)}>
+              取消
+            </Button>
+            <Button onClick={() => void confirmSetRole()}>确定</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 批量删除确认（带选中数，已排除当前登录用户） */}
+      <AlertDialog open={!!batchDelTarget} onOpenChange={(o) => !o && setBatchDelTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除选中的 {batchDelTarget?.rows.length ?? 0} 个用户？</AlertDialogTitle>
+            <AlertDialogDescription>
+              此操作不可恢复，删除后这些账号将无法登录系统。部分失败将逐条反馈。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => void confirmBatchDelete()}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* 重置密码确认 */}
       <Dialog open={!!resetTarget} onOpenChange={(open) => !open && setResetTarget(null)}>

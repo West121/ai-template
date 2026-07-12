@@ -137,14 +137,16 @@ export default function JobPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-12 text-center text-xs">#</TableHead>
                   <TableHead className="text-xs">JobHandler</TableHead>
                   <TableHead className="text-xs">说明</TableHead>
                   <TableHead className="text-xs">建议 CRON</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(info?.handlers ?? []).map((handler) => (
+                {(info?.handlers ?? []).map((handler, i) => (
                   <TableRow key={handler.name}>
+                    <TableCell className="text-center text-xs tabular-nums text-muted-foreground">{i + 1}</TableCell>
                     <TableCell className="font-mono text-xs text-primary">{handler.name}</TableCell>
                     <TableCell className="text-sm">{handler.description}</TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">{handler.recommendedCron}</TableCell>

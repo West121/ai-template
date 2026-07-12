@@ -19,9 +19,21 @@ import { PageHeader } from "@/components/page-header"
 import { PermissionBanner } from "@/components/permission-banner"
 import { Modal } from "@/components/modal"
 import { api, NetworkError, type PageResult } from "@/lib/api"
+import { runBatch, toastBatch } from "@/lib/batch"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -93,6 +105,48 @@ function collectParentIds(nodes: DictItem[]): number[] {
   )
 }
 
+/** 底部悬浮批量操作胶囊（对齐 DataTable 的选中胶囊样式；此页两张自绘表格复用） */
+function BatchBar({
+  count,
+  noun,
+  bottomClass,
+  onDelete,
+  onCancel,
+}: {
+  count: number
+  noun: string
+  bottomClass: string
+  onDelete: () => void
+  onCancel: () => void
+}) {
+  return (
+    <div className={cn("pointer-events-none fixed inset-x-0 z-50 flex justify-center", bottomClass)}>
+      <div className="pointer-events-auto flex items-center gap-2.5 rounded-full border bg-background/95 py-1.5 pl-4 pr-1.5 shadow-lg backdrop-blur animate-in fade-in-0 slide-in-from-bottom-2">
+        <span className="text-sm">
+          已选 <span className="font-semibold text-primary">{count}</span> 个{noun}
+        </span>
+        <span className="h-4 w-px bg-border" />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1 rounded-full px-2.5 text-xs text-destructive hover:text-destructive"
+          onClick={onDelete}
+        >
+          <Trash2 className="size-3.5" /> 删除
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 rounded-full px-2.5 text-xs text-muted-foreground"
+          onClick={onCancel}
+        >
+          取消
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 export default function DictPage() {
   const [types, setTypes] = useState<DictType[]>([])
   const [typesLoading, setTypesLoading] = useState(true)
@@ -121,6 +175,12 @@ export default function DictPage() {
   const [submitting, setSubmitting] = useState(false)
   const [deleteType, setDeleteType] = useState<DictType | null>(null)
   const [deleteItem, setDeleteItem] = useState<DictItem | null>(null)
+
+  // 多选批量删除：字典类型（左）/ 字典项（右）各一套选中集 + 二次确认开关
+  const [selectedTypeIds, setSelectedTypeIds] = useState<Set<number>>(new Set())
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<number>>(new Set())
+  const [batchTypeConfirm, setBatchTypeConfirm] = useState(false)
+  const [batchItemConfirm, setBatchItemConfirm] = useState(false)
 
   const selectedType = useMemo(
     () => types.find((t) => t.id === selectedId) ?? null,
@@ -173,6 +233,8 @@ export default function DictPage() {
   useEffect(() => {
     if (selectedId != null && !offline) void loadItems(selectedId)
     else setItems([])
+    // 切换字典类型 → 字典项选中作废（属于另一类型）
+    setSelectedItemIds(new Set())
   }, [selectedId, offline, loadItems])
 
   /* ---------- 树表展开 ---------- */
@@ -367,6 +429,70 @@ export default function DictPage() {
     }
   }
 
+  /* ---------- 多选批量删除 ---------- */
+
+  const toggleTypeSel = (id: number) =>
+    setSelectedTypeIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  const toggleItemSel = (id: number) =>
+    setSelectedItemIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  const toggleAllItems = (checked: boolean) =>
+    setSelectedItemIds((prev) => {
+      const next = new Set(prev)
+      for (const { node } of itemRows) {
+        if (checked) next.add(node.id)
+        else next.delete(node.id)
+      }
+      return next
+    })
+
+  const confirmBatchDeleteTypes = async () => {
+    const ids = Array.from(selectedTypeIds)
+    const result = await runBatch({
+      ids,
+      batchPath: "/api/infra/dict/types/batch-delete",
+      single: (id) => api(`/api/infra/dict/types/${id}`, { method: "DELETE" }),
+    })
+    toastBatch(result, "删除")
+    // 删掉的类型若含当前查看项 → 清空右表
+    if (selectedId != null && result.successIds.includes(selectedId)) setSelectedId(null)
+    setSelectedTypeIds(new Set())
+    setBatchTypeConfirm(false)
+    void loadTypes()
+  }
+
+  const confirmBatchDeleteItems = async () => {
+    if (selectedId == null) return
+    const ids = Array.from(selectedItemIds)
+    const result = await runBatch({
+      ids,
+      batchPath: "/api/infra/dict/items/batch-delete",
+      single: (id) => api(`/api/infra/dict/items/${id}`, { method: "DELETE" }),
+    })
+    toastBatch(result, "删除")
+    setSelectedItemIds(new Set())
+    setBatchItemConfirm(false)
+    void loadItems(selectedId)
+    void loadTypes()
+  }
+
+  // 字典项「全选可见行」状态（树形展开后可见的扁平行）
+  const visibleItemIds = itemRows.map((r) => r.node.id)
+  const allItemsSelected =
+    visibleItemIds.length > 0 && visibleItemIds.every((id) => selectedItemIds.has(id))
+  const someItemsSelected = visibleItemIds.some((id) => selectedItemIds.has(id))
+
   /* ---------- 渲染 ---------- */
 
   return (
@@ -438,7 +564,7 @@ export default function DictPage() {
                 </div>
               ) : (
                 <div className="space-y-0.5">
-                  {filteredTypes.map((t) => (
+                  {filteredTypes.map((t, idx) => (
                     <div
                       key={t.id}
                       role="button"
@@ -452,6 +578,17 @@ export default function DictPage() {
                         selectedId === t.id ? "bg-primary/10 text-primary" : "hover:bg-muted",
                       )}
                     >
+                      {canEdit && (
+                        <Checkbox
+                          checked={selectedTypeIds.has(t.id)}
+                          onCheckedChange={() => toggleTypeSel(t.id)}
+                          onClick={(e) => e.stopPropagation()}
+                          aria-label={`选择字典类型 ${t.name}`}
+                        />
+                      )}
+                      <span className="w-4 shrink-0 text-center text-[11px] tabular-nums text-muted-foreground">
+                        {idx + 1}
+                      </span>
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-sm font-medium">{t.name}</div>
                         <div
@@ -541,6 +678,16 @@ export default function DictPage() {
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-10 bg-muted/50">
+                      {canEdit && itemRows.length > 0 && (
+                        <Checkbox
+                          checked={allItemsSelected ? true : someItemsSelected ? "indeterminate" : false}
+                          onCheckedChange={(v) => toggleAllItems(!!v)}
+                          aria-label="全选字典项"
+                        />
+                      )}
+                    </TableHead>
+                    <TableHead className="w-12 bg-muted/50 text-center text-xs font-medium text-muted-foreground">#</TableHead>
                     <TableHead className="bg-muted/50 text-xs font-medium text-muted-foreground">标签</TableHead>
                     <TableHead className="bg-muted/50 text-xs font-medium text-muted-foreground">值</TableHead>
                     <TableHead className="bg-muted/50 text-xs font-medium text-muted-foreground">排序</TableHead>
@@ -552,28 +699,40 @@ export default function DictPage() {
                 <TableBody>
                   {selectedId == null ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="py-12 text-center text-xs text-muted-foreground">
+                      <TableCell colSpan={8} className="py-12 text-center text-xs text-muted-foreground">
                         请先在左侧选择一个字典类型
                       </TableCell>
                     </TableRow>
                   ) : itemsLoading ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="py-12 text-center text-xs text-muted-foreground">
+                      <TableCell colSpan={8} className="py-12 text-center text-xs text-muted-foreground">
                         加载中…
                       </TableCell>
                     </TableRow>
                   ) : itemRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="py-12 text-center text-xs text-muted-foreground">
+                      <TableCell colSpan={8} className="py-12 text-center text-xs text-muted-foreground">
                         该类型下暂无字典项，点击右上角「新增根项」创建
                       </TableCell>
                     </TableRow>
                   ) : (
-                    itemRows.map(({ node, depth }) => {
+                    itemRows.map(({ node, depth }, rowIndex) => {
                       const hasChildren = !!node.children?.length
                       const isOpen = expanded.has(node.id)
                       return (
                         <TableRow key={node.id} className={cn(!node.enabled && "opacity-60")}>
+                          <TableCell className="w-10">
+                            {canEdit && (
+                              <Checkbox
+                                checked={selectedItemIds.has(node.id)}
+                                onCheckedChange={() => toggleItemSel(node.id)}
+                                aria-label={`选择字典项 ${node.label}`}
+                              />
+                            )}
+                          </TableCell>
+                          <TableCell className="w-12 text-center text-xs tabular-nums text-muted-foreground">
+                            {rowIndex + 1}
+                          </TableCell>
                           {/* 标签：层级缩进 + 展开箭头（树形） */}
                           <TableCell>
                             <div className="flex items-center">
@@ -662,6 +821,26 @@ export default function DictPage() {
             </CardContent>
           </Card>
         </div>
+      )}
+
+      {/* 批量选中胶囊：字典类型（左）稍高、字典项（右）在下，二者可并存不重叠 */}
+      {canEdit && selectedTypeIds.size > 0 && (
+        <BatchBar
+          count={selectedTypeIds.size}
+          noun="字典类型"
+          bottomClass="bottom-24"
+          onDelete={() => setBatchTypeConfirm(true)}
+          onCancel={() => setSelectedTypeIds(new Set())}
+        />
+      )}
+      {canEdit && selectedItemIds.size > 0 && (
+        <BatchBar
+          count={selectedItemIds.size}
+          noun="字典项"
+          bottomClass="bottom-8"
+          onDelete={() => setBatchItemConfirm(true)}
+          onCancel={() => setSelectedItemIds(new Set())}
+        />
       )}
 
       {/* 新增 / 编辑字典类型 */}
@@ -831,6 +1010,48 @@ export default function DictPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 批量删除字典类型确认（带选中数） */}
+      <AlertDialog open={batchTypeConfirm} onOpenChange={setBatchTypeConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除选中的 {selectedTypeIds.size} 个字典类型？</AlertDialogTitle>
+            <AlertDialogDescription>
+              此操作不可恢复。类型下仍有字典项的将删除失败并逐条反馈。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => void confirmBatchDeleteTypes()}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 批量删除字典项确认（带选中数） */}
+      <AlertDialog open={batchItemConfirm} onOpenChange={setBatchItemConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除选中的 {selectedItemIds.size} 个字典项？</AlertDialogTitle>
+            <AlertDialogDescription>
+              此操作不可恢复。存在子项的字典项将删除失败并逐条反馈。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => void confirmBatchDeleteItems()}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

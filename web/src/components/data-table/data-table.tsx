@@ -127,6 +127,27 @@ export function selectionColumn<TData>(): ColumnDef<TData> {
   }
 }
 
+/**
+ * 序号列：窄、居中、muted、不排序不隐藏。序号=全局连续（读 table pagination state，
+ * 服务端分页与本地分页都对：`pageIndex*pageSize + 当前页内位置 + 1`）。放选择列后、数据列前。
+ * 无 accessorFn → 天然不进 CSV 导出、不进列设置面板。
+ */
+export function indexColumn<TData>(): ColumnDef<TData> {
+  return {
+    id: "index",
+    size: 48,
+    enableSorting: false,
+    enableHiding: false,
+    header: () => <span className="block text-center">#</span>,
+    cell: ({ row, table }) => {
+      const { pageIndex, pageSize } = table.getState().pagination
+      const posInPage = table.getRowModel().rows.findIndex((r) => r.id === row.id)
+      const n = pageIndex * pageSize + (posInPage < 0 ? 0 : posInPage) + 1
+      return <span className="block text-center text-xs tabular-nums text-muted-foreground">{n}</span>
+    },
+  }
+}
+
 export interface DataTableProps<TData> {
   columns: ColumnDef<TData, unknown>[]
   data: TData[]
