@@ -70,6 +70,65 @@ interface BpmnImportResult {
 const modelCache = new Map<string, ProcessModel>()
 
 /**
+ * 流程预测取数（钉钉 + BPMN 两跟踪图复用）：POST /predict → 归一 FlowPredict（后续节点 + 预计办理人）。
+ * 注意：后端 /predict 仅钉钉模式支持；BPMN 返回"暂不支持"，故仅在 predictable 时暴露入口。
+ */
+function useTrackPredict(instanceId: number) {
+  const [predict, setPredict] = useState<FlowPredict | null>(null)
+  const [predictLoading, setPredictLoading] = useState(false)
+  const runPredict = useCallback(async () => {
+    setPredictLoading(true)
+    try {
+      const res = await api<WfPredictResult>(`/api/wf/instances/${instanceId}/predict`, { method: "POST" })
+      const path = res.path ?? []
+      setPredict({
+        nodeIds: path.map((p) => p.nodeId).filter(Boolean),
+        assignees: Object.fromEntries(path.filter((p) => p.nodeId).map((p) => [p.nodeId, (p.assignees ?? []).map((a) => a.name)])),
+      })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "预测失败")
+    } finally {
+      setPredictLoading(false)
+    }
+  }, [instanceId])
+  return { predict, predictLoading, runPredict }
+}
+
+/**
+ * 钉钉跟踪图宿主：owns 预测拉取，向 DingtalkTrack 透传 ①办理信息 ②回放 ③预测（钉钉是主战场）。
+ */
+function DingtalkTrackHost({
+  designerJson,
+  highlight,
+  nodeInfo,
+  replaySteps,
+  instanceId,
+  predictable,
+}: {
+  designerJson: unknown
+  highlight?: WfHighlight
+  nodeInfo?: Record<string, NodeRuntimeInfo>
+  replaySteps?: string[]
+  instanceId: number
+  predictable?: boolean
+}) {
+  const { predict, predictLoading, runPredict } = useTrackPredict(instanceId)
+  return (
+    <div className="min-h-105">
+      <DingtalkTrack
+        designerJson={designerJson}
+        highlight={highlight}
+        nodeInfo={nodeInfo}
+        replaySteps={replaySteps}
+        predict={predict}
+        onRequestPredict={predictable ? () => void runPredict() : undefined}
+        predictLoading={predictLoading}
+      />
+    </div>
+  )
+}
+
+/**
  * 流程跟踪图（BPMN / GRAPH 定义）：把后端 bpmnXml 经 POST /api/wf/models/import 转成归一化
  * ProcessModel，喂只读 FlowViewer 渲染 + 高亮当前节点/已完成路径。
  * 高亮 id（highlight.completed/active）与 ProcessModel 节点/边 id 对齐（== BPMN 元素 id）。
@@ -96,25 +155,7 @@ function FlowTrack({
   const [loadError, setLoadError] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   // ③ 流程预测（复用 /predict；拉取后 FlowViewer 显蓝虚线 + 可播放）
-  const [predict, setPredict] = useState<FlowPredict | null>(null)
-  const [predictLoading, setPredictLoading] = useState(false)
-  const runPredict = useCallback(async () => {
-    setPredictLoading(true)
-    try {
-      const res = await api<WfPredictResult>(`/api/wf/instances/${instanceId}/predict`, { method: "POST" })
-      const path = res.path ?? []
-      setPredict({
-        nodeIds: path.map((p) => p.nodeId).filter(Boolean),
-        assignees: Object.fromEntries(
-          path.filter((p) => p.nodeId).map((p) => [p.nodeId, (p.assignees ?? []).map((a) => a.name)]),
-        ),
-      })
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "预测失败")
-    } finally {
-      setPredictLoading(false)
-    }
-  }, [instanceId])
+  const { predict, predictLoading, runPredict } = useTrackPredict(instanceId)
 
   useEffect(() => {
     const cached = modelCache.get(xml)
@@ -619,9 +660,14 @@ export default function WorkflowInstanceDetailPage() {
             {/* 内嵌流程图：BPMN→FlowTrack（含顶部回放/预测工具条 + 全屏 + 图例）；DINGTALK→只读钉钉跟踪图 */}
             <TabsContent value="flow" className="m-0 p-4">
               {detail.designerType === "DINGTALK" && detail.designerJson ? (
-                <div className="min-h-105">
-                  <DingtalkTrack designerJson={detail.designerJson} highlight={detail.highlight} />
-                </div>
+                <DingtalkTrackHost
+                  designerJson={detail.designerJson}
+                  highlight={detail.highlight}
+                  nodeInfo={nodeRuntimeInfo}
+                  replaySteps={replaySteps}
+                  instanceId={detail.id}
+                  predictable={detail.predictable}
+                />
               ) : detail.bpmnXml ? (
                 <FlowTrack
                   xml={detail.bpmnXml}

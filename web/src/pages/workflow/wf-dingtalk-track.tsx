@@ -6,7 +6,6 @@
  * 高亮映射：钉钉节点 id = 后端转换器生成的 BPMN activity id（mgr/gm/cc1…），highlight 直接可用；
  * BPMN 特有网关/连线 id 在钉钉模型无对应，忽略。
  */
-import { useMemo } from "react"
 import {
   Background,
   BackgroundVariant,
@@ -21,41 +20,106 @@ import {
   type NodeTypes,
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
-import { GitBranch, UserRound } from "lucide-react"
+import { useEffect, useMemo, useState } from "react"
+import { CheckCircle2, Circle, Clock, GitBranch, Loader2, Play, Sparkles, Square, UserPlus, UserRound, XCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { isDarkMode } from "@/lib/theme"
 import { useAppStore } from "@/stores/app-store"
+import { Button } from "@/components/ui/button"
 import type { WfHighlight } from "@/types/workflow"
 import { LEAF_STYLE } from "./designer/dingtalk/canvas"
 import { buildFlow } from "./designer/dingtalk/layout"
 import type { ApprovalStep, Branch, CcStep, LeafStep, StepNode } from "./designer/dingtalk/model"
 import { deserializeDingtalk, isBackendDesignerJson } from "./designer/dingtalk/serialize"
+import type { NodeRuntimeInfo, NodeRuntimeStatus } from "./designer/flow/runtime-info"
+import type { FlowPredict } from "./designer/flow/flow-viewer"
 
-type TrackStatus = "completed" | "active" | undefined
+/** 运行时节点状态（highlight 的 completed/active + timeline 派生的 rejected/addSign） */
+type TrackStatus = NodeRuntimeStatus | undefined
 
-/** 高亮脉冲动画（进行中节点）；与 BpmnTrack 语义一致：绿=已完成、主题色脉冲=进行中 */
+/** 高亮脉冲 + 预测虚线呼吸 + 回放过边流光（单次，克制）；与 FlowViewer 语义一致 */
 const TRACK_CSS = `
 @keyframes wf-dt-pulse {
   0%, 100% { box-shadow: 0 0 0 2px var(--primary); }
   50% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 35%, transparent); }
 }
 .wf-dt-active-card { animation: wf-dt-pulse 1.6s ease-in-out infinite; }
+@keyframes wf-dt-predict-breathe { 0%,100% { outline-color: #60a5fa; } 50% { outline-color: color-mix(in srgb, #60a5fa 40%, transparent); } }
+.wf-dt-predicted-card { animation: wf-dt-predict-breathe 2s ease-in-out infinite; }
+@keyframes wf-dt-edge-flow-dash { to { stroke-dashoffset: -24; } }
+.wf-dt-track .wf-dt-edge-flow .react-flow__edge-path { stroke-dasharray: 8 4; animation: wf-dt-edge-flow-dash 0.6s linear 2; }
+@media (prefers-reduced-motion: reduce) {
+  .wf-dt-track .wf-dt-active-card,
+  .wf-dt-track .wf-dt-predicted-card,
+  .wf-dt-track .wf-dt-edge-flow .react-flow__edge-path { animation: none; }
+}
 `
 
+/** 状态 → 环色（与 FlowViewer 五态一致：进行中蓝脉冲/已通过绿/驳回红/加签紫/未到达无） */
 function statusRing(status: TrackStatus): string {
-  if (status === "completed") return "ring-2 ring-emerald-500"
   if (status === "active") return "ring-2 ring-primary wf-dt-active-card"
+  if (status === "completed") return "ring-2 ring-emerald-500"
+  if (status === "rejected") return "ring-2 ring-rose-500"
+  if (status === "addSign") return "ring-2 ring-violet-500"
   return ""
 }
 
+const STATUS_META: Record<NodeRuntimeStatus, { label: string; cls: string }> = {
+  notReached: { label: "未到达", cls: "bg-muted text-muted-foreground" },
+  active: { label: "进行中", cls: "bg-primary/10 text-primary" },
+  completed: { label: "已通过", cls: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
+  rejected: { label: "驳回", cls: "bg-rose-500/10 text-rose-600 dark:text-rose-400" },
+  addSign: { label: "加签", cls: "bg-violet-500/10 text-violet-600 dark:text-violet-400" },
+}
+
+function StatusIcon({ status }: { status: NodeRuntimeStatus }) {
+  if (status === "completed") return <CheckCircle2 className="size-3" />
+  if (status === "rejected") return <XCircle className="size-3" />
+  if (status === "addSign") return <UserPlus className="size-3" />
+  if (status === "active") return <Clock className="size-3" />
+  return <Circle className="size-3" />
+}
+
+/** 状态角标（钉钉卡头部）：五态图标 + 文案 */
 function StatusBadge({ status }: { status: TrackStatus }) {
-  if (status === "completed") {
-    return <span className="shrink-0 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-600">已完成</span>
-  }
-  if (status === "active") {
-    return <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">进行中</span>
-  }
-  return null
+  if (!status || status === "notReached") return null
+  const m = STATUS_META[status]
+  return (
+    <span className={cn("flex shrink-0 items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px]", m.cls)}>
+      <StatusIcon status={status} /> {m.label}
+    </span>
+  )
+}
+
+function shortTime(t?: string): string {
+  if (!t) return ""
+  const s = t.replace("T", " ")
+  return s.length >= 16 ? s.slice(5, 16) : s
+}
+
+/** 已办办理人明细（① 节点办理信息）：办理人名·时间 + 意见摘要（多人列全部；title 提供完整意见） */
+function HandledInfo({ info }: { info?: NodeRuntimeInfo }) {
+  if (!info || info.assignees.length === 0) return null
+  return (
+    <div className="space-y-1 border-t bg-muted/20 px-3 py-1.5">
+      {info.assignees.map((a, i) => (
+        <div key={i} className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[9px] font-medium text-primary">
+              {a.name.slice(0, 1)}
+            </span>
+            <span className="truncate text-xs font-medium">{a.name}</span>
+            {a.time && <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{shortTime(a.time)}</span>}
+          </div>
+          {a.opinion && (
+            <p className="truncate pl-5.5 text-[10px] text-muted-foreground" title={a.opinion}>
+              {a.opinion}
+            </p>
+          )}
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function NodeHandles() {
@@ -67,13 +131,16 @@ function NodeHandles() {
   )
 }
 
-function StartNode() {
+function StartNode({ data }: NodeProps) {
+  const { info } = data as { info?: NodeRuntimeInfo }
   return (
-    <div className="w-64 overflow-hidden rounded-lg border bg-card shadow-sm">
+    <div className={cn("w-64 overflow-hidden rounded-lg border bg-card shadow-sm", statusRing(info?.status))}>
       <div className="flex h-8 items-center gap-1.5 bg-slate-500 px-3 text-xs font-medium text-white">
-        <UserRound className="size-3.5" /> 发起人
+        <UserRound className="size-3.5" /> <span className="flex-1">发起人</span>
+        <StatusBadge status={info?.status} />
       </div>
       <div className="px-3 py-2.5 text-sm text-muted-foreground">发起申请</div>
+      <HandledInfo info={info} />
       <NodeHandles />
     </div>
   )
@@ -113,17 +180,45 @@ function stepSummary(step: LeafStep) {
 }
 
 function StepNodeCard({ data }: NodeProps) {
-  const { step, status } = data as { step: LeafStep; status: TrackStatus }
+  const { step, status, info, predicted, predictNames } = data as {
+    step: LeafStep
+    status: TrackStatus
+    info?: NodeRuntimeInfo
+    predicted?: boolean
+    predictNames?: string[]
+  }
   const style = LEAF_STYLE[step.kind]
   const Icon = style.icon
   return (
-    <div className={cn("w-64 overflow-hidden rounded-lg border bg-card shadow-sm", statusRing(status))}>
+    <div
+      className={cn(
+        "w-64 overflow-hidden rounded-lg border bg-card shadow-sm",
+        statusRing(status),
+        // ③ 预测节点：蓝色虚线（区别已完成绿实线）
+        predicted && "outline outline-2 outline-dashed outline-offset-2 outline-blue-400 wf-dt-predicted-card",
+      )}
+    >
       <div className={cn("flex h-8 items-center gap-1.5 px-3 text-xs font-medium text-white", style.header)}>
         <Icon className="size-3.5" />
         <span className="min-w-0 flex-1 truncate">{step.name}</span>
-        <StatusBadge status={status} />
+        {predicted ? (
+          <span className="flex shrink-0 items-center gap-0.5 rounded bg-white/20 px-1.5 py-0.5 text-[10px]">
+            <Sparkles className="size-2.5" /> 预计
+          </span>
+        ) : (
+          <StatusBadge status={status} />
+        )}
       </div>
       <div className="px-3 py-2.5">{stepSummary(step)}</div>
+      {/* ③ 预测节点预计办理人 */}
+      {predicted && predictNames && predictNames.length > 0 && (
+        <div className="flex items-center gap-1 border-t border-blue-400/30 bg-blue-50/60 px-3 py-1.5 text-[11px] text-blue-600 dark:bg-blue-950/30 dark:text-blue-300">
+          <Sparkles className="size-3 shrink-0" />
+          <span className="min-w-0 truncate">预计 {predictNames.join("、")}</span>
+        </div>
+      )}
+      {/* ① 节点办理信息：已办办理人·时间·意见（timeline 派生，非设计态候选人） */}
+      <HandledInfo info={info} />
       <NodeHandles />
     </div>
   )
@@ -177,33 +272,130 @@ function parseSteps(designerJson: unknown): StepNode[] {
   }
 }
 
-export function DingtalkTrack({ designerJson, highlight }: { designerJson: unknown; highlight?: WfHighlight }) {
+const REPLAY_STEP_MS = 750
+const PREDICT_STEP_MS = 650
+const prefersReducedMotion = () =>
+  typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+
+export function DingtalkTrack({
+  designerJson,
+  highlight,
+  nodeInfo,
+  replaySteps,
+  predict,
+  onRequestPredict,
+  predictLoading,
+}: {
+  designerJson: unknown
+  highlight?: WfHighlight
+  /** ① 节点办理信息 nodeId→info（timeline 映射；缺省则只按 highlight 高亮） */
+  nodeInfo?: Record<string, NodeRuntimeInfo>
+  /** ② 回放：时间序 nodeId 序列（≥2 才显「回放」） */
+  replaySteps?: string[]
+  /** ③ 预测数据（/predict 结果归一）；null=未拉取 */
+  predict?: FlowPredict | null
+  /** ③ 触发拉取预测 */
+  onRequestPredict?: () => void
+  predictLoading?: boolean
+}) {
   const dark = isDarkMode(useAppStore((s) => s.themeMode))
+  const replaySeq = useMemo(() => replaySteps ?? [], [replaySteps])
+  const canReplay = replaySeq.length >= 2
+
+  // ② 回放 / ③ 预测播放状态机（与 FlowViewer 同：手动触发、单次、reduce-motion 直接终态）
+  const [replay, setReplay] = useState<number | null>(null)
+  const [predictPlay, setPredictPlay] = useState<number | null>(null)
+  useEffect(() => {
+    if (replay === null) return
+    if (replay >= replaySeq.length || prefersReducedMotion()) {
+      setReplay(null)
+      return
+    }
+    const t = window.setTimeout(() => setReplay((r) => (r === null ? null : r + 1)), REPLAY_STEP_MS)
+    return () => window.clearTimeout(t)
+  }, [replay, replaySeq.length])
+  useEffect(() => {
+    if (predictPlay === null || !predict) return
+    if (predictPlay >= predict.nodeIds.length || prefersReducedMotion()) {
+      setPredictPlay(null)
+      return
+    }
+    const t = window.setTimeout(() => setPredictPlay((p) => (p === null ? null : p + 1)), PREDICT_STEP_MS)
+    return () => window.clearTimeout(t)
+  }, [predictPlay, predict])
+  const startReplay = () => {
+    setPredictPlay(null)
+    if (!canReplay || prefersReducedMotion()) return
+    setReplay(0)
+  }
+  const startPredictPlay = () => {
+    setReplay(null)
+    if (!predict || predict.nodeIds.length === 0 || prefersReducedMotion()) return
+    setPredictPlay(0)
+  }
+
+  // 预测可见节点（静态=全量虚线；播放中=逐个揭示）
+  const predictedVisible = useMemo(() => {
+    if (!predict) return [] as string[]
+    const n = predictPlay === null ? predict.nodeIds.length : Math.min(predictPlay + 1, predict.nodeIds.length)
+    return predict.nodeIds.slice(0, n)
+  }, [predict, predictPlay])
 
   const { nodes, edges, empty } = useMemo(() => {
-    const steps = parseSteps(designerJson)
-    if (steps.length === 0) return { nodes: [] as Node[], edges: [] as Edge[], empty: true }
+    const parsedSteps = parseSteps(designerJson)
+    if (parsedSteps.length === 0) return { nodes: [] as Node[], edges: [] as Edge[], empty: true }
     const completed = new Set(highlight?.completed ?? [])
     const active = new Set(highlight?.active ?? [])
-    const statusOf = (id: string): TrackStatus =>
-      active.has(id) ? "active" : completed.has(id) ? "completed" : undefined
+    const predictedSet = new Set(predictedVisible)
+    const replaying = replay !== null
+    const walked = replaying ? new Set(replaySeq.slice(0, replay)) : null
+    const activeStep = replaying && replay < replaySeq.length ? replaySeq[replay] : null
 
-    const built = buildFlow(steps)
-    const outNodes: Node[] = built.nodes.map((n) => ({
-      ...n,
-      // 高亮：按节点 id 命中 active/completed；start/end/dot 无对应 activity id，保持中性
-      data: { ...n.data, status: statusOf(n.id) },
-    }))
-    // 去掉设计器的「+」插入边，统一为普通折线（只读）
-    const outEdges: Edge[] = built.edges.map((e) => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      type: "smoothstep",
-      style: { stroke: "var(--border)", strokeWidth: 1.5 },
-    }))
+    const statusOf = (id: string): TrackStatus => {
+      if (replaying) {
+        if (id === activeStep) return "active"
+        if (walked?.has(id)) return "completed"
+        return undefined
+      }
+      return nodeInfo?.[id]?.status ?? (active.has(id) ? "active" : completed.has(id) ? "completed" : undefined)
+    }
+
+    const built = buildFlow(parsedSteps)
+    const outNodes: Node[] = built.nodes.map((n) => {
+      const predicted = !replaying && predictedSet.has(n.id)
+      // 回放中：仅已揭示（walked/active）节点显办理信息
+      const showInfo = replaying ? walked?.has(n.id) || n.id === activeStep : true
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          status: statusOf(n.id),
+          info: showInfo ? nodeInfo?.[n.id] : undefined,
+          predicted,
+          predictNames: predicted ? predict?.assignees?.[n.id] ?? [] : undefined,
+        },
+      }
+    })
+
+    // 边着色：回放（流光/已走绿）> 预测（蓝虚线）> 源节点状态（绿/蓝）> 常态
+    const edgeDeco = (src: string, tgt: string): { style: React.CSSProperties; className?: string } => {
+      if (replaying) {
+        if (replay > 0 && src === replaySeq[replay - 1]) return { style: { stroke: "var(--primary)", strokeWidth: 2.5 }, className: "wf-dt-edge-flow" }
+        if (walked?.has(src)) return { style: { stroke: "#10b981", strokeWidth: 2 } }
+        return { style: { stroke: "var(--border)", strokeWidth: 1.5 } }
+      }
+      if (predictedSet.has(tgt) || predictedSet.has(src)) return { style: { stroke: "#60a5fa", strokeWidth: 2, strokeDasharray: "6 4" } }
+      const ss = statusOf(src)
+      if (ss === "completed") return { style: { stroke: "#10b981", strokeWidth: 2 } }
+      if (ss === "active") return { style: { stroke: "var(--primary)", strokeWidth: 2 } }
+      return { style: { stroke: "var(--border)", strokeWidth: 1.5 } }
+    }
+    const outEdges: Edge[] = built.edges.map((e) => {
+      const { style, className } = edgeDeco(e.source, e.target)
+      return { id: e.id, source: e.source, target: e.target, type: "smoothstep", style, className }
+    })
     return { nodes: outNodes, edges: outEdges, empty: false }
-  }, [designerJson, highlight])
+  }, [designerJson, highlight, nodeInfo, replay, replaySeq, predict, predictedVisible])
 
   if (empty) {
     return (
@@ -214,21 +406,73 @@ export function DingtalkTrack({ designerJson, highlight }: { designerJson: unkno
     )
   }
 
+  const replaying = replay !== null
+  const predicting = predictPlay !== null
+
   const legend = (
-    <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-4 rounded-md border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur">
+    <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur">
       <span className="flex items-center gap-1.5">
         <span className="size-2.5 rounded-sm border-2 border-emerald-500" /> 已完成
       </span>
       <span className="flex items-center gap-1.5">
         <span className="size-2.5 animate-pulse rounded-sm border-2 border-primary" /> 进行中
       </span>
-      <span className="hidden opacity-70 sm:inline">· 滚轮缩放 · 拖拽平移</span>
+      {(predict || predictedVisible.length > 0) && (
+        <span className="flex items-center gap-1.5">
+          <span className="size-2.5 rounded-sm border-2 border-dashed border-blue-400" /> 预测
+        </span>
+      )}
     </div>
   )
 
   return (
     <div className="wf-dt-track relative h-105 w-full rounded-md border bg-background">
       <style>{TRACK_CSS}</style>
+
+      {/* 顶部工具条：回放 / 预测运行（手动触发，默认静态高亮） */}
+      {(canReplay || onRequestPredict || predict) && (
+        <div className="absolute left-3 top-3 z-20 flex items-center gap-1.5">
+          {canReplay && (
+            <Button
+              size="sm"
+              variant={replaying ? "default" : "outline"}
+              className="h-7 gap-1 bg-card/90 text-xs shadow-sm backdrop-blur"
+              onClick={() => (replaying ? setReplay(null) : startReplay())}
+              title="按审批时间序回放"
+            >
+              {replaying ? <Square className="size-3.5" /> : <Play className="size-3.5" />}
+              {replaying ? "停止" : "回放"}
+            </Button>
+          )}
+          {predict ? (
+            <Button
+              size="sm"
+              variant={predicting ? "default" : "outline"}
+              className="h-7 gap-1 bg-card/90 text-xs shadow-sm backdrop-blur"
+              onClick={() => (predicting ? setPredictPlay(null) : startPredictPlay())}
+              title="沿预测路径逐节点点亮"
+            >
+              {predicting ? <Square className="size-3.5" /> : <Play className="size-3.5" />}
+              {predicting ? "停止" : "播放预测"}
+            </Button>
+          ) : (
+            onRequestPredict && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 bg-card/90 text-xs shadow-sm backdrop-blur"
+                disabled={predictLoading}
+                onClick={onRequestPredict}
+                title="演算后续将经过的节点与预计办理人"
+              >
+                {predictLoading ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                预测运行
+              </Button>
+            )
+          )}
+        </div>
+      )}
+
       <ReactFlowProvider>
         <ReactFlow
           colorMode={dark ? "dark" : "light"}

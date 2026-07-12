@@ -8,7 +8,7 @@
  *
  * 后端 P3 端点未就绪时优雅降级（提示接口未就绪，不造假数据）。
  */
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   Bot,
@@ -19,14 +19,13 @@ import {
   Printer,
   RotateCcw,
   Send,
-  Sparkles,
   Timer,
   UserCheck,
   Workflow,
   Zap,
 } from "lucide-react"
 import { toast } from "sonner"
-import { api, ApiError, NetworkError } from "@/lib/api"
+import { api } from "@/lib/api"
 import { useHasPerm } from "@/stores/auth-store"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
@@ -44,7 +43,7 @@ import {
 } from "@/components/ui/select"
 import { OrgPicker, OrgPickerField, type OrgRef } from "@/components/org-picker"
 import { WF_STATUS_META, type FormSchema, type WfFormData, type WfOrgRef } from "@/types/workflow"
-import type { WfInstanceDetailP3, WfPredictNode, WfPredictResult, WfResurrectPreview, WfSubInstance } from "@/types/workflow-p3"
+import type { WfInstanceDetailP3, WfPredictNode, WfResurrectPreview, WfSubInstance } from "@/types/workflow-p3"
 import { fetchResurrectPreview } from "./wf-resurrect"
 import { WfPrintView } from "./wf-print"
 
@@ -103,90 +102,6 @@ export function PredictChain({ path }: { path: WfPredictNode[] }) {
         )
       })}
     </div>
-  )
-}
-
-function PredictModal({
-  instanceId,
-  open,
-  onClose,
-}: {
-  instanceId: number
-  open: boolean
-  onClose: () => void
-}) {
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<WfPredictResult | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const run = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    setResult(null)
-    try {
-      const data = await api<WfPredictResult>(`/api/wf/instances/${instanceId}/predict`, { method: "POST" })
-      setResult(data)
-    } catch (err) {
-      if (err instanceof NetworkError) setError("后端未启动，无法预测")
-      else if (err instanceof ApiError) setError(err.message || "预测接口尚未就绪")
-      else setError("预测失败")
-    } finally {
-      setLoading(false)
-    }
-  }, [instanceId])
-
-  return (
-    <Modal
-      open={open}
-      onOpenChange={(o) => !o && onClose()}
-      title={
-        <span className="flex items-center gap-2">
-          <Sparkles className="size-4 text-primary" /> 流程预测
-        </span>
-      }
-      description="按当前表单值静态演算后续将经过的节点与预计审批人（不落库）"
-      width={480}
-      resizable={false}
-      fullscreenable={false}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose}>
-            关闭
-          </Button>
-          <Button className="gap-1.5" disabled={loading} onClick={() => void run()}>
-            {loading ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
-            {result ? "重新预测" : "开始预测"}
-          </Button>
-        </>
-      }
-    >
-      <div className="min-h-40">
-        {loading && (
-          <div className="flex flex-col items-center gap-2 py-10 text-muted-foreground">
-            <Loader2 className="size-6 animate-spin" />
-            <span className="text-sm">正在演算路径…</span>
-          </div>
-        )}
-        {!loading && error && (
-          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-relaxed text-amber-600 dark:text-amber-400">
-            {error}
-          </div>
-        )}
-        {!loading && !error && !result && (
-          <div className="py-10 text-center text-sm text-muted-foreground">
-            点击「开始预测」演算后续审批路径
-          </div>
-        )}
-        {!loading && result && (
-          <>
-            <PredictChain path={result.path} />
-            {result.note && (
-              <p className="mt-2 rounded bg-muted/60 px-2 py-1.5 text-xs text-muted-foreground">{result.note}</p>
-            )}
-          </>
-        )}
-      </div>
-    </Modal>
   )
 }
 
@@ -452,7 +367,6 @@ export function WfP3Bar({
   data: WfFormData
   onReload: () => void
 }) {
-  const [predictOpen, setPredictOpen] = useState(false)
   const [printOpen, setPrintOpen] = useState(false)
   const [resurrectOpen, setResurrectOpen] = useState(false)
 
@@ -463,11 +377,7 @@ export function WfP3Bar({
 
   return (
     <>
-      {detail.predictable && (
-        <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setPredictOpen(true)}>
-          <Sparkles className="size-3.5" /> 预测
-        </Button>
-      )}
+      {/* 流程预测入口统一到实例详情「流程图」Tab 的图形化预测（钉钉跟踪图内蓝虚线 + 播放），此处不再重复 */}
       <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setPrintOpen(true)}>
         <Printer className="size-3.5" /> 打印
       </Button>
@@ -477,9 +387,6 @@ export function WfP3Bar({
         </Button>
       )}
 
-      {predictOpen && (
-        <PredictModal instanceId={detail.id} open={predictOpen} onClose={() => setPredictOpen(false)} />
-      )}
       <WfPrintView
         detail={detail}
         schema={schema}
