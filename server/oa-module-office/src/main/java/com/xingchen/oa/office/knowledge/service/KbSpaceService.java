@@ -63,6 +63,17 @@ public class KbSpaceService {
     private final KbAccess access;
     private final KbNameResolver nameResolver;
 
+    /**
+     * 当前用户「可编辑」（EDITOR/ADMIN）的知识空间。供 AI 对话固化（knowledge_save）解析目标空间：
+     * 复用可见空间口径（{@link #list()}）再按 myRole 过滤——与 stats 的 editableSpaceCount 同一判定。
+     */
+    public List<SpaceResponse> editableSpaces() {
+        return list().stream()
+                .filter(s -> KbSpaceMember.ROLE_EDITOR.equals(s.myRole())
+                        || KbSpaceMember.ROLE_ADMIN.equals(s.myRole()))
+                .toList();
+    }
+
     /** 当前用户可见的空间列表（可见性 + 成员过滤）。 */
     public List<SpaceResponse> list() {
         List<KbSpace> spaces = spaceRepository.findAll(

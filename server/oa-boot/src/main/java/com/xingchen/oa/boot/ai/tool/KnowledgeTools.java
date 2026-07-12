@@ -4,8 +4,11 @@ import com.xingchen.oa.boot.ai.service.AiActionService;
 import com.xingchen.oa.boot.ai.support.AiSessionHolder;
 import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.office.knowledge.dto.KbDtos.SearchHit;
+import com.xingchen.oa.office.knowledge.dto.KbDtos.SpaceResponse;
+import com.xingchen.oa.office.knowledge.entity.KbSpaceMember;
 import com.xingchen.oa.office.knowledge.service.KbDocService;
 import com.xingchen.oa.office.knowledge.service.KbSearchService;
+import com.xingchen.oa.office.knowledge.service.KbSpaceService;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -37,6 +40,7 @@ public class KnowledgeTools {
     private final AiToolSupport support;
     private final KbSearchService kbSearchService;
     private final KbDocService kbDocService;
+    private final KbSpaceService kbSpaceService;
     private final AiActionService actionService;
     private final AiSessionHolder sessionHolder;
 
@@ -107,52 +111,149 @@ public class KnowledgeTools {
         });
     }
 
+    @AiToolDefinition(name = "knowledge_spaces", aliases = {"kb_spaces"},
+            description = "列出我『可编辑』的知识空间（id + 名称）。固化文档（knowledge_save）前若不确定目标空间，"
+                    + "先调用本工具拿到真实空间 id/名称，再固化；不要臆测空间 id。",
+            paramsSchema = "{}", authorities = {"kb:doc:view"}, risk = AiToolRisk.READ_ONLY)
+    public ToolResult knowledgeSpaces(Map<String, Object> args) {
+        List<SpaceResponse> editable = kbSpaceService.editableSpaces();
+        List<Map<String, Object>> rows = editableRows(editable);
+        Map<String, Object> card = support.listCard("我可编辑的知识空间",
+                List.of(support.col("name", "知识空间"), support.col("id", "ID")), rows, "/knowledge");
+        Map<String, Object> llm = new LinkedHashMap<>();
+        llm.put("count", rows.size());
+        llm.put("editableSpaces", rows);
+        llm.put("note", rows.isEmpty()
+                ? "你没有可编辑的知识空间，无法固化文档。"
+                : "以上为可编辑空间；固化时给 knowledge_save 传 space=空间名 或 spaceId=对应 id（不要臆测 id）。");
+        return ToolResult.of(support.toJson(llm), card);
+    }
+
     @AiToolDefinition(name = "knowledge_save", aliases = {"kb_save"},
             authorities = {"kb:doc:edit"}, risk = AiToolRisk.EXPLICIT_UI_SUBMIT, timeoutSeconds = 20,
             description = "【固化入知识库】当用户要求把这段对话/这个回答/这份总结『存/保存/固化/沉淀/归档到知识库/知识空间』"
-                    + "为文档时，必须调用本工具产出确认卡——用户确认后建为指定空间的<b>草稿</b>文档（不直接发布）。"
-                    + "『把这个流程/审批总结成文档』时应先自行总结成正文再调用。参数 spaceId=目标知识空间 id（必填，"
-                    + "须我有编辑权限），title=文档标题，content=要保存的正文（对话内容或你生成的结果，纯文本/Markdown）。",
-            paramsSchema = "{\"spaceId\":{\"type\":\"integer\",\"description\":\"目标知识空间 id（须有编辑权限）\"},"
+                    + "为文档时，必须调用本工具产出确认卡——用户确认后建为目标空间的<b>草稿</b>文档（不直接发布）。"
+                    + "『把这个流程/审批总结成文档』时应先自行总结成正文再调用。"
+                    + "目标空间解析（不要臆测 id）：优先传 space=空间名（我会在你可编辑的空间里按名匹配）；或传 spaceId=真实且我可编辑的空间 id；"
+                    + "不确定就先调用 knowledge_spaces 拿真实 id，或什么都不传——我只有一个可编辑空间时会直接用它，多于一个会让用户选。"
+                    + "参数：space?（空间名，推荐）、spaceId?（空间 id）、title（标题）、content（正文，纯文本/Markdown）。",
+            paramsSchema = "{\"space\":{\"type\":\"string\",\"description\":\"目标知识空间名（推荐；在我可编辑的空间里按名匹配）\"},"
+                    + "\"spaceId\":{\"type\":\"integer\",\"description\":\"目标知识空间 id（可选；不确定就别猜，改传 space 名或先调 knowledge_spaces）\"},"
                     + "\"title\":{\"type\":\"string\",\"description\":\"文档标题\"},"
                     + "\"content\":{\"type\":\"string\",\"description\":\"要固化的正文（纯文本/Markdown）\"}}",
-            required = {"spaceId", "title", "content"})
+            required = {"title", "content"})
     public ToolResult knowledgeSave(Map<String, Object> args) {
         Long spaceId = lng(args, "spaceId");
+        String spaceName = str(args, "space");
         String title = str(args, "title");
         String content = str(args, "content");
-        if (spaceId == null) {
-            return err("AI_TOOL_INVALID_ARGUMENT", "请指定要固化到的知识空间 id（spaceId）");
-        }
         if (!StringUtils.hasText(title) || !StringUtils.hasText(content)) {
             return err("AI_TOOL_INVALID_ARGUMENT", "固化需要标题（title）与正文（content）");
         }
-        // 红线：非该空间编辑者不可固化——stage 前先校验（确认执行器 createAiDraft 内再校验一次）
-        String spaceName;
+        // 取当前用户「可编辑」空间集，服务端智能解析目标空间——不再逼模型猜 id
+        List<SpaceResponse> editable = kbSpaceService.editableSpaces();
+        if (editable.isEmpty()) {
+            return err("AI_TOOL_NOT_ALLOWED",
+                    "你没有任何可编辑的知识空间，无法固化文档。请先创建知识空间，或联系管理员把你加为某空间的编辑者。");
+        }
+        SpaceResponse target = resolveSaveSpace(spaceId, spaceName, editable);
+        if (target == null) {
+            // 多个可编辑且未指明 / 名字歧义或无匹配 → 选择卡（不硬报「目标知识空间不存在」）
+            return spacePickResult(editable, spaceName);
+        }
+        Long resolvedId = target.id();
+        // 红线：解析后仍走 assertSpaceEditable 二次校验（与确认执行器 createAiDraft 一致，防越权固化）
+        String resolvedName;
         try {
-            spaceName = kbDocService.assertSpaceEditable(spaceId);
+            resolvedName = kbDocService.assertSpaceEditable(resolvedId);
         } catch (BusinessException be) {
             return err("AI_TOOL_NOT_ALLOWED",
                     be.getCode() == 404 ? "目标知识空间不存在" : "你不是该知识空间的编辑者，无法固化文档到这里");
         }
 
         Map<String, Object> params = new LinkedHashMap<>();
-        params.put("spaceId", spaceId);
+        params.put("spaceId", resolvedId);
         params.put("title", title);
         params.put("content", content);
-        String draftId = stage("knowledge_save", "KB_DOC_DRAFT_CREATE", params);
+        String actionId = stage("knowledge_save", "KB_DOC_DRAFT_CREATE", params);
 
         String preview = content.length() > 200 ? content.substring(0, 200) + "…" : content;
+        // 契约（疾风前端 KnowledgeSavePart）：partType=knowledgeSave，payload={actionId,defaultSpaceId,title,contentPreview}
         Map<String, Object> card = new LinkedHashMap<>();
-        card.put("type", "knowledgeSaveDraft");
-        card.put("draftId", draftId);
-        card.put("spaceId", spaceId);
-        card.put("space", spaceName);
+        card.put("type", "knowledgeSave");
+        card.put("actionId", actionId);
+        card.put("defaultSpaceId", resolvedId);
         card.put("title", title);
-        card.put("preview", preview);
-        return ToolResult.of(support.toJson(Map.of("staged", true, "draftId", draftId,
-                "spaceId", spaceId, "title", title,
-                "note", "已生成固化确认卡，确认后在「" + spaceName + "」建为草稿文档（不直接发布）")), card);
+        card.put("contentPreview", preview);
+        return ToolResult.of(support.toJson(Map.of("staged", true, "actionId", actionId,
+                "spaceId", resolvedId, "space", resolvedName, "title", title,
+                "note", "已生成固化确认卡，确认后在「" + resolvedName + "」建为草稿文档（不直接发布）")), card);
+    }
+
+    /**
+     * 目标空间解析（指定优先 → 按名匹配 → 唯一可编辑直用 → 否则 null 交选择卡）。
+     * 关键：给了 spaceId 但不可编辑/不存在（模型臆测的 id）时不硬报错，继续按名/唯一兜底。
+     */
+    private SpaceResponse resolveSaveSpace(Long spaceId, String spaceName, List<SpaceResponse> editable) {
+        // 1) 指定 spaceId 且我可编辑 → 用它
+        if (spaceId != null) {
+            for (SpaceResponse s : editable) {
+                if (s.id().equals(spaceId)) {
+                    return s;
+                }
+            }
+            // 给了 id 但不在可编辑集（臆测/无权）→ 不硬用，继续下面按名/唯一兜底
+        }
+        // 2) 给了空间名 → 可编辑集内按名匹配（精确忽略大小写优先，其次唯一双向包含）
+        if (StringUtils.hasText(spaceName)) {
+            String key = spaceName.trim();
+            List<SpaceResponse> exact = editable.stream()
+                    .filter(s -> key.equalsIgnoreCase(s.name())).toList();
+            if (exact.size() == 1) {
+                return exact.get(0);
+            }
+            if (exact.isEmpty()) {
+                List<SpaceResponse> contains = editable.stream()
+                        .filter(s -> s.name() != null && (s.name().contains(key) || key.contains(s.name())))
+                        .toList();
+                if (contains.size() == 1) {
+                    return contains.get(0);
+                }
+            }
+            // 精确多命中 / 包含歧义 → 不猜，落到单空间兜底或选择卡
+        }
+        // 3) 恰好一个可编辑空间 → 直接用它（最常见，直接成功）
+        if (editable.size() == 1) {
+            return editable.get(0);
+        }
+        // 4) 无法确定（多个可编辑且未指明 / 名字歧义无匹配）→ 选择卡
+        return null;
+    }
+
+    /** 选择空间卡（list 卡，前端确定可渲染）+ 引导模型让用户指明后重试。 */
+    private ToolResult spacePickResult(List<SpaceResponse> editable, String triedName) {
+        List<Map<String, Object>> rows = editableRows(editable);
+        String title = StringUtils.hasText(triedName)
+                ? "未能唯一匹配「" + triedName + "」，请选择要固化到的知识空间"
+                : "有多个可编辑知识空间，请选择要固化到哪一个";
+        Map<String, Object> card = support.listCard(title,
+                List.of(support.col("name", "知识空间"), support.col("id", "ID")), rows, "/knowledge");
+        String hint = "存在多个可编辑知识空间（或未能确定目标空间）。请让用户从上表中指明空间名或 id，"
+                + "然后再次调用 knowledge_save 并传 space=空间名（或 spaceId=数字）。不要臆测空间 id，也不要报『空间不存在』。";
+        return ToolResult.of(support.toJson(Map.of("needSpaceSelection", true,
+                "editableSpaces", rows, "hint", hint)), card);
+    }
+
+    private List<Map<String, Object>> editableRows(List<SpaceResponse> editable) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (SpaceResponse s : editable) {
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("id", s.id());
+            r.put("name", s.name());
+            r.put("role", s.myRole());
+            rows.add(r);
+        }
+        return rows;
     }
 
     private String stage(String toolName, String actionType, Map<String, Object> params) {

@@ -2911,8 +2911,18 @@ async function hlCompleted(token, iid) {
         }
         if (!hasTool) {
           let tool = null
+          // 磐石：对话固化目标空间智能解析（关键词"固化"+知识/空间限定，避免与"固化成自动化"冲突；空间名=/空间id= 标记控制场景）
+          if (lastUser.includes("固化") && (lastUser.includes("知识") || lastUser.includes("空间") || lastUser.includes("制度库"))) {
+            const kbArgs = { title: `AI固化标题${TS}`, content: `AI固化正文内容-${TS}` }
+            const nm = lastUser.match(/空间名=([^\s，,。]+)/)
+            const idm = lastUser.match(/空间id=(\d+)/)
+            if (nm) kbArgs.space = nm[1]
+            if (idm) kbArgs.spaceId = Number(idm[1])
+            tool = { name: "knowledge_save", arguments: JSON.stringify(kbArgs) }
+          }
+          else if (lastUser.includes("可编辑的知识空间")) tool = { name: "knowledge_spaces", arguments: "{}" }
           // 批E ⑦⑧⑨：对话固化自动化 / 生成模板/表单草稿 / 待办摘要
-          if (lastUser.includes("自动化")) tool = { name: "orchestration_prepare_flow", arguments: JSON.stringify({ desc: lastUser.includes("非法") ? "非法定时自动化" : "每天早8点汇总昨日审批量并通知管理员", name: "每日审批汇总" }) }
+          else if (lastUser.includes("自动化")) tool = { name: "orchestration_prepare_flow", arguments: JSON.stringify({ desc: lastUser.includes("非法") ? "非法定时自动化" : "每天早8点汇总昨日审批量并通知管理员", name: "每日审批汇总" }) }
           else if (lastUser.includes("单据模板") || lastUser.includes("打印模板")) tool = { name: "bizdoc_prepare_template", arguments: JSON.stringify({ desc: lastUser.includes("非法") ? "非法块模板" : "车辆申请单打印模板", bindType: "FLOW", bindCode: "leave_approval", name: "车辆申请单" }) }
           else if (lastUser.includes("表单")) tool = { name: "form_prepare_schema", arguments: JSON.stringify({ desc: "报销单表单：报销人金额事由", name: "报销单" }) }
           else if (lastUser.includes("摘要")) tool = { name: "task_get_detail", arguments: JSON.stringify({ taskId: (lastUser.match(/任务(\S+)/)?.[1] ?? "x") }) }
@@ -3693,6 +3703,65 @@ async function hlCompleted(token, iid) {
   const psql = (q) => execFileSync("docker",
     ["exec", process.env.OA_PG_CONTAINER ?? "oa-postgres", "psql", "-U", "oa", "-d", "oa_platform", "-t", "-A", "-c", q],
     { stdio: ["ignore", "pipe", "pipe"] }).toString().trim()
+
+  /* ---- knowledge_save 目标空间智能解析（磐石修复：不再逼模型猜 id；唯一可编辑直用/按名命中/歧义出选择卡/仍只落草稿） ---- */
+  {
+    const aiCredId = aiCred.body?.data?.id
+    // 预清理:删本前缀残留的 admin KB 空间(防上次 run 崩溃残留影响"唯一可编辑"判定)；此刻 admin 唯一可编辑=公司制度库(id=1)
+    const preSp = await call(admin.token, "GET", "/api/kb/spaces")
+    for (const s of preSp.body?.data ?? []) {
+      if ((s.code ?? "").startsWith("smoke_kbsave_")) await call(admin.token, "DELETE", `/api/kb/spaces/${s.id}`)
+    }
+    const kbChat = async (msg) => {
+      const r = await call(admin.token, "POST", "/api/ai/chat", { message: msg, credentialId: aiCredId })
+      return r.body?.data?.messages?.[0]?.cards ?? []
+    }
+    // knowledge_spaces 只读工具：列出我可编辑空间（含公司制度库）
+    const spCards = await kbChat("列出我可编辑的知识空间")
+    const spList = spCards.find((c) => c.type === "list")
+    check("kb knowledge_spaces 列出可编辑空间(含公司制度库)",
+      !!spList && (spList.rows ?? []).some((r) => r.name === "公司制度库"), JSON.stringify(spList?.rows))
+
+    // A) 唯一可编辑空间 + 未指明 → 直接产确认卡（不再报"空间不存在"）
+    const kbA = await kbChat("把请假制度固化到知识库")
+    const saveA = kbA.find((c) => c.type === "knowledgeSave")
+    check("kb固化A:唯一可编辑空间→直接产确认卡(partType=knowledgeSave,不报空间不存在)",
+      !!saveA && !!saveA.actionId, JSON.stringify(kbA.map((c) => c.type)))
+    check("kb固化A:确认卡 defaultSpaceId=公司制度库(1) + contentPreview", saveA?.defaultSpaceId === 1 && !!saveA?.contentPreview, JSON.stringify(saveA))
+
+    // B) 按空间名命中
+    const kbB = await kbChat("把请假制度固化 空间名=公司制度库")
+    const saveB = kbB.find((c) => c.type === "knowledgeSave")
+    check("kb固化B:按空间名命中→确认卡到公司制度库", !!saveB && saveB.defaultSpaceId === 1, JSON.stringify(saveB))
+
+    // C) 模型猜错 id（99999999）+ 无名 → 不报错，回退唯一可编辑空间（正是用户实测 bug 场景）
+    const kbC = await kbChat("把请假制度固化 空间id=99999999")
+    const saveC = kbC.find((c) => c.type === "knowledgeSave")
+    check("kb固化C:模型猜错 id→不报错,回退唯一可编辑空间(公司制度库)",
+      !!saveC && saveC.defaultSpaceId === 1 && !kbC.find((c) => c.type === "error"), JSON.stringify(kbC.map((c) => c.type)))
+
+    // D) 红线：确认后只落草稿（status=DRAFT）；自清该草稿
+    const cfKb = await callH(admin.token, "POST", `/api/ai/actions/${saveA.actionId}/confirm`, {}, { "Idempotency-Key": `kbsave-${TS}` })
+    const kbRes = cfKb.body?.data?.data
+    check("kb固化D:确认后建为草稿(红线 status=DRAFT,不直接发布)", cfKb.body?.data?.success === true && kbRes?.status === "DRAFT", JSON.stringify(kbRes))
+    check("kb固化D:草稿落在公司制度库(spaceId=1)", kbRes?.spaceId === 1)
+    if (kbRes?.docId) await call(admin.token, "DELETE", `/api/kb/docs/${kbRes.docId}`)
+
+    // E) 歧义：新增第二可编辑空间 → 未指明出选择卡；按名仍可直达
+    const sp2 = await call(admin.token, "POST", "/api/kb/spaces", { name: `冒烟固化空间${TS}`, code: `smoke_kbsave_${TS}`, visibility: "PRIVATE" })
+    const sp2Id = sp2.body?.data?.id
+    check("kb固化E:建第二可编辑空间(admin owner)", !!sp2Id, JSON.stringify(sp2.body))
+    const kbE = await kbChat("把请假制度固化到知识库")
+    const pickE = kbE.find((c) => c.type === "list" && (c.title ?? "").includes("选择"))
+    check("kb固化E:多可编辑空间且未指明→出选择卡(非确认卡,不臆测)",
+      !!pickE && !kbE.find((c) => c.type === "knowledgeSave"), JSON.stringify(kbE.map((c) => c.type)))
+    check("kb固化E:选择卡列出两个可编辑空间(含新空间)",
+      !!pickE && (pickE.rows ?? []).length >= 2 && (pickE.rows ?? []).some((r) => r.id === sp2Id), JSON.stringify(pickE?.rows))
+    const kbE2 = await kbChat(`把请假制度固化 空间名=冒烟固化空间${TS}`)
+    const saveE2 = kbE2.find((c) => c.type === "knowledgeSave")
+    check("kb固化E:多空间下按名指定→命中该空间", !!saveE2 && saveE2.defaultSpaceId === sp2Id, JSON.stringify(saveE2))
+    await call(admin.token, "DELETE", `/api/kb/spaces/${sp2Id}`) // 自清第二空间
+  }
 
   // 1) SSE 事件序（message.started → tool.started → tool.completed → message.part.created → message.completed）
   const cmid1 = `smoke_v2_${TS}_1`
@@ -5061,13 +5130,14 @@ async function hlCompleted(token, iid) {
     check("kb批3 自动处理:生成自动标签(kb_tag/kb_doc_tag,GET 详情返回 tags)",
       (apDetail?.body?.data?.tags ?? []).length >= 1, JSON.stringify((apDetail?.body?.data?.tags ?? []).map((t) => t.name)))
 
-    // 6) 对话固化：zhangsan(空间 ADMIN) 让助手固化 → knowledgeSaveDraft 确认卡 → 确认建 DRAFT 草稿
+    // 6) 对话固化：zhangsan(空间 ADMIN) 让助手固化 → knowledgeSave 确认卡 → 确认建 DRAFT 草稿
+    //   （磐石改：卡 partType=knowledgeSave，payload={actionId,defaultSpaceId,title,contentPreview}；指定 spaceId 我可编辑→用它）
     const ksChat = await call(zhangsan.token, "POST", "/api/ai/chat", { message: `请把这次讨论固化到空间${spaceId}存为知识库文档`, credentialId: kb3CredId })
-    const ksCard = (ksChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "knowledgeSaveDraft")
-    check("kb批3 对话固化:knowledge_save 产 knowledgeSaveDraft 确认卡(draftId+space+title+preview)",
-      !!ksCard?.draftId && ksCard.spaceId === spaceId && !!ksCard.title && !!ksCard.preview, JSON.stringify(ksCard))
-    const ksCreate = ksCard?.draftId
-      ? await call(zhangsan.token, "POST", `/api/kb/ai/knowledge-drafts/${ksCard.draftId}/create`)
+    const ksCard = (ksChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "knowledgeSave")
+    check("kb批3 对话固化:knowledge_save 产 knowledgeSave 确认卡(actionId+defaultSpaceId+title+contentPreview)",
+      !!ksCard?.actionId && ksCard.defaultSpaceId === spaceId && !!ksCard.title && !!ksCard.contentPreview, JSON.stringify(ksCard))
+    const ksCreate = ksCard?.actionId
+      ? await call(zhangsan.token, "POST", `/api/kb/ai/knowledge-drafts/${ksCard.actionId}/create`)
       : { body: {} }
     const ksDoc = ksCreate.body?.data
     check("kb批3 对话固化:确认后建 DRAFT 草稿文档(不直接发布,红线)",
@@ -5077,12 +5147,15 @@ async function hlCompleted(token, iid) {
     check("kb批3 对话固化:草稿文档回读 status=DRAFT + 正文非空",
       ksDetail.body?.data?.status === "DRAFT" && !!ksDetail.body?.data?.contentText, JSON.stringify(ksDetail.body?.data?.status))
 
-    // 7) 红线：admin(非成员) 固化到该 PRIVATE 空间 → tool 出 error 卡，不建草稿
-    const ksDeny = await call(admin.token, "POST", "/api/ai/chat", { message: `请把内容固化到空间${spaceId}`, credentialId: kb3CredId })
+    // 7) 红线：admin(非该 PRIVATE 空间编辑者) 固化到空间N → 绝不写入空间N；而是重定向到 admin 自己可编辑的空间（不再硬报"空间不存在"）
+    //   （磐石改：解析后仍走 assertSpaceEditable 二次校验，红线=不固化到非可编辑空间；admin 唯一可编辑=公司制度库→重定向到它）
+    const ksDeny = await call(admin.token, "POST", "/api/ai/chat", { message: `请把内容固化到空间${spaceId}存为知识库`, credentialId: kb3CredId })
     const ksDenyCards = ksDeny.body?.data?.messages?.[0]?.cards ?? []
-    check("kb批3 红线:非成员(admin) knowledge_save 出 error 卡且不产 knowledgeSaveDraft",
-      ksDenyCards.some((c) => c.type === "error") && !ksDenyCards.some((c) => c.type === "knowledgeSaveDraft"),
-      JSON.stringify(ksDenyCards.map((c) => c.type)))
+    const ksDenyCard = ksDenyCards.find((c) => c.type === "knowledgeSave")
+    const ksDenyPick = ksDenyCards.find((c) => c.type === "list")
+    check("kb批3 红线:admin 固化到非可编辑空间N→绝不写入空间N(重定向到自己可编辑空间或出选择卡,非N)",
+      !!(ksDenyCard || ksDenyPick) && ksDenyCard?.defaultSpaceId !== spaceId,
+      JSON.stringify(ksDenyCards.map((c) => ({ t: c.type, d: c.defaultSpaceId }))))
 
     await new Promise((r) => kb3Sink.close(r))
     const { execFileSync: kb3Exec } = await import("node:child_process")
