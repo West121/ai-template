@@ -469,3 +469,31 @@ interface WfInstanceDetailP3 extends WfInstanceDetail {
 - 磐石：ResurrectRequest.assignees + resurrect-preview 端点 + override 落地；smoke（默认回填=原办理人 /
   override 生效换人 / 换角色解析 / 不传维持规则解析 向后兼容 / 越权 403 仍拦）。
 - 疾风：唤醒弹窗——选节点 → 拉 resurrect-preview 默认回填办理人 → 可改人/角色（复用现有 assignee 选择器组件）→ 提交带 assignees。
+
+## 流程图预览增强(用户需求 2026-07-12,设计定稿)
+
+基座:instance-detail.tsx 用 react-flow 只读 `FlowViewer`(designer/flow/),已有 highlight
+(completed/active)+ 当前节点脉冲 + timeline(办理记录)。**纯前端增强,数据复用 timeline + predict**。
+**取舍(用户定):动画=专业克制有质感(微动效,快不撑);播放=手动按钮触发(默认静态高亮)。**
+
+### ① 节点办理信息
+- FlowViewer 节点(node-chrome)右上角状态角标:未到达灰 / 进行中蓝脉冲 / 已通过绿✓ / 驳回红 / 加签紫。
+- 已办节点底部缩略行:办理人名+时间;**悬浮/点击弹卡**(头像+姓名+状态+办理时间+意见摘要)。
+- 数据:timeline 按 nodeId(taskKey)分组映射到节点;多人节点列全部。FlowViewer 新增可选
+  `nodeInfo?: Record<nodeId, {assignees,status,time,opinion}>`(瞬态注入 data,不序列化,同 highlight 机制)。
+
+### ② 审批过程动画(手动回放)
+- 顶部「▶ 回放」按钮:节点按 timeline 真实顺序**依次点亮**(微进场),走过的边**流光扫过**
+  (stroke-dashoffset,克制:一次扫过不循环);当前节点呼吸灯(现有脉冲)。不放时=静态高亮(现状)。
+- reduce-motion 降级为直接终态高亮。
+
+### ③ 流程预测运行效果(手动播放)
+- 复用现有 predict(/api/wf/instances/{id}/predict → PredictNode + 预计办理人)。
+- 预测后续节点/边:**虚线 + 蓝色**(区别已完成绿实线);节点标注预计办理人。
+- 「▶ 播放预测」:从当前节点起沿预测路径**逐节点点亮 + 边流动**(克制,单次);不放时=静态虚线预览。
+
+### 分工
+- 疾风(前端):FlowViewer 节点信息层(角标/弹卡/nodeInfo)、回放控制器(时间序驱动 highlight 演进)、
+  预测虚线层+播放;instance-detail 接线(传 nodeInfo=timeline 映射、predict 数据)。四门+渲染冒烟。
+- 后端:预计无需改(timeline 已带办理人/时间/taskKey,predict 已带预计办理人);若 timeline item 缺
+  nodeId 映射键,叫磐石在 timeline DTO 补 nodeId(小改)。
