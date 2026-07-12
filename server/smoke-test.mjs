@@ -4705,7 +4705,92 @@ async function hlCompleted(token, iid) {
       `DELETE FROM orch_credential WHERE name = '冒烟KB3 LLM ${KTS}'`], { stdio: ["ignore", "pipe", "pipe"] })
   }
 
-  // 25.10 自清：删测试空间（级联剩余文档/正文/标签关联/分块向量）+ 删测试标签
+  // ==================== 25.12 批4a：版本历史 + 评论（不含 CRDT） ====================
+  // 契约见 ai-knowledge-base.md §2/§7 批4。自建 doc vd（zhangsan 为空间 ADMIN），全量自清于 25.10 删空间级联。
+  {
+    // 成员就位：manager=EDITOR（25.7 已加，未撤）；admin 重新加为 VIEWER（评论/回滚 越权红线用）
+    await call(zhangsan.token, "POST", `/api/kb/spaces/${spaceId}/members`, { principalType: "USER", principalId: admin.user.id, role: "VIEWER" })
+
+    // --- 版本历史：保存产版本 + version 自增 ---
+    const vdoc = await call(zhangsan.token, "POST", "/api/kb/docs", { spaceId, type: "DOC", title: "批4a版本测试" })
+    const vd = vdoc.body?.data?.id
+    const TXA = `版本A内容${KTS}`
+    const TXB = `版本B内容${KTS}`
+    const vSaveA = await call(zhangsan.token, "PUT", `/api/kb/docs/${vd}/content`, {
+      contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: TXA }] }] }, contentText: TXA,
+    })
+    check("kb批4a 保存正文 version 1→2(产快照)", vSaveA.body?.data?.version === 2, JSON.stringify(vSaveA.body?.data?.version))
+    const vSaveB = await call(zhangsan.token, "PUT", `/api/kb/docs/${vd}/content`, {
+      contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: TXB }] }] }, contentText: TXB,
+    })
+    check("kb批4a 再存正文 version 2→3", vSaveB.body?.data?.version === 3)
+
+    // GET versions：裸数组，version 降序，最新版 = 当前文档版本
+    const vList1 = await call(zhangsan.token, "GET", `/api/kb/docs/${vd}/versions`)
+    const vArr1 = vList1.body?.data ?? []
+    check("kb批4a GET versions 裸数组+version 降序+最新==当前",
+      Array.isArray(vArr1) && vArr1.length === 2 && vArr1[0].version === 3 && vArr1[1].version === 2 && vArr1[0].docId === vd,
+      JSON.stringify(vArr1.map((v) => v.version)))
+    check("kb批4a versions 含 editorName/createdAt(对账 KbDocVersion)",
+      !!vArr1[0]?.editorName && !!vArr1[0]?.createdAt && typeof vArr1[0].id === "number", JSON.stringify(vArr1[0]))
+
+    // 查某版正文
+    const v2c = await call(zhangsan.token, "GET", `/api/kb/docs/${vd}/versions/2`)
+    check("kb批4a 查 v2 正文(contentText/contentJson)",
+      v2c.body?.data?.version === 2 && v2c.body?.data?.contentText === TXA && v2c.body?.data?.contentJson?.type === "doc",
+      JSON.stringify(v2c.body?.data?.contentText))
+    const vMiss = await call(zhangsan.token, "GET", `/api/kb/docs/${vd}/versions/999`)
+    check("kb批4a 查不存在版本 → 404", vMiss.body?.code === 404, JSON.stringify(vMiss.body?.code))
+
+    // 回滚 v2 → 另存为新版本 v4（历史保留），当前正文=版本A
+    const vRoll = await call(zhangsan.token, "POST", `/api/kb/docs/${vd}/rollback/2`)
+    check("kb批4a 回滚 v2 → 新版本 v4 + 当前正文回到 A",
+      vRoll.body?.code === 0 && vRoll.body?.data?.version === 4 && vRoll.body?.data?.contentText === TXA,
+      JSON.stringify({ v: vRoll.body?.data?.version, t: vRoll.body?.data?.contentText }))
+    const vList2 = await call(zhangsan.token, "GET", `/api/kb/docs/${vd}/versions`)
+    const vArr2 = vList2.body?.data ?? []
+    const v4 = vArr2.find((v) => v.version === 4)
+    check("kb批4a 回滚后历史保留(v2/v3/v4 皆在)+v4 记回滚备注",
+      vArr2.length === 3 && vArr2[0].version === 4 && !!v4 && String(v4.note ?? "").includes("回滚自 v2"),
+      JSON.stringify(vArr2.map((v) => ({ v: v.version, n: v.note }))))
+    const vDetail = await call(zhangsan.token, "GET", `/api/kb/docs/${vd}`)
+    check("kb批4a 回滚后详情正文=版本A", vDetail.body?.data?.contentText === TXA)
+
+    // 红线：VIEWER(admin) 不能回滚
+    const vRollDeny = await call(admin.token, "POST", `/api/kb/docs/${vd}/rollback/2`)
+    check("kb批4a 红线:VIEWER(admin) 回滚 403", vRollDeny.body?.code === 403, JSON.stringify(vRollDeny.body?.code))
+
+    // --- 评论：增 + 回复树(parentId) + 删 + 权限 ---
+    const c1 = await call(zhangsan.token, "POST", `/api/kb/docs/${vd}/comments`, { content: "这段需要补充示例。" })
+    const c1id = c1.body?.data?.id
+    check("kb批4a ADMIN 发根评论(parentId=null)", c1.body?.code === 0 && !!c1id && c1.body?.data?.parentId === null && !!c1.body?.data?.userName, JSON.stringify(c1.body?.data))
+    const c2 = await call(manager.token, "POST", `/api/kb/docs/${vd}/comments`, { content: "@我 好的，我来补。", parentId: c1id })
+    const c2id = c2.body?.data?.id
+    check("kb批4a EDITOR 回复(parentId 挂靠父评论)", c2.body?.code === 0 && c2.body?.data?.parentId === c1id, JSON.stringify(c2.body?.data))
+
+    const cList = await call(zhangsan.token, "GET", `/api/kb/docs/${vd}/comments`)
+    const cArr = cList.body?.data ?? []
+    check("kb批4a GET comments 裸数组+含 parentId(可建回复树)",
+      Array.isArray(cArr) && cArr.length === 2 && cArr.some((c) => c.id === c2id && c.parentId === c1id) && cArr.every((c) => !!c.userName),
+      JSON.stringify(cArr.map((c) => ({ id: c.id, p: c.parentId }))))
+
+    // 红线：VIEWER(admin) 不能评论
+    const cDeny = await call(admin.token, "POST", `/api/kb/docs/${vd}/comments`, { content: "越权评论" })
+    check("kb批4a 红线:VIEWER(admin) 发评论 403", cDeny.body?.code === 403, JSON.stringify(cDeny.body?.code))
+    // 红线：非本人非 ADMIN(admin VIEWER) 不能删他人评论
+    const dDeny = await call(admin.token, "DELETE", `/api/kb/comments/${c2id}`)
+    check("kb批4a 红线:非本人(admin) 删他人评论 403", dDeny.body?.code === 403, JSON.stringify(dDeny.body?.code))
+    // 本人删自己评论
+    const dSelf = await call(manager.token, "DELETE", `/api/kb/comments/${c2id}`)
+    check("kb批4a 本人删自己评论", dSelf.body?.code === 0, JSON.stringify(dSelf.body?.code))
+    // 空间 ADMIN 删他人评论
+    const dAdmin = await call(zhangsan.token, "DELETE", `/api/kb/comments/${c1id}`)
+    check("kb批4a 空间 ADMIN 删他人评论", dAdmin.body?.code === 0, JSON.stringify(dAdmin.body?.code))
+    const cList2 = await call(zhangsan.token, "GET", `/api/kb/docs/${vd}/comments`)
+    check("kb批4a 删后评论清空", (cList2.body?.data ?? []).length === 0)
+  }
+
+  // 25.10 自清：删测试空间（级联剩余文档/正文/标签关联/分块向量/版本/评论）+ 删测试标签
   const delSpace = await call(zhangsan.token, "DELETE", `/api/kb/spaces/${spaceId}`)
   check("kb 自清:删测试 PRIVATE 空间", delSpace.body?.code === 0)
   await call(zhangsan.token, "DELETE", `/api/kb/tags/${tagId}`)

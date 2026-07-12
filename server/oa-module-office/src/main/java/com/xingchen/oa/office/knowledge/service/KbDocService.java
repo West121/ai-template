@@ -8,14 +8,19 @@ import com.xingchen.oa.office.knowledge.dto.KbDtos.DocTreeNode;
 import com.xingchen.oa.office.knowledge.dto.KbDtos.DocUpdateRequest;
 import com.xingchen.oa.office.knowledge.dto.KbDtos.ContentSaveRequest;
 import com.xingchen.oa.office.knowledge.dto.KbDtos.TagResponse;
+import com.xingchen.oa.office.knowledge.dto.KbDtos.VersionContent;
+import com.xingchen.oa.office.knowledge.dto.KbDtos.VersionResponse;
 import com.xingchen.oa.office.knowledge.entity.KbDoc;
 import com.xingchen.oa.office.knowledge.entity.KbDocContent;
 import com.xingchen.oa.office.knowledge.entity.KbDocTag;
+import com.xingchen.oa.office.knowledge.entity.KbDocVersion;
 import com.xingchen.oa.office.knowledge.entity.KbSpace;
 import com.xingchen.oa.office.knowledge.entity.KbTag;
+import com.xingchen.oa.office.knowledge.repository.KbCommentRepository;
 import com.xingchen.oa.office.knowledge.repository.KbDocContentRepository;
 import com.xingchen.oa.office.knowledge.repository.KbDocRepository;
 import com.xingchen.oa.office.knowledge.repository.KbDocTagRepository;
+import com.xingchen.oa.office.knowledge.repository.KbDocVersionRepository;
 import com.xingchen.oa.office.knowledge.repository.KbSpaceRepository;
 import com.xingchen.oa.office.knowledge.repository.KbTagRepository;
 import com.xingchen.oa.office.knowledge.port.KbDocAiPort;
@@ -53,6 +58,8 @@ public class KbDocService {
 
     private final KbDocRepository docRepository;
     private final KbDocContentRepository contentRepository;
+    private final KbDocVersionRepository versionRepository;
+    private final KbCommentRepository commentRepository;
     private final KbDocTagRepository docTagRepository;
     private final KbTagRepository tagRepository;
     private final KbSpaceRepository spaceRepository;
@@ -185,6 +192,8 @@ public class KbDocService {
         ids.add(doc.getId());
         docTagRepository.deleteByDocIdIn(ids);
         contentRepository.deleteByDocIdIn(ids);
+        versionRepository.deleteByDocIdIn(ids);  // 批4a：级联删版本快照
+        commentRepository.deleteByDocIdIn(ids);  // 批4a：级联删评论
         embeddingService.deleteByDocIds(ids); // 批2：级联删分块向量
         docRepository.deleteAllByIdInBatch(ids);
     }
@@ -232,6 +241,8 @@ public class KbDocService {
         doc.setUpdaterId(access.currentUser().getUserId());
         doc.setUpdatedAt(OffsetDateTime.now());
         docRepository.save(doc);
+        // 批4a：每次保存存一版快照（version = 自增后的 kb_doc.version，最新版即当前正文）。
+        recordVersion(doc, content.getContentJson(), content.getContentText(), null);
         // 批2：正文提交后重建分块向量（§3/§7）。放事务提交后执行——嵌入是增强不阻断保存，
         // 且提交后读到的正是本次正文；无嵌入凭据时 reindex 仅写 chunk_text（全文降级），毫秒级同步完成。
         // 批3：同一 afterCommit 再触发 AI 自动处理（摘要 + 自动标签，boot 侧异步，失败不阻断）。
@@ -322,6 +333,82 @@ public class KbDocService {
                 .orElseThrow(() -> new BusinessException(404, "知识空间不存在"));
         access.requireEdit(space);
         docTagRepository.deleteByDocIdAndTagId(docId, tagId);
+    }
+
+    // ---------- 批4a：版本历史 + 回滚 ----------
+
+    /** 某文档版本列表（version 降序）。须对空间可见。 */
+    public List<VersionResponse> listVersions(Long docId) {
+        KbDoc doc = docRepository.findById(docId)
+                .orElseThrow(() -> new BusinessException(404, "文档不存在"));
+        KbSpace space = spaceRepository.findById(doc.getSpaceId())
+                .orElseThrow(() -> new BusinessException(404, "知识空间不存在"));
+        access.requireView(space);
+        return versionRepository.findByDocIdOrderByVersionDesc(docId).stream()
+                .map(v -> new VersionResponse(
+                        v.getId(), v.getDocId(), v.getVersion(),
+                        v.getEditorId(), nameResolver.userName(v.getEditorId()),
+                        v.getNote(), v.getCreatedAt()))
+                .toList();
+    }
+
+    /** 某版本正文（contentJson + contentText）。须对空间可见；版本不存在 → 404。 */
+    public VersionContent versionContent(Long docId, Integer version) {
+        KbDoc doc = docRepository.findById(docId)
+                .orElseThrow(() -> new BusinessException(404, "文档不存在"));
+        KbSpace space = spaceRepository.findById(doc.getSpaceId())
+                .orElseThrow(() -> new BusinessException(404, "知识空间不存在"));
+        access.requireView(space);
+        KbDocVersion v = versionRepository.findByDocIdAndVersion(docId, version)
+                .orElseThrow(() -> new BusinessException(404, "版本不存在"));
+        return new VersionContent(v.getVersion(), parseJson(v.getContentJson()), v.getContentText());
+    }
+
+    /**
+     * 回滚到指定版本：以该版正文另存为<b>新版本</b>（version 继续自增，历史不销毁）。
+     * 须空间 EDITOR/ADMIN；目标版本不存在 → 404。返回回滚后的文档详情。
+     */
+    @Transactional
+    public DocDetail rollback(Long docId, Integer version) {
+        KbDoc doc = docRepository.findById(docId)
+                .orElseThrow(() -> new BusinessException(404, "文档不存在"));
+        if (!KbDoc.TYPE_DOC.equals(doc.getType())) {
+            throw new BusinessException("目录节点没有正文");
+        }
+        KbSpace space = spaceRepository.findById(doc.getSpaceId())
+                .orElseThrow(() -> new BusinessException(404, "知识空间不存在"));
+        access.requireEdit(space);
+        KbDocVersion target = versionRepository.findByDocIdAndVersion(docId, version)
+                .orElseThrow(() -> new BusinessException(404, "版本不存在"));
+        KbDocContent content = contentRepository.findById(docId).orElseGet(() -> {
+            KbDocContent c = new KbDocContent();
+            c.setDocId(docId);
+            return c;
+        });
+        content.setContentJson(target.getContentJson());
+        content.setContentText(target.getContentText());
+        content.setUpdatedAt(OffsetDateTime.now());
+        contentRepository.save(content);
+        doc.setVersion(doc.getVersion() + 1);
+        doc.setUpdaterId(access.currentUser().getUserId());
+        doc.setUpdatedAt(OffsetDateTime.now());
+        docRepository.save(doc);
+        recordVersion(doc, target.getContentJson(), target.getContentText(), "回滚自 v" + version);
+        // 与保存正文一致：提交后重建分块向量 + AI 自动处理，让检索/摘要跟上回滚后的正文
+        triggerAfterSave(docId, doc.getTitle(), target.getContentText());
+        return detail(docId);
+    }
+
+    /** 存一版快照：version = 当前 kb_doc.version（已自增），editor = 当前用户。 */
+    private void recordVersion(KbDoc doc, String contentJson, String contentText, String note) {
+        KbDocVersion v = new KbDocVersion();
+        v.setDocId(doc.getId());
+        v.setVersion(doc.getVersion());
+        v.setContentJson(contentJson);
+        v.setContentText(contentText);
+        v.setEditorId(access.currentUser().getUserId());
+        v.setNote(note);
+        versionRepository.save(v);
     }
 
     // ---------- 批3：AI 写作辅助 / 自动处理 / 对话固化 ----------
@@ -420,6 +507,8 @@ public class KbDocService {
         content.setContentText(text);
         content.setUpdatedAt(OffsetDateTime.now());
         contentRepository.save(content);
+        // 批4a：草稿初版也存一版快照（v1），保证版本历史与当前正文一致
+        recordVersion(saved, content.getContentJson(), content.getContentText(), "对话固化初稿");
         // 分块索引（可搜）+ AI 自动处理（草稿也生成摘要/标签），走 afterCommit 兜底
         triggerAfterSave(saved.getId(), saved.getTitle(), text);
         Map<String, Object> out = new LinkedHashMap<>();

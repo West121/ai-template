@@ -9,9 +9,11 @@ import com.xingchen.oa.office.knowledge.dto.KbDtos.SpaceResponse;
 import com.xingchen.oa.office.knowledge.entity.KbDoc;
 import com.xingchen.oa.office.knowledge.entity.KbSpace;
 import com.xingchen.oa.office.knowledge.entity.KbSpaceMember;
+import com.xingchen.oa.office.knowledge.repository.KbCommentRepository;
 import com.xingchen.oa.office.knowledge.repository.KbDocContentRepository;
 import com.xingchen.oa.office.knowledge.repository.KbDocRepository;
 import com.xingchen.oa.office.knowledge.repository.KbDocTagRepository;
+import com.xingchen.oa.office.knowledge.repository.KbDocVersionRepository;
 import com.xingchen.oa.office.knowledge.repository.KbSpaceMemberRepository;
 import com.xingchen.oa.office.knowledge.repository.KbSpaceRepository;
 import com.xingchen.oa.office.knowledge.support.KbAccess;
@@ -47,6 +49,8 @@ public class KbSpaceService {
     private final KbSpaceMemberRepository memberRepository;
     private final KbDocRepository docRepository;
     private final KbDocContentRepository contentRepository;
+    private final KbDocVersionRepository versionRepository;
+    private final KbCommentRepository commentRepository;
     private final KbDocTagRepository docTagRepository;
     private final KbEmbeddingService embeddingService;
     private final KbAccess access;
@@ -141,6 +145,8 @@ public class KbSpaceService {
         if (!docIds.isEmpty()) {
             docTagRepository.deleteByDocIdIn(docIds);
             contentRepository.deleteByDocIdIn(docIds);
+            versionRepository.deleteByDocIdIn(docIds); // 批4a：级联删版本快照
+            commentRepository.deleteByDocIdIn(docIds); // 批4a：级联删评论
             embeddingService.deleteByDocIds(docIds); // 批2：级联删分块向量
             docRepository.deleteAllByIdInBatch(docIds);
         }

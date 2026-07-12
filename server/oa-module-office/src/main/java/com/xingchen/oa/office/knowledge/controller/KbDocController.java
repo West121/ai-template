@@ -9,6 +9,8 @@ import com.xingchen.oa.office.knowledge.dto.KbDtos.DocTagRequest;
 import com.xingchen.oa.office.knowledge.dto.KbDtos.DocTreeNode;
 import com.xingchen.oa.office.knowledge.dto.KbDtos.DocUpdateRequest;
 import com.xingchen.oa.office.knowledge.dto.KbDtos.TagResponse;
+import com.xingchen.oa.office.knowledge.dto.KbDtos.VersionContent;
+import com.xingchen.oa.office.knowledge.dto.KbDtos.VersionResponse;
 import com.xingchen.oa.office.knowledge.entity.KbDoc;
 import com.xingchen.oa.office.knowledge.service.KbDocService;
 import jakarta.validation.Valid;
@@ -93,6 +95,30 @@ public class KbDocController {
     @OperLog(module = "知识库", action = "归档文档")
     public R<DocDetail> archive(@PathVariable Long id) {
         return R.ok(docService.changeStatus(id, KbDoc.STATUS_ARCHIVED));
+    }
+
+    // ---------- 版本历史（批4a）----------
+
+    /** 版本列表（version 降序）。 */
+    @GetMapping("/{id}/versions")
+    @PreAuthorize("hasAuthority('kb:doc:view')")
+    public R<List<VersionResponse>> versions(@PathVariable Long id) {
+        return R.ok(docService.listVersions(id));
+    }
+
+    /** 某版本正文（contentJson + contentText）。 */
+    @GetMapping("/{id}/versions/{version}")
+    @PreAuthorize("hasAuthority('kb:doc:view')")
+    public R<VersionContent> versionContent(@PathVariable Long id, @PathVariable Integer version) {
+        return R.ok(docService.versionContent(id, version));
+    }
+
+    /** 回滚到指定版本：以该版正文另存为新版本（不销毁历史）。 */
+    @PostMapping("/{id}/rollback/{version}")
+    @PreAuthorize("hasAuthority('kb:doc:edit')")
+    @OperLog(module = "知识库", action = "回滚版本")
+    public R<DocDetail> rollback(@PathVariable Long id, @PathVariable Integer version) {
+        return R.ok(docService.rollback(id, version));
     }
 
     // ---------- 文档标签 ----------

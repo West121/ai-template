@@ -126,4 +126,30 @@ public final class KbDtos {
     public record RelatedDoc(
             Long docId, String title, Long spaceId, String spaceName, double score) {
     }
+
+    // ---------- 版本历史 / 评论（批4a，ai-knowledge-base.md §2/§7 批4） ----------
+
+    /** 版本历史条目（GET /docs/{id}/versions，version 降序）。editorName 读时解析。 */
+    public record VersionResponse(
+            Long id, Long docId, Integer version, Long editorId, String editorName, String note,
+            OffsetDateTime createdAt) {
+    }
+
+    /** 某版本正文（GET /docs/{id}/versions/{version}）。contentJson 为 TipTap JSON。 */
+    public record VersionContent(
+            Integer version, JsonNode contentJson, String contentText) {
+    }
+
+    /** 发评论 / 回复：parentId 为空 = 根评论；anchor 选区锚点（批4a 文档级评论，存 null 即可）。 */
+    public record CommentRequest(
+            @NotBlank(message = "评论内容不能为空") String content,
+            Long parentId,
+            String anchor) {
+    }
+
+    /** 评论条目（GET/POST /docs/{id}/comments）。userName 读时解析；前端按 parentId 建回复树。 */
+    public record CommentResponse(
+            Long id, Long docId, Long parentId, Long userId, String userName, String content,
+            String anchor, OffsetDateTime createdAt) {
+    }
 }
