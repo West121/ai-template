@@ -54,21 +54,37 @@ public class ReportTools {
 
     @AiToolDefinition(name = "report_execute", aliases = {"stats_report"},
             authorities = {"office:approval:approve"},
-            description = "执行统计报表（服务端预置聚合，带数据权限）。参数 reportCode + parameters（按 report_describe "
-                    + "的参数白名单；携带下钻参数时返回明细列表）。",
-            paramsSchema = "{\"reportCode\":{\"type\":\"string\",\"description\":\"报表编码\"},"
+            description = "执行统计报表（服务端预置聚合，带数据权限）。参数 reportCode + parameters（键取自 report_describe "
+                    + "的 parameterSchema 白名单）。多维报表（如 APPROVAL_COUNT）用 dimension 选统计维度——只能从该报表 "
+                    + "allowedDimensions 里选：用户说「按月份」→dimension=month、「按部门」→dept、「按类型」→type、"
+                    + "「按状态」→status、「按流程」→process、「按发起人/按人」→initiator；时间维可加 timeGrain"
+                    + "（day/week/month/quarter/year）。维度不在白名单会返回「该报表支持的维度」友好错误，据此改用合法维度重试。"
+                    + "携带下钻参数（describe.drillParam）时返回明细列表。dimension/timeGrain 便捷参数亦可平铺在顶层。",
+            paramsSchema = "{\"reportCode\":{\"type\":\"string\",\"description\":\"报表编码，如 APPROVAL_COUNT\"},"
                     + "\"parameters\":{\"type\":\"object\",\"description\":\"报表参数（白名单内；含下钻参数则返回明细）\"},"
-                    + "\"module\":{\"type\":\"string\",\"description\":\"旧版参数（兼容）：approval|document\"},"
-                    + "\"dimension\":{\"type\":\"string\",\"description\":\"旧版参数（兼容）：status|type|docType\"}}")
+                    + "\"dimension\":{\"type\":\"string\",\"description\":\"统计维度（便捷平铺；从报表 allowedDimensions 选，"
+                    + "如 status/type/process/month/dept/initiator）。无 reportCode 时兼容旧 stats_report 选码 status|type|docType\"},"
+                    + "\"timeGrain\":{\"type\":\"string\",\"description\":\"时间粒度（仅时间维 month 生效）：day/week/month/quarter/year\"},"
+                    + "\"rangeStart\":{\"type\":\"string\",\"description\":\"可选，起始日期 yyyy-MM-dd\"},"
+                    + "\"rangeEnd\":{\"type\":\"string\",\"description\":\"可选，结束日期 yyyy-MM-dd\"},"
+                    + "\"module\":{\"type\":\"string\",\"description\":\"旧版参数（兼容）：approval|document\"}}")
     @SuppressWarnings("unchecked")
     public ToolResult reportExecute(Map<String, Object> args) {
-        // 旧 stats_report(module,dimension) 入参映射（别名过渡期）
+        // 旧 stats_report(module,dimension) 入参映射（别名过渡期）：无 reportCode 时按 module/dimension 选码
         String reportCode = str(args.get("reportCode"));
-        if (!StringUtils.hasText(reportCode)) {
+        boolean explicit = StringUtils.hasText(reportCode);
+        if (!explicit) {
             reportCode = legacyCode(str(args.get("module")), str(args.get("dimension")));
         }
         Map<String, Object> parameters = args.get("parameters") instanceof Map<?, ?> m
                 ? new LinkedHashMap<>((Map<String, Object>) m) : new LinkedHashMap<>();
+        // 受控灵活维度：顶层便捷参数并入 parameters（仅显式 reportCode 时，避免与旧 dimension 选码语义冲突）
+        if (explicit) {
+            mergeArg(parameters, "dimension", args.get("dimension"));
+            mergeArg(parameters, "timeGrain", args.get("timeGrain"));
+            mergeArg(parameters, "rangeStart", args.get("rangeStart"));
+            mergeArg(parameters, "rangeEnd", args.get("rangeEnd"));
+        }
         AiSessionHolder.Turn turn = sessionHolder.currentTurn();
         AiReportService.ExecResult r = reportService.execute(reportCode, parameters,
                 support.currentUser(), turn != null ? turn.sessionId() : null);
@@ -96,6 +112,13 @@ public class ReportTools {
         return ToolResult.of(support.toJson(Map.of("reportCode", r.reportCode(), "title", r.title(),
                         "categories", r.categories(), "data", r.data())), card)
                 .withCitations(List.of(ToolResult.citation("REPORT", r.reportCode(), r.title())));
+    }
+
+    /** 顶层便捷参数并入 parameters：非空且未在 parameters 中显式给出时才补。 */
+    private void mergeArg(Map<String, Object> params, String key, Object value) {
+        if (value != null && StringUtils.hasText(String.valueOf(value)) && !params.containsKey(key)) {
+            params.put(key, value);
+        }
     }
 
     /** 旧 stats_report 入参 → reportCode（V1 兼容口径）。 */

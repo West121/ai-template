@@ -3666,9 +3666,83 @@ async function hlCompleted(token, iid) {
     ctxChat.body?.code === 0 && String(aiReqs[iCtx]?.messages?.[0]?.content ?? "").includes("我的审批"),
     JSON.stringify(String(aiReqs[iCtx]?.messages?.[0]?.content ?? "").slice(-120)))
 
+  // 7.5) 批E 受控灵活维度（APPROVAL_COUNT 多维数据源；维度白名单 + 后端预定义分组，非隐形 SQL）
+  //   造数据：当月 4 单（now）+ 回填到 2026-03 的 4 单（跨月）——验证 dimension=month 出多个月桶
+  const cntMark = `AICNT-${TS}`
+  for (let i = 0; i < 4; i++) {
+    await call(admin.token, "POST", "/api/office/approvals", {
+      title: `${cntMark}-cur-${i}`, type: "LEAVE", reason: "灵活维度冒烟", startDate: "2026-07-01", endDate: "2026-07-02",
+    })
+  }
+  for (let i = 0; i < 4; i++) {
+    await call(admin.token, "POST", "/api/office/approvals", {
+      title: `${cntMark}-old-${i}`, type: "TRIP", reason: "灵活维度冒烟", startDate: "2026-03-01", endDate: "2026-03-02",
+    })
+  }
+  psql(`UPDATE oa_approval SET created_at = '2026-03-10 09:00:00+08' WHERE title LIKE '${cntMark}-old-%'`)
+
+  // (a) dimension=month → 按月分组（折线），至少含 2026-03 与 2026-07 两个桶，且升序
+  const byMonth = await call(admin.token, "POST", "/api/ai/reports/APPROVAL_COUNT/execute", { params: { dimension: "month" } })
+  const mCats = byMonth.body?.data?.categories ?? []
+  check("aiV2E APPROVAL_COUNT dimension=month(折线+跨月多桶+升序)",
+    byMonth.body?.code === 0 && byMonth.body?.data?.detail === false && byMonth.body?.data?.chartType === "line" &&
+      mCats.includes("2026-03") && mCats.some((c) => c === "2026-07") &&
+      mCats.indexOf("2026-03") < mCats.indexOf("2026-07"),
+    JSON.stringify({ chart: byMonth.body?.data?.chartType, cats: mCats }))
+
+  // (b) dimension=dept → 按部门分组（柱状），聚合非明细、类目非空
+  const byDept = await call(admin.token, "POST", "/api/ai/reports/APPROVAL_COUNT/execute", { params: { dimension: "dept" } })
+  check("aiV2E APPROVAL_COUNT dimension=dept(柱状+按部门聚合)",
+    byDept.body?.code === 0 && byDept.body?.data?.detail === false && byDept.body?.data?.chartType === "bar" &&
+      Array.isArray(byDept.body?.data?.categories) && byDept.body?.data?.categories.length >= 1 &&
+      (byDept.body?.data?.data ?? []).reduce((s, n) => s + n, 0) >= 8,
+    JSON.stringify({ chart: byDept.body?.data?.chartType, cats: byDept.body?.data?.categories }))
+
+  // (c) 白名单外维度 → 友好错误（列出支持的维度），非 500
+  const badDim = await call(admin.token, "POST", "/api/ai/reports/APPROVAL_COUNT/execute", { params: { dimension: "salary" } })
+  check("aiV2E 白名单外维度(salary) → 友好错误非 500",
+    badDim.status !== 500 && badDim.body?.code === 400 &&
+      String(badDim.body?.message ?? "").includes("支持的维度") && String(badDim.body?.message ?? "").includes("salary"),
+    JSON.stringify({ st: badDim.status, msg: badDim.body?.message }))
+
+  // (d) describe 暴露 allowedDimensions（AI 据此把「按月份」→month），含 month/dept + 时间粒度
+  const cntDesc = await call(admin.token, "GET", "/api/ai/reports/APPROVAL_COUNT")
+  const dimCodes = (cntDesc.body?.data?.allowedDimensions ?? []).map((d) => d.code)
+  check("aiV2E describe 暴露 allowedDimensions + allowedTimeGrains",
+    cntDesc.body?.code === 0 && dimCodes.includes("month") && dimCodes.includes("dept") &&
+      (cntDesc.body?.data?.allowedTimeGrains ?? []).includes("quarter"),
+    JSON.stringify({ dims: dimCodes, grains: cntDesc.body?.data?.allowedTimeGrains }))
+
+  // (e) 数据权限（zhangsan SELF 只见本人范围）：admin(ALL) 与 zhangsan(SELF) 同一下钻——
+  //     admin 见全部（含自己造的 8 单），zhangsan 见得更少，且明细里绝无 admin 的单（越权不可见，与 20 行截断无关）
+  await call(zhangsan.token, "POST", "/api/office/approvals", {
+    title: `${cntMark}-zs`, type: "LEAVE", reason: "本人范围", startDate: "2026-07-03", endDate: "2026-07-04",
+  })
+  const adminDrill = await call(admin.token, "POST", "/api/ai/reports/APPROVAL_COUNT/execute",
+    { params: { dimension: "status", drillValue: "待审批" } })
+  const zsDrill = await call(zhangsan.token, "POST", "/api/ai/reports/APPROVAL_COUNT/execute",
+    { params: { dimension: "status", drillValue: "待审批" } })
+  const zsTitles = (zsDrill.body?.data?.rows ?? []).map((x) => String(x.title ?? ""))
+  check("aiV2E 数据权限(zhangsan SELF<admin ALL;明细无 admin 单)",
+    adminDrill.body?.code === 0 && zsDrill.body?.code === 0 && zsDrill.body?.data?.detail === true &&
+      adminDrill.body?.data?.total >= 8 && zsDrill.body?.data?.total < adminDrill.body?.data?.total &&
+      !zsTitles.some((t) => t.includes(`${cntMark}-cur`) || t.includes(`${cntMark}-old`)),
+    JSON.stringify({ adminTotal: adminDrill.body?.data?.total, zsTotal: zsDrill.body?.data?.total }))
+
+  // (f) 旧 reportCode 别名仍出原结果（BY_TYPE 柱状+按类型 / BY_PROCESS 聚合），映射到固定维度
+  const byType = await call(admin.token, "POST", "/api/ai/reports/APPROVAL_COUNT_BY_TYPE/execute", { params: {} })
+  const byProc = await call(admin.token, "POST", "/api/ai/reports/APPROVAL_COUNT_BY_PROCESS/execute", { params: {} })
+  check("aiV2E 旧 reportCode 别名兼容(BY_TYPE 柱状/BY_PROCESS 聚合)",
+    byType.body?.code === 0 && byType.body?.data?.chartType === "bar" && byType.body?.data?.drill?.paramName === "type" &&
+      (byType.body?.data?.categories ?? []).includes("请假") &&
+      byProc.body?.code === 0 && byProc.body?.data?.detail === false,
+    JSON.stringify({ type: byType.body?.data?.chartType, typeCats: byType.body?.data?.categories, proc: byProc.body?.data?.chartType }))
+
   // 8) 批C 自清（KEEP=1 亦执行）：数据集 + 冒烟审批单
   psql(`DELETE FROM ai_dataset WHERE id = ${Number(dsId)}`)
+  psql(`DELETE FROM ai_dataset WHERE report_code = 'APPROVAL_COUNT'`)
   psql(`DELETE FROM oa_approval WHERE title LIKE 'AI冒烟DS-%'`)
+  psql(`DELETE FROM oa_approval WHERE title LIKE '${cntMark}-%'`)
 
   /* ---- AI 助手 V2 批D（V36）：Token 预算/结构化摘要游标/长期记忆/附件 fileId/RAG 全文降级/晨报 ---- */
 

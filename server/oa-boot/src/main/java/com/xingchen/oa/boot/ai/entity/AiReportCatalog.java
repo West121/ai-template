@@ -45,8 +45,21 @@ public class AiReportCatalog {
     @Column(name = "data_scope_strategy", nullable = false, length = 32)
     private String dataScopeStrategy = "OFFICE_SCOPE";
 
+    /** 多维数据源标识（APPROVAL/DOCUMENT/ATTENDANCE）：execute 按此路由到预定义分组逻辑。 */
+    @Column(name = "data_source", length = 32)
+    private String dataSource;
+
+    /** 逗号分隔的维度白名单（如 status,type,process,month,dept,initiator）——受控灵活维度的核心。 */
     @Column(name = "allowed_dimensions", length = 255)
     private String allowedDimensions;
+
+    /** 缺省维度（调用方未指定 dimension 时使用；预设别名即其单一维度）。 */
+    @Column(name = "default_dimension", length = 32)
+    private String defaultDimension;
+
+    /** 逗号分隔的时间粒度白名单（day,week,month,quarter,year）——仅时间维生效。 */
+    @Column(name = "allowed_time_grains", length = 128)
+    private String allowedTimeGrains;
 
     @Column(name = "allowed_metrics", length = 255)
     private String allowedMetrics;

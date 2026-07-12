@@ -779,6 +779,22 @@ ATTENDANCE_RATE_BY_DEPARTMENT
 MEETING_ROOM_USAGE
 ```
 
+#### 受控灵活维度（批E）
+
+「一个 reportCode 一个写死维度」太死板——用户临时想「按月份 / 按部门」统计就不行。方案：把审批量合并为
+一个**多维数据源** `APPROVAL_COUNT`，`allowed_dimensions`（status/type/process/month/dept/initiator）
++ `allowed_time_grains`（day/week/month/quarter/year）+ `default_dimension`。`report_execute` 接受
+`dimension`（从 allowed_dimensions 白名单选）、`timeGrain`（仅时间维）、`rangeStart/rangeEnd`、`drillValue`。
+
+**这不是把 `stats_report` 放回来**，红线仍在：
+
+- `dimension`/`timeGrain` 只是**服务端白名单内的枚举选择**（不是 SQL 片段）；后端把维度名映射到**预定义**的
+  安全分组逻辑——oa_approval 维度走 JPA `Specification`（数据权限）+ Java 分组（**零 SQL 拼接**），process 维度
+  走 wf_instance_ext 的参数化 native（字段/条件均常量，仅 uid 绑定）。**LLM 传入的字符串绝不进 SQL 字段名/片段。**
+- 非白名单维度 → **友好错误**（列出该报表支持的维度），让 AI 改用合法维度重试，而非笼统拒绝。
+- 数据权限照旧（可见范围由 `SecuritySupport.dataScope` 约束）；metric 目前只 count（留扩展）。
+- 旧 3 个 reportCode（BY_STATUS/BY_TYPE/BY_PROCESS）保留为**预设别名**（单维 allowed_dimensions，向后兼容）。
+
 ### 11.2 数据集
 
 大于卡片容量的数据不直接写入聊天消息：
