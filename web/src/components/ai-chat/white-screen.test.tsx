@@ -8,13 +8,15 @@ import type { ReactNode } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { cleanup, render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
+// 顶部静态 import:模块在收集阶段加载,不计入单测 5s 超时(测试内 await import 曾致全量并发下 flaky)
+import { FormCard } from "./cards/form-card"
+import { ChatView } from "./chat-view"
 
 afterEach(cleanup)
 vi.spyOn(console, "error").mockImplementation(() => {})
 
 describe("防白屏回归", () => {
-  it("form 卡 schema 非数组形状(对象/字符串/垃圾)渲染不抛错", async () => {
-    const { FormCard } = await import("./cards/form-card")
+  it("form 卡 schema 非数组形状(对象/字符串/垃圾)渲染不抛错", () => {
     for (const schema of [{ widgets: [] }, "not-json{", 123, null] as unknown[]) {
       const { unmount } = render(
         <MemoryRouter>
@@ -27,12 +29,12 @@ describe("防白屏回归", () => {
     }
   })
 
-  it("消息含坏卡时 CardBoundary 隔离,其余内容仍渲染", async () => {
-    const { default: ChatViewModule } = await import("./chat-view").then((m) => ({ default: m }))
-    const { ChatView } = ChatViewModule as never as { ChatView: (p: Record<string, unknown>) => ReactNode }
+  it("消息含坏卡时 CardBoundary 隔离,其余内容仍渲染", () => {
+    // 故意传非法 message/card 形状触发 CardBoundary → 宽松 cast 绕过严格 props 类型
+    const CV = ChatView as unknown as (p: Record<string, unknown>) => ReactNode
     render(
       <MemoryRouter>
-        <ChatView
+        <CV
           messages={[
             {
               role: "ASSISTANT",
