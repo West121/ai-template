@@ -46,6 +46,8 @@ public class KnowledgeTools {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("title", h.title());
             row.put("space", h.spaceName());
+            row.put("spaceId", h.spaceId()); // 行级跳转用（前端 /knowledge/{spaceId}?doc={docId}）
+            row.put("docId", h.docId());
             row.put("snippet", strip(h.snippet()));
             rows.add(row);
             citations.add(citation(h));
@@ -87,6 +89,7 @@ public class KnowledgeTools {
         c.put("sourceType", "KB_DOC");
         c.put("sourceId", String.valueOf(h.docId()));
         c.put("title", h.title() == null ? "" : h.title());
+        c.put("spaceId", h.spaceId()); // 前端 /knowledge/{spaceId}?doc={docId} 精确定位
         c.put("space", h.spaceName() == null ? "" : h.spaceName());
         return c;
     }

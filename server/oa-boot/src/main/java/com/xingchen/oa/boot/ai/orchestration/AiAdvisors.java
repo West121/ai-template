@@ -339,12 +339,13 @@ public final class AiAdvisors {
             }
         }
 
-        /** KB_DOC 引用（携空间名，前端可跳知识库文档）。 */
+        /** KB_DOC 引用（携 spaceId + 空间名，前端可精确跳 /knowledge/{spaceId}?doc={docId}）。 */
         private Map<String, Object> kbCitation(SearchHit h) {
             Map<String, Object> c = new java.util.LinkedHashMap<>();
             c.put("sourceType", "KB_DOC");
             c.put("sourceId", String.valueOf(h.docId()));
             c.put("title", h.title() == null ? "" : h.title());
+            c.put("spaceId", h.spaceId());
             c.put("space", h.spaceName() == null ? "" : h.spaceName());
             return c;
         }

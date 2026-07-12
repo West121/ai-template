@@ -4503,9 +4503,10 @@ async function hlCompleted(token, iid) {
     const kbRagSys = String(kbReqs[iKbRag]?.messages?.[0]?.content ?? "")
     const kbRagText = (kbRag.body?.data?.messages?.[0]?.parts ?? []).find((p) => p.partType === "text")
     const kbCite = (kbRagText?.payload?.citations ?? []).find((c) => c.sourceType === "KB_DOC")
-    check("kb批2 RAG 问答注入知识库文档 + KB_DOC 引用",
+    check("kb批2 RAG 问答注入知识库文档 + KB_DOC 引用(含 spaceId 精确定位)",
       kbRag.body?.code === 0 && kbRagSys.includes("参考资料") && kbRagSys.includes("请假") &&
-        !!kbCite && String(kbCite.title ?? "").includes("请假") && !!kbCite.sourceId,
+        !!kbCite && String(kbCite.title ?? "").includes("请假") && !!kbCite.sourceId &&
+        Number(kbCite.spaceId) === 1,
       JSON.stringify({ sysHasLeave: kbRagSys.includes("请假"), kbCite }))
 
     // 红线：admin 问不可见 PRIVATE 空间关键词 → 无 KB_DOC 泄漏 + system 不含该内容

@@ -113,8 +113,9 @@ pgvector 语义。防白屏:list/related 均可能空数组,渲染须容 `[]`。
 
 ### 9.3 AI 助手「问知识库」(复用现有 `POST /api/ai/chat`)
 - RAG 检索源已扩到知识库:主轮次自动检索当前用户可见空间的知识库文档,命中以「参考资料」注入,并在
-  文本 part 的 `payload.citations` 追加 **`KB_DOC`** 引用:`{ sourceType:"KB_DOC", sourceId:docId, title, space }`
-  (与批D `RAG_DOC` 并存;前端角标可跳知识库文档 `/knowledge` + docId)。
+  文本 part 的 `payload.citations` 追加 **`KB_DOC`** 引用:
+  `{ sourceType:"KB_DOC", sourceId:docId, title, spaceId, space }`
+  (与批D `RAG_DOC` 并存;前端角标精确跳 `/knowledge/{spaceId}?doc={docId}`,`space` 为空间名)。
 - 另有显式工具(模型自主调用,`kb:doc:view`):`knowledge_search{q,spaceId?}`(产 list 卡 + KB_DOC 引用)、
   `knowledge_ask{question}`(取 Top 片段作参考资料,据此作答带引用)。
 
