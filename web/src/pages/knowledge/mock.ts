@@ -26,10 +26,12 @@ import { roleOf, visibleSpaces } from "./permissions"
 import { buildSnippet } from "./search-util"
 import { buildAssistText, type AssistAction } from "./assist-util"
 import type {
+  KbComment,
   KbDoc,
   KbDocDetail,
   KbDocStatus,
   KbDocType,
+  KbDocVersion,
   KbMatchedBy,
   KbMemberRole,
   KbPrincipalType,
@@ -38,6 +40,7 @@ import type {
   KbTag,
   KbTreeNode,
   KbUserCtx,
+  KbVersionContent,
   KbVisibility,
   RelatedDoc,
   SearchHit,
@@ -105,6 +108,35 @@ const TAGS: KbTag[] = [
   { id: 402, name: "架构", color: "#8b5cf6" },
   { id: 403, name: "制度", color: "#10b981" },
 ]
+
+/** 版本历史（会话内可变），键=docId；VERSION_SNAP 键=`${docId}:${version}` */
+const VERSIONS: Record<number, KbDocVersion[]> = {
+  302: [
+    { id: 501, docId: 302, version: 1, editorId: 1, editorName: "系统管理员", note: "初稿", createdAt: "2026-06-12T09:00:00" },
+    { id: 502, docId: 302, version: 2, editorId: 3, editorName: "张三", note: "补充评审流程", createdAt: "2026-06-20T14:30:00" },
+  ],
+  305: [{ id: 503, docId: 305, version: 1, editorId: 1, editorName: "系统管理员", note: "架构初稿", createdAt: "2026-06-15T10:00:00" }],
+}
+const VERSION_SNAP: Record<string, { contentJson: unknown; contentText: string }> = {
+  "302:1": { contentJson: htmlToJson("<h2>代码提交规约</h2><p>初版：约定 commit message 与分支模型。</p>"), contentText: "代码提交规约\n初版：约定 commit message 与分支模型。" },
+}
+function versionsOf(docId: number): KbDocVersion[] {
+  return VERSIONS[docId] ?? []
+}
+/** 保存/回滚时记录一个版本快照 */
+function recordVersion(doc: KbDoc, contentJson: unknown, contentText: string, note?: string) {
+  const list = VERSIONS[doc.id] ?? (VERSIONS[doc.id] = [])
+  list.push({ id: nid(), docId: doc.id, version: doc.version, editorId: currentKbCtx().userId ?? 1, editorName: useAuthStore.getState().user?.name ?? "我", note, createdAt: nowIso() })
+  VERSION_SNAP[`${doc.id}:${doc.version}`] = { contentJson, contentText }
+}
+
+/** 评论（会话内可变） */
+const COMMENTS: KbComment[] = [
+  { id: 601, docId: 302, parentId: null, userId: 2, userName: "李经理", content: "分支模型这段建议再举个例子。", createdAt: "2026-06-21T09:10:00" },
+  { id: 602, docId: 302, parentId: 601, userId: 3, userName: "张三", content: "@李经理 好的，我补一个 feature 分支的示例。", createdAt: "2026-06-21T09:40:00" },
+  { id: 603, docId: 302, parentId: null, userId: 1, userName: "系统管理员", content: "整体不错，已同意发布。", createdAt: "2026-06-22T16:00:00" },
+]
+const commentsOf = (docId: number) => COMMENTS.filter((c) => c.docId === docId)
 
 const membersOf = (spaceId: number) => MEMBERS.filter((m) => m.spaceId === spaceId)
 
@@ -387,6 +419,7 @@ export function saveDocContent(docId: number, input: SaveContentInput): Promise<
         doc.version += 1
         doc.updatedAt = nowIso()
         doc.updaterName = useAuthStore.getState().user?.name ?? "我"
+        recordVersion(doc, input.contentJson, input.contentText)
       }
       return doc ?? null
     },
@@ -560,6 +593,94 @@ export function fetchRelated(docId: number, topN = 5): Promise<KbResult<RelatedD
         })
         .sort((a, b) => b.score - a.score)
         .slice(0, topN)
+    },
+  )
+}
+
+/* =============================== 批4a：版本历史 =============================== */
+
+export function fetchVersions(docId: number): Promise<KbResult<KbDocVersion[]>> {
+  return withMock(
+    () => api<KbDocVersion[]>(`${KB}/docs/${docId}/versions`).then(normList<KbDocVersion>),
+    () => [...versionsOf(docId)].sort((a, b) => b.version - a.version),
+  )
+}
+
+export function fetchVersionContent(docId: number, version: number): Promise<KbResult<KbVersionContent>> {
+  return withMock(
+    () => api<KbVersionContent>(`${KB}/docs/${docId}/versions/${version}`),
+    () => {
+      const snap = VERSION_SNAP[`${docId}:${version}`]
+      if (snap) return { version, contentJson: snap.contentJson, contentText: snap.contentText }
+      // 无快照（如最新版）→ 回当前正文
+      const c = getContent(docId)
+      return { version, contentJson: c.contentJson, contentText: c.contentText }
+    },
+  )
+}
+
+/** 回滚到指定版本：以该版本正文另存为新版本（不销毁历史） */
+export function rollbackDoc(docId: number, version: number): Promise<KbResult<KbDoc | null>> {
+  return withMock(
+    () => api<KbDoc>(`${KB}/docs/${docId}/rollback/${version}`, { method: "POST" }),
+    () => {
+      const snap = VERSION_SNAP[`${docId}:${version}`] ?? getContent(docId)
+      const doc = DOCS.find((x) => x.id === docId)
+      if (doc) {
+        CONTENTS[docId] = { contentJson: snap.contentJson, contentText: snap.contentText }
+        doc.version += 1
+        doc.updatedAt = nowIso()
+        doc.updaterName = useAuthStore.getState().user?.name ?? "我"
+        recordVersion(doc, snap.contentJson, snap.contentText, `回滚自 v${version}`)
+      }
+      return doc ?? null
+    },
+  )
+}
+
+/* =============================== 批4a：评论 =============================== */
+
+export function fetchComments(docId: number): Promise<KbResult<KbComment[]>> {
+  return withMock(
+    () => api<KbComment[]>(`${KB}/docs/${docId}/comments`).then(normList<KbComment>),
+    () => commentsOf(docId),
+  )
+}
+
+export interface PostCommentInput {
+  content: string
+  parentId?: number | null
+  anchor?: string | null
+}
+
+export function postComment(docId: number, input: PostCommentInput): Promise<KbResult<KbComment>> {
+  return withMock(
+    () => api<KbComment>(`${KB}/docs/${docId}/comments`, { method: "POST", body: JSON.stringify(input) }),
+    () => {
+      const uid = currentKbCtx().userId ?? 1
+      const c: KbComment = {
+        id: nid(),
+        docId,
+        parentId: input.parentId ?? null,
+        userId: uid,
+        userName: useAuthStore.getState().user?.name ?? "我",
+        content: input.content,
+        anchor: input.anchor ?? null,
+        createdAt: nowIso(),
+      }
+      COMMENTS.push(c)
+      return c
+    },
+  )
+}
+
+export function deleteComment(commentId: number): Promise<KbResult<boolean>> {
+  return withMock(
+    () => api<void>(`${KB}/comments/${commentId}`, { method: "DELETE" }).then(() => true),
+    () => {
+      const i = COMMENTS.findIndex((c) => c.id === commentId)
+      if (i >= 0) COMMENTS.splice(i, 1)
+      return true
     },
   )
 }

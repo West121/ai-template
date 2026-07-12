@@ -3,7 +3,7 @@
  * 正文经 content-codec 在 HTML↔TipTap JSON 间互转（后端 contentJson 原样存）。保存自增版本；发布/归档。
  * 协同（CRDT）批4，本批单人编辑。
  */
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import type { Editor } from "@tiptap/react"
 import { Archive, FileText, FolderOpen, Loader2, Save, Send, ShieldAlert } from "lucide-react"
@@ -17,6 +17,8 @@ import { RichTextEditor, RichTextViewer, stripHtml } from "@/components/rich-tex
 import { fetchDoc, saveDocContent, setDocStatus, updateDoc } from "./mock"
 import { jsonToHtml, htmlToJson } from "./content-codec"
 import { KbAiAssist } from "./kb-ai-assist"
+import { VersionHistory } from "./version-history"
+import { DocComments } from "./comments"
 import { DOC_STATUS_META, type KbDocDetail } from "./types"
 
 export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | null; canEdit: boolean; onDocChanged?: () => void }) {
@@ -29,19 +31,20 @@ export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | nu
   const [error, setError] = useState<"forbidden" | "notfound" | string | null>(null)
   const [editor, setEditor] = useState<Editor | null>(null)
   const onEditorReady = useCallback((e: Editor | null) => setEditor(e), [])
+  const reqRef = useRef(0)
 
-  useEffect(() => {
+  const reload = useCallback(() => {
     if (docId == null) {
       setDetail(null)
       setError(null)
       return
     }
-    let alive = true
+    const my = ++reqRef.current
     setLoading(true)
     setError(null)
     fetchDoc(docId)
       .then((r) => {
-        if (!alive) return
+        if (my !== reqRef.current) return
         if (!r.data) {
           setError("notfound")
           setDetail(null)
@@ -53,16 +56,17 @@ export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | nu
         setDirty(false)
       })
       .catch((e: unknown) => {
-        if (!alive) return
+        if (my !== reqRef.current) return
         if (e instanceof ApiError && (e.code === 403 || String(e.message).includes("403"))) setError("forbidden")
         else setError(e instanceof Error ? e.message : "加载失败")
         setDetail(null)
       })
-      .finally(() => alive && setLoading(false))
-    return () => {
-      alive = false
-    }
+      .finally(() => {
+        if (my === reqRef.current) setLoading(false)
+      })
   }, [docId])
+
+  useEffect(() => reload(), [reload])
 
   const save = async () => {
     if (!detail) return
@@ -168,6 +172,20 @@ export function DocEditor({ docId, canEdit, onDocChanged }: { docId: number | nu
           {statusMeta?.label}
         </Badge>
         <span className="shrink-0 text-xs text-muted-foreground">v{detail.version}</span>
+        {/* 协作：历史版本 / 评论（全部用户可看，编辑动作按 canEdit 门控） */}
+        <div className="flex shrink-0 items-center gap-1.5">
+          <VersionHistory
+            docId={detail.id}
+            currentVersion={detail.version}
+            currentText={stripHtml(html)}
+            canEdit={canEdit}
+            onRolledBack={() => {
+              reload()
+              onDocChanged?.()
+            }}
+          />
+          <DocComments docId={detail.id} canEdit={canEdit} />
+        </div>
         {canEdit && (
           <div className="flex shrink-0 items-center gap-1.5">
             <KbAiAssist editor={editor} docId={detail.id} />

@@ -125,6 +125,44 @@ export const MATCHED_BY_META: Record<KbMatchedBy, { label: string; className: st
   hybrid: { label: "混合", className: "border-emerald-500/40 text-emerald-600 dark:text-emerald-400" },
 }
 
+/* ---------------- 批4a：版本历史 / 评论（§2 kb_doc_version / kb_comment） ---------------- */
+
+/** 版本历史条目（GET /docs/{id}/versions） */
+export interface KbDocVersion {
+  id: number
+  docId: number
+  version: number
+  editorId?: number
+  editorName?: string
+  note?: string
+  createdAt: string
+}
+
+/** 某版本正文（GET /docs/{id}/versions/{version}） */
+export interface KbVersionContent {
+  version: number
+  contentJson: unknown
+  contentText: string
+}
+
+/** 评论（GET/POST /docs/{id}/comments） */
+export interface KbComment {
+  id: number
+  docId: number
+  parentId: number | null
+  userId: number
+  userName: string
+  content: string
+  /** 选区锚点（可空，批4a 先做文档级评论） */
+  anchor?: string | null
+  createdAt: string
+}
+
+/** 评论树节点（buildCommentTree 产物） */
+export interface KbCommentNode extends KbComment {
+  replies: KbCommentNode[]
+}
+
 /** 权限判定上下文（当前用户），offline=演示放开 */
 export interface KbUserCtx {
   userId: number | null
