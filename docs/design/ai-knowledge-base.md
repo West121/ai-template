@@ -94,3 +94,30 @@ AI 能力层   问答(RAG+引用) / 写作辅助 / 自动处理(摘要·标签·
 - 安全红线:AI 问答/推荐/检索**严格按用户可见空间过滤**,不跨权限泄露知识;写操作(对话固化/AI 生成
   入库)走草稿+人工确认,不直接发布。
 - 每批行为兼容、可验、可回滚;防白屏四层贯穿;smoke(KEEP=1 自清)。
+
+## 9. 批2 API 契约（后端已落地，供前端）
+
+统一 `{code,message,data}` 信封;权限码 `kb:doc:view`。检索/推荐/RAG **严格按可见空间过滤**(红线);
+无嵌入凭据默认走全文/ILIKE 降级(始终可用),有嵌入凭据(`ai-assistant.rag.embedding-enabled=true`)才叠加
+pgvector 语义。防白屏:list/related 均可能空数组,渲染须容 `[]`。
+
+### 9.1 混合检索 `POST /api/kb/search`
+- 请求 `{ q: string, spaceId?: number, pageNum?=1, pageSize?=10 }`(`q` 必填;`spaceId` 限定单空间,不可见→403)。
+- 响应 `data`: `PageResult<SearchHit>` = `{ list, total, pageNum, pageSize }`。
+- `SearchHit`: `{ docId, title, spaceId, spaceName, snippet, score, matchedBy }`。
+  - `snippet` 含 `<mark>…</mark>` 高亮(前端可 dangerouslySetInnerHTML 或去标记);`matchedBy` ∈ `vector|fulltext|hybrid`;`score` 降序。
+
+### 9.2 相关推荐 `GET /api/kb/docs/{id}/related?topN=5`
+- 响应 `data`: `RelatedDoc[]` = `{ docId, title, spaceId, spaceName, score }[]`(相似降序,**排除自身**,仅可见空间;
+  无权查看该文档→403)。语义(pgvector 余弦)优先,无嵌入→全文相似降级。
+
+### 9.3 AI 助手「问知识库」(复用现有 `POST /api/ai/chat`)
+- RAG 检索源已扩到知识库:主轮次自动检索当前用户可见空间的知识库文档,命中以「参考资料」注入,并在
+  文本 part 的 `payload.citations` 追加 **`KB_DOC`** 引用:`{ sourceType:"KB_DOC", sourceId:docId, title, space }`
+  (与批D `RAG_DOC` 并存;前端角标可跳知识库文档 `/knowledge` + docId)。
+- 另有显式工具(模型自主调用,`kb:doc:view`):`knowledge_search{q,spaceId?}`(产 list 卡 + KB_DOC 引用)、
+  `knowledge_ask{question}`(取 Top 片段作参考资料,据此作答带引用)。
+
+### 9.4 分块嵌入(自动,无独立端点)
+- 保存正文(`PUT /api/kb/docs/{id}/content`)后自动重建 `kb_doc_embedding` 分块(先删后插);有嵌入凭据写
+  `embedding`,无则留空(全文降级)。删文档/删空间级联删分块。前端无需感知。

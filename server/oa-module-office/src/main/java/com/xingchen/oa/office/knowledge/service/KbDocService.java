@@ -23,6 +23,8 @@ import com.xingchen.oa.office.knowledge.support.KbNameResolver;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -52,6 +54,7 @@ public class KbDocService {
     private final KbSpaceService spaceService;
     private final KbAccess access;
     private final KbNameResolver nameResolver;
+    private final KbEmbeddingService embeddingService;
     private final ObjectMapper objectMapper;
 
     /** 空间下目录树（FOLDER/DOC）。须对空间可见。 */
@@ -172,6 +175,7 @@ public class KbDocService {
         ids.add(doc.getId());
         docTagRepository.deleteByDocIdIn(ids);
         contentRepository.deleteByDocIdIn(ids);
+        embeddingService.deleteByDocIds(ids); // 批2：级联删分块向量
         docRepository.deleteAllByIdInBatch(ids);
     }
 
@@ -218,7 +222,24 @@ public class KbDocService {
         doc.setUpdaterId(access.currentUser().getUserId());
         doc.setUpdatedAt(OffsetDateTime.now());
         docRepository.save(doc);
+        // 批2：正文提交后重建分块向量（§3/§7）。放事务提交后执行——嵌入是增强不阻断保存，
+        // 且提交后读到的正是本次正文；无嵌入凭据时 reindex 仅写 chunk_text（全文降级），毫秒级同步完成。
+        triggerReindex(id, req.contentText());
         return detail(id);
+    }
+
+    /** content_text 已在 req 中，直接透传；事务提交后重建（无 tx 同步则直接调）。 */
+    private void triggerReindex(Long docId, String contentText) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    embeddingService.reindex(docId, contentText);
+                }
+            });
+        } else {
+            embeddingService.reindex(docId, contentText);
+        }
     }
 
     @Transactional

@@ -102,4 +102,28 @@ public final class KbDtos {
     /** 给文档打标签：二选一，tagId 优先；否则按 name 取或建。 */
     public record DocTagRequest(Long tagId, String name) {
     }
+
+    // ---------- 检索 / 相关推荐（批2，ai-knowledge-base.md §3/§7） ----------
+
+    /** 混合检索请求：q 查询词；spaceId 可选（限定单空间，须可见）；分页（缺省 1/10）。 */
+    public record SearchRequest(
+            @NotBlank(message = "查询词不能为空") String q,
+            Long spaceId,
+            Integer pageNum,
+            Integer pageSize) {
+    }
+
+    /**
+     * 检索命中。matchedBy：vector 语义 / fulltext 全文 / hybrid 混合。
+     * snippet 为含 {@code <mark>} 高亮的片段；score 为混合排序分（降序）。
+     */
+    public record SearchHit(
+            Long docId, String title, Long spaceId, String spaceName,
+            String snippet, double score, String matchedBy) {
+    }
+
+    /** 相关文档：pgvector 余弦相似 Top-N（无嵌入→全文相似降级）；score 越大越相似。 */
+    public record RelatedDoc(
+            Long docId, String title, Long spaceId, String spaceName, double score) {
+    }
 }

@@ -48,6 +48,7 @@ public class KbSpaceService {
     private final KbDocRepository docRepository;
     private final KbDocContentRepository contentRepository;
     private final KbDocTagRepository docTagRepository;
+    private final KbEmbeddingService embeddingService;
     private final KbAccess access;
     private final KbNameResolver nameResolver;
 
@@ -140,6 +141,7 @@ public class KbSpaceService {
         if (!docIds.isEmpty()) {
             docTagRepository.deleteByDocIdIn(docIds);
             contentRepository.deleteByDocIdIn(docIds);
+            embeddingService.deleteByDocIds(docIds); // 批2：级联删分块向量
             docRepository.deleteAllByIdInBatch(docIds);
         }
         memberRepository.deleteBySpaceId(id);

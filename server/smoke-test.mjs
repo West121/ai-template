@@ -4420,7 +4420,108 @@ async function hlCompleted(token, iid) {
   const flat = JSON.stringify(treeAfter.body?.data ?? [])
   check("kb 级联删后 fid/subId 均不在树中", !flat.includes(`"id":${fid},`) && !flat.includes(`"id":${subId},`), flat)
 
-  // 25.9 自清：删测试空间（级联剩余文档/正文/标签关联）+ 删测试标签
+  // ==================== 25.9 批2：检索 + 相关推荐 + RAG 问答 ====================
+  // 契约见 ai-knowledge-base.md §3/§7 批2。此处 admin 已非该 PRIVATE 空间成员（上一步移除）→ 红线可测。
+  {
+    // 本块自带 psql（外层 psql 为块级作用域，不可见）
+    const { execFileSync: kbExec } = await import("node:child_process")
+    const kbPsql = (q) => kbExec("docker",
+      ["exec", process.env.OA_PG_CONTAINER ?? "oa-postgres", "psql", "-U", "oa", "-d", "oa_platform", "-t", "-A", "-c", q],
+      { stdio: ["ignore", "pipe", "pipe"] }).toString().trim()
+
+    // did（zhangsan 私密空间根文档）写带唯一关键词的正文 → 触发分块嵌入（保存事务提交后重建）
+    const UNIQ = `量子纠缠报销QF${KTS}`
+    await call(zhangsan.token, "PUT", `/api/kb/docs/${did}/content`, {
+      contentJson: { type: "doc", content: [] },
+      contentText: `${UNIQ}政策：本空间机密文档，仅成员可见。报销需附发票与审批单，逐级审批。`,
+    })
+    const embCnt = Number(kbPsql(`SELECT count(*) FROM kb_doc_embedding WHERE doc_id=${did}`))
+    const embNull = Number(kbPsql(`SELECT count(*) FROM kb_doc_embedding WHERE doc_id=${did} AND embedding IS NULL`))
+    check("kb批2 保存正文→分块行生成", embCnt >= 1, `rows=${embCnt}`)
+    check("kb批2 无嵌入凭据→全文标记(embedding 空)", embCnt >= 1 && embNull === embCnt, `null=${embNull}/${embCnt}`)
+
+    // 第二篇相似文档（相关推荐用），同空间根节点（不受 25.8 删目录影响）
+    const doc2 = await call(zhangsan.token, "POST", "/api/kb/docs", { spaceId, type: "DOC", title: "报销附则" })
+    const did2 = doc2.body?.data?.id
+    await call(zhangsan.token, "PUT", `/api/kb/docs/${did2}/content`, {
+      contentJson: { type: "doc", content: [] },
+      contentText: `${UNIQ}附则：报销标准与发票要求，审批单须部门负责人签字后逐级审批。`,
+    })
+
+    // 混合检索：owner zhangsan 命中关键词 + 高亮 snippet
+    const zsSearch = await call(zhangsan.token, "POST", "/api/kb/search", { q: UNIQ, spaceId })
+    const zsHits = zsSearch.body?.data?.list ?? []
+    check("kb批2 混合检索命中关键词(含高亮 snippet)",
+      zsSearch.body?.code === 0 && zsHits.some((h) => h.docId === did && String(h.snippet ?? "").includes("量子纠缠")),
+      JSON.stringify(zsHits.map((h) => ({ id: h.docId, s: h.snippet }))))
+
+    // 红线：admin（非成员）全局检索搜不到该不可见空间文档
+    const admSearch = await call(admin.token, "POST", "/api/kb/search", { q: UNIQ })
+    check("kb批2 红线:admin 检索不到不可见空间文档",
+      admSearch.body?.code === 0 && !(admSearch.body?.data?.list ?? []).some((h) => h.docId === did || h.docId === did2),
+      JSON.stringify((admSearch.body?.data?.list ?? []).map((h) => h.docId)))
+
+    // 相关推荐：did → did2 相似，排除自身
+    const rel = await call(zhangsan.token, "GET", `/api/kb/docs/${did}/related`)
+    const relList = rel.body?.data ?? []
+    check("kb批2 相关推荐返回相似文档(did2)且排除自身",
+      rel.body?.code === 0 && relList.some((r) => r.docId === did2) && !relList.some((r) => r.docId === did),
+      JSON.stringify(relList.map((r) => r.docId)))
+    // 红线：admin 对不可见文档取相关 → 403
+    const admRel = await call(admin.token, "GET", `/api/kb/docs/${did}/related`)
+    check("kb批2 红线:admin 取不可见文档相关 403", admRel.body?.code === 403, JSON.stringify(admRel.body?.code))
+
+    // RAG 问答：自建最小 AI sink + 凭据（本块自清），验证检索源扩到知识库 + KB_DOC 引用 + 可见空间过滤红线
+    const { createServer: createKbSink } = await import("node:http")
+    const kbReqs = []
+    const kbSink = createKbSink((req, res) => {
+      let b = ""
+      req.on("data", (d) => (b += d))
+      req.on("end", () => {
+        if (req.url === "/kbai/v1/chat/completions") {
+          kbReqs.push(JSON.parse(b || "{}"))
+          res.writeHead(200, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({
+            id: "chatcmpl-kb", object: "chat.completion", created: 1720000000, model: "fake-kb",
+            choices: [{ index: 0, message: { role: "assistant", content: "根据知识库资料作答。" }, finish_reason: "stop", logprobs: null }],
+            usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+          }))
+        } else { res.writeHead(404); res.end() }
+      })
+    })
+    await new Promise((r) => kbSink.listen(0, "127.0.0.1", r))
+    const KBSINK = `http://127.0.0.1:${kbSink.address().port}`
+    const kbCred = await call(admin.token, "POST", "/api/orch/credentials", {
+      name: `冒烟KB LLM ${KTS}`, type: "LLM", baseUrl: `${KBSINK}/kbai/v1`, apiKey: "sk-kb", model: "fake-kb", enabled: true,
+    })
+    const kbCredId = kbCred.body?.data?.id
+    check("kb批2 建 RAG 测试凭据", !!kbCredId, JSON.stringify(kbCred.body?.code))
+
+    // admin 问 PUBLIC 种子知识（请假制度 doc=2）→ 系统注入知识库文档 + KB_DOC 引用
+    const iKbRag = kbReqs.length
+    const kbRag = await call(admin.token, "POST", "/api/ai/chat", { message: "请假制度有哪些规定", credentialId: kbCredId })
+    const kbRagSys = String(kbReqs[iKbRag]?.messages?.[0]?.content ?? "")
+    const kbRagText = (kbRag.body?.data?.messages?.[0]?.parts ?? []).find((p) => p.partType === "text")
+    const kbCite = (kbRagText?.payload?.citations ?? []).find((c) => c.sourceType === "KB_DOC")
+    check("kb批2 RAG 问答注入知识库文档 + KB_DOC 引用",
+      kbRag.body?.code === 0 && kbRagSys.includes("参考资料") && kbRagSys.includes("请假") &&
+        !!kbCite && String(kbCite.title ?? "").includes("请假") && !!kbCite.sourceId,
+      JSON.stringify({ sysHasLeave: kbRagSys.includes("请假"), kbCite }))
+
+    // 红线：admin 问不可见 PRIVATE 空间关键词 → 无 KB_DOC 泄漏 + system 不含该内容
+    const iKbRag2 = kbReqs.length
+    const kbRag2 = await call(admin.token, "POST", "/api/ai/chat", { message: `${UNIQ}是什么政策`, credentialId: kbCredId })
+    const kbRag2Text = (kbRag2.body?.data?.messages?.[0]?.parts ?? []).find((p) => p.partType === "text")
+    const leak = (kbRag2Text?.payload?.citations ?? []).some((c) => c.sourceType === "KB_DOC" && (String(c.sourceId) === String(did) || String(c.sourceId) === String(did2)))
+    const kbRag2Sys = String(kbReqs[iKbRag2]?.messages?.[0]?.content ?? "")
+    check("kb批2 红线:RAG 不泄漏不可见空间文档", !leak && !kbRag2Sys.includes("量子纠缠"),
+      JSON.stringify({ leak, sysHasUniq: kbRag2Sys.includes("量子纠缠") }))
+
+    await new Promise((r) => kbSink.close(r))
+    kbPsql(`DELETE FROM orch_credential WHERE name = '冒烟KB LLM ${KTS}'`)
+  }
+
+  // 25.10 自清：删测试空间（级联剩余文档/正文/标签关联/分块向量）+ 删测试标签
   const delSpace = await call(zhangsan.token, "DELETE", `/api/kb/spaces/${spaceId}`)
   check("kb 自清:删测试 PRIVATE 空间", delSpace.body?.code === 0)
   await call(zhangsan.token, "DELETE", `/api/kb/tags/${tagId}`)
