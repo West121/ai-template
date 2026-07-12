@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest"
 import { mdToHtml } from "./markdown"
 import { CONFIRM_INITIAL, confirmReducer, type ConfirmCardState } from "./cards/confirm-machine"
-import { barLayout, donutSegments, isChartEmpty, lineLayout, niceMax, chartColor } from "./cards/chart-math"
+import { chartColor, formatCategoryTick, isChartEmpty, toBarLineData, toPieData } from "./cards/chart-math"
 
 /* ---------------- confirm 状态机 ---------------- */
 
@@ -44,71 +44,61 @@ describe("confirm 状态机", () => {
 
 /* ---------------- chart 数据映射 ---------------- */
 
-describe("chart 数据映射", () => {
-  it("niceMax：加 headroom 后取 1/2/5×10^n", () => {
-    expect(niceMax(0)).toBe(1)
-    expect(niceMax(9)).toBe(10)
-    expect(niceMax(42)).toBe(50)
-    expect(niceMax(100)).toBe(200) // 100*1.1=110 → 200
-    expect(niceMax(180)).toBe(200)
+describe("chart 数据映射（recharts 迁移）", () => {
+  it("formatCategoryTick：时间维压成 月/日/年，分类维原样不截断", () => {
+    expect(formatCategoryTick("2026-01")).toBe("1月") // 核心痛点：不再 2026-…
+    expect(formatCategoryTick("2026-12")).toBe("12月")
+    expect(formatCategoryTick("2026-01-05")).toBe("1/5")
+    expect(formatCategoryTick("2026")).toBe("2026年")
+    expect(formatCategoryTick("研发部")).toBe("研发部") // 分类维原样
+    expect(formatCategoryTick("行政管理中心（较长）")).toBe("行政管理中心（较长）") // 绝不 slice
   })
 
-  it("barLayout：分组柱数量 = 类目×系列，柱高与值成比例、不越出绘图区", () => {
-    const { rects, max } = barLayout(
-      ["A", "B", "C"],
+  it("toBarLineData：类目为行、系列铺成 s0/s1 列，缺值/非数组 → 0", () => {
+    const rows = toBarLineData(
+      ["2026-01", "2026-02", "2026-03"],
       [
-        { name: "s1", data: [10, 20, 30] },
-        { name: "s2", data: [5, 15, 25] },
+        { name: "发起量", data: [12, 20, 15] },
+        { name: "办结量", data: [10, 18, 14] },
       ],
     )
-    expect(rects).toHaveLength(6)
-    expect(max).toBe(50) // 30*1.1=33 → 50
-    const a1 = rects.find((r) => r.category === "A" && r.seriesName === "s1")!
-    const c1 = rects.find((r) => r.category === "C" && r.seriesName === "s1")!
-    expect(c1.h).toBeGreaterThan(a1.h)
-    expect(c1.h / a1.h).toBeCloseTo(3, 5) // 30/10
-    for (const r of rects) {
-      expect(r.y).toBeGreaterThanOrEqual(0)
-      expect(r.y + r.h).toBeLessThanOrEqual(180)
-    }
+    expect(rows).toEqual([
+      { category: "2026-01", s0: 12, s1: 10 },
+      { category: "2026-02", s0: 20, s1: 18 },
+      { category: "2026-03", s0: 15, s1: 14 },
+    ])
+    // 系列 data 短于类目 / 非数组 → 0，不越界不抛
+    const guard = toBarLineData(["A", "B"], [{ name: "x", data: [7] }, { name: "y" }])
+    expect(guard).toEqual([
+      { category: "A", s0: 7, s1: 0 },
+      { category: "B", s0: 0, s1: 0 },
+    ])
   })
 
-  it("lineLayout：x 均匀分布、y 越大值越小（SVG 坐标向下）", () => {
-    const { points } = lineLayout(["1月", "2月", "3月"], [{ name: "s", data: [10, 30, 20] }])
-    const [p1, p2, p3] = points[0]
-    expect(p2.x - p1.x).toBeCloseTo(p3.x - p2.x, 5)
-    expect(p2.y).toBeLessThan(p1.y) // 30 > 10 → y 更小（更高）
-    expect(p3.y).toBeLessThan(p1.y)
-    expect(p3.y).toBeGreaterThan(p2.y)
+  it("toPieData：每系列取 data[0] 当扇区，percent 透传、负值夹 0、fill 走 --chart-N", () => {
+    const pie = toPieData([
+      { name: "已办结", data: [60], percent: 60 },
+      { name: "进行中", data: [40], percent: 40 },
+    ])
+    expect(pie).toEqual([
+      { name: "已办结", value: 60, percent: 60, fill: "var(--chart-1)" },
+      { name: "进行中", value: 40, percent: 40, fill: "var(--chart-2)" },
+    ])
+    // 负值夹 0、data 缺失 → 0
+    expect(toPieData([{ name: "x", data: [-5] }, { name: "y" }])).toEqual([
+      { name: "x", value: 0, percent: undefined, fill: "var(--chart-1)" },
+      { name: "y", value: 0, percent: undefined, fill: "var(--chart-2)" },
+    ])
   })
 
-  it("donutSegments：dash 总长=周长、offset 顺时针累加、percent 后端优先", () => {
-    const C = 100
-    const segs = donutSegments(
-      [
-        { name: "a", value: 50 },
-        { name: "b", value: 30, percent: 33.3 },
-        { name: "c", value: 20 },
-      ],
-      C,
-    )
-    expect(segs.map((s) => s.dash).reduce((x, y) => x + y, 0)).toBeCloseTo(C, 5)
-    expect(segs[0].offset).toBe(-0)
-    expect(segs[1].offset).toBeCloseTo(-50, 5)
-    expect(segs[2].offset).toBeCloseTo(-80, 5)
-    expect(segs[0].percent).toBe(50)
-    expect(segs[1].percent).toBe(33.3) // 后端给的优先
-    // 全 0 → 空数组（组件呈现空态）
-    expect(donutSegments([{ name: "x", value: 0 }], C)).toEqual([])
-  })
-
-  it("chartColor 循环 --chart-1..5；isChartEmpty 判空", () => {
+  it("chartColor 循环 --chart-1..5；isChartEmpty 判空（data 非数组按空）", () => {
     expect(chartColor(0)).toBe("var(--chart-1)")
     expect(chartColor(5)).toBe("var(--chart-1)")
     expect(chartColor(6)).toBe("var(--chart-2)")
     expect(isChartEmpty([])).toBe(true)
     expect(isChartEmpty([{ data: [0, 0] }])).toBe(true)
     expect(isChartEmpty([{ data: [0, 1] }])).toBe(false)
+    expect(isChartEmpty([{} as { data?: number[] }])).toBe(true) // data 缺失 → 空
   })
 })
 

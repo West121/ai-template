@@ -1,28 +1,36 @@
 /**
- * chart 卡（§3.5）：纯手写 SVG bar|line|pie(donut)，颜色严格 --chart-1..5 循环，零图表依赖。
- * viewBox 320×180 逻辑坐标随面板宽缩放；原生 <title> 做悬浮显值；图例文字兜底（色弱/灰度可读）。
- * 几何映射在 chart-math.ts（纯函数，可测）。
- * V2 批C 下钻：payload 带 drill:{reportCode,paramName} 时 bar 类目/pie 扇区可点 →
- * report_execute → 结果作为新 list 卡追加进消息流（AiChatActions 上下文）；无 drill 不可点（现状）。
+ * chart 卡（§3.5，丹青 ai-chart-shadcn）：内部实现从纯手写 SVG 迁到 shadcn/ui 官方图表（recharts）。
+ * 卡壳 / 下钻链路 / 路由（CardRouter/PartRouter → <ChartCard card>）零改动；仅换图形内核。
+ * - bar → <BarChart>；line → <AreaChart>（首系列面积）；pie → <PieChart> donut（中心合计）。
+ * - 类目标签靠 XAxis tickFormatter 友好化（月/日/年，绝不粗暴截断），tooltip 永远显全类目。
+ * - 颜色一律 var(--chart-1..5)（light/dark 两态由 index.css 定义）；ChartContainer 注入 --color-sN。
+ * - 下钻：bar 点类目 / pie 点扇区 → onPick(category) → report_execute → 结果 list 卡追加进消息流。
+ * 防白屏：空/非法 chartType/series 缺失 → 「暂无数据」不抛；组件仍在 chat-view 的 CardBoundary 内。
  */
-import { useState } from "react"
+import { useState, type ComponentProps } from "react"
 import { BarChart3, Loader2 } from "lucide-react"
 import { toast } from "sonner"
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Label,
+  Pie,
+  PieChart,
+  XAxis,
+  YAxis,
+} from "recharts"
+import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { executeReport } from "../api"
 import { reportResultToListPart } from "../protocol"
 import { useAiChatActions } from "../chat-actions"
-import type { AiChartCard, AiChartSeries } from "../types"
-import {
-  axisLayout,
-  barLayout,
-  CHART_H,
-  CHART_W,
-  chartColor,
-  donutSegments,
-  isChartEmpty,
-  lineLayout,
-} from "./chart-math"
+import type { AiChartCard } from "../types"
+import { chartColor, formatCategoryTick, isChartEmpty, toBarLineData, toPieData } from "./chart-math"
 
+/** 图例（pie 带后端 percent；bar/line 仅色块+名）。保留自绘，色块直取 --chart-N 保证与图一致。 */
 function Legend({ items }: { items: { name: string; index: number; percent?: number }[] }) {
   return (
     <ul className="mt-2.5 flex flex-wrap gap-x-3 gap-y-1">
@@ -37,158 +45,19 @@ function Legend({ items }: { items: { name: string; index: number; percent?: num
   )
 }
 
-function Axis({ max }: { max: number }) {
-  const a = axisLayout(max)
-  return (
-    <>
-      {a.grid.map((g) => (
-        <g key={g.value}>
-          <line x1={a.plot.l} x2={a.plot.r} y1={g.y} y2={g.y} stroke="var(--border)" strokeDasharray="2 3" />
-          <text x={a.plot.l - 4} y={g.y + 3} textAnchor="end" fontSize={10} fill="var(--muted-foreground)">
-            {g.value}
-          </text>
-        </g>
-      ))}
-      <line x1={a.plot.l} x2={a.plot.r} y1={a.baselineY} y2={a.baselineY} stroke="var(--border)" />
-      <text x={a.plot.l - 4} y={a.baselineY + 3} textAnchor="end" fontSize={10} fill="var(--muted-foreground)">
-        0
-      </text>
-    </>
-  )
-}
-
-function CategoryLabels({ categories }: { categories: string[] }) {
-  const a = axisLayout(1)
-  const bandW = (a.plot.r - a.plot.l) / Math.max(1, categories.length)
-  // 类目多时隔项显示，避免挤压
-  const step = categories.length > 6 ? 2 : 1
-  return (
-    <>
-      {categories.map((c, i) =>
-        i % step === 0 ? (
-          <text
-            key={i}
-            x={a.plot.l + i * bandW + bandW / 2}
-            y={CHART_H - 8}
-            textAnchor="middle"
-            fontSize={10}
-            fill="var(--muted-foreground)"
-          >
-            {c.length > 6 ? `${c.slice(0, 5)}…` : c}
-            <title>{c}</title>
-          </text>
-        ) : null,
-      )}
-    </>
-  )
-}
-
-function BarChart({ categories, series, onPick }: { categories: string[]; series: AiChartSeries[]; onPick?: (category: string) => void }) {
-  const { rects, max } = barLayout(categories, series)
-  return (
-    <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} preserveAspectRatio="xMidYMid meet" className="w-full" role="img">
-      <Axis max={max} />
-      <CategoryLabels categories={categories} />
-      {rects.map((r, i) => (
-        <rect
-          key={i}
-          x={r.x}
-          y={r.y}
-          width={r.w}
-          height={r.h}
-          rx={2}
-          fill={chartColor(r.seriesIndex)}
-          className={`transition-opacity hover:opacity-80 ${onPick ? "cursor-pointer" : ""}`}
-          onClick={onPick ? () => onPick(r.category) : undefined}
-        >
-          <title>{`${r.category} · ${r.seriesName}：${r.value}${onPick ? "（点击下钻）" : ""}`}</title>
-        </rect>
-      ))}
-    </svg>
-  )
-}
-
-function LineChart({ categories, series }: { categories: string[]; series: AiChartSeries[] }) {
-  const { points, max } = lineLayout(categories, series)
-  const a = axisLayout(max)
-  return (
-    <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} preserveAspectRatio="xMidYMid meet" className="w-full" role="img">
-      <Axis max={max} />
-      <CategoryLabels categories={categories} />
-      {points.map((pts, si) => {
-        const color = chartColor(si)
-        const polyline = pts.map((p) => `${p.x},${p.y}`).join(" ")
-        // 主系列面积（首个系列）
-        const area =
-          si === 0 && pts.length > 1
-            ? `M ${pts[0].x},${a.baselineY} ${pts.map((p) => `L ${p.x},${p.y}`).join(" ")} L ${pts[pts.length - 1].x},${a.baselineY} Z`
-            : null
-        return (
-          <g key={si}>
-            {area && <path d={area} fill={color} fillOpacity={0.12} />}
-            <polyline points={polyline} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-            {pts.map((p, pi) => (
-              <circle key={pi} cx={p.x} cy={p.y} r={2.5} fill={color}>
-                <title>{`${p.category} · ${series[si].name}：${p.value}`}</title>
-              </circle>
-            ))}
-          </g>
-        )
-      })}
-    </svg>
-  )
-}
-
-function DonutChart({ series, onPick }: { series: AiChartSeries[]; onPick?: (category: string) => void }) {
-  const R = 62
-  const strokeW = 24
-  const r = R - strokeW / 2
-  const circumference = 2 * Math.PI * r
-  const items = series.map((s) => ({ name: s.name, value: s.data[0] ?? 0, percent: s.percent }))
-  const segments = donutSegments(items, circumference)
-  const total = items.reduce((sum, it) => sum + Math.max(0, it.value), 0)
-  const cx = CHART_W / 2
-  const cy = CHART_H / 2
-  return (
-    <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} preserveAspectRatio="xMidYMid meet" className="w-full" role="img">
-      {/* 从 12 点顺时针起：旋转 -90° */}
-      <g transform={`rotate(-90 ${cx} ${cy})`}>
-        {segments.map((seg) => (
-          <circle
-            key={seg.name}
-            cx={cx}
-            cy={cy}
-            r={r}
-            fill="none"
-            stroke={chartColor(seg.seriesIndex)}
-            strokeWidth={strokeW}
-            strokeDasharray={`${seg.dash} ${circumference - seg.dash}`}
-            strokeDashoffset={seg.offset}
-            className={`transition-opacity hover:opacity-80 ${onPick ? "cursor-pointer" : ""}`}
-            onClick={onPick ? () => onPick(seg.name) : undefined}
-          >
-            <title>{`${seg.name}：${seg.value}（${seg.percent}%）${onPick ? "（点击下钻）" : ""}`}</title>
-          </circle>
-        ))}
-      </g>
-      {/* 段间细缝：叠一圈 card 色描边圆点省略（MVP）；中心合计 */}
-      <text x={cx} y={cy - 2} textAnchor="middle" fontSize={16} fontWeight={600} fill="var(--foreground)">
-        {total}
-      </text>
-      <text x={cx} y={cy + 14} textAnchor="middle" fontSize={10} fill="var(--muted-foreground)">
-        合计
-      </text>
-    </svg>
-  )
-}
-
 export function ChartCard({ card }: { card: AiChartCard }) {
-  const empty = isChartEmpty(card.series)
-  const typeLabel = card.chartType === "bar" ? "柱状图" : card.chartType === "line" ? "折线图" : "环形图"
   const actions = useAiChatActions()
   const [drilling, setDrilling] = useState<string | null>(null)
 
-  /** 批C 下钻：点击类目/扇区 → report_execute → 结果 list 卡追加进消息流 */
+  // 防白屏降级 guard（§2）：series/categories 非数组按 [] 兜底
+  const series = Array.isArray(card.series) ? card.series : []
+  const categories = Array.isArray(card.categories) ? card.categories : []
+  const known = card.chartType === "bar" || card.chartType === "line" || card.chartType === "pie"
+  const empty = !known || isChartEmpty(series) || (card.chartType !== "pie" && categories.length === 0)
+  const typeLabel =
+    card.chartType === "bar" ? "柱状图" : card.chartType === "line" ? "折线图" : card.chartType === "pie" ? "环形图" : "图表"
+
+  /** 批C 下钻：点击类目/扇区 → report_execute → 结果 list 卡追加进消息流（AiChatActions 上下文） */
   const drill = card.drill
   const onPick =
     drill && !drilling
@@ -210,31 +79,161 @@ export function ChartCard({ card }: { card: AiChartCard }) {
           })()
         }
       : undefined
+
+  // ChartConfig：系列名任意中文 → index key s0..s4（稳定），label 存原名，color 走 --chart-N。
+  // ChartContainer 据此注入 --color-s0…（light/dark 均指向 index.css 的 --chart-N）。
+  const chartConfig: ChartConfig = Object.fromEntries(
+    series.map((s, i) => [`s${i}`, { label: s.name, color: chartColor(i) }]),
+  )
   const legendItems =
     card.chartType === "pie"
-      ? card.series.map((s, i) => ({
-          name: s.name,
-          index: i,
-          percent: s.percent ?? undefined,
-        }))
-      : card.series.map((s, i) => ({ name: s.name, index: i }))
+      ? series.map((s, i) => ({ name: s.name, index: i, percent: s.percent ?? undefined }))
+      : series.map((s, i) => ({ name: s.name, index: i }))
+
+  // 减弱动效：尊重系统 prefers-reduced-motion → 关闭 recharts 入场生长动画
+  const reduceMotion =
+    typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches
+  const animate = !reduceMotion
+
+  const barLineData = toBarLineData(categories, series)
+  const pieData = toPieData(series)
+  const pieTotal = pieData.reduce((sum, d) => sum + d.value, 0)
+  const tilt = categories.length > 8 // 类目多且挤 → 倾斜 30° 保全文
+
+  // 下钻事件：从 recharts 事件里取出 category 调 onPick(签名不变)
+  const handleBarClick: ComponentProps<typeof BarChart>["onClick"] = onPick
+    ? (state) => {
+        const l = (state as { activeLabel?: string | number } | undefined)?.activeLabel
+        if (l != null) onPick(String(l))
+      }
+    : undefined
+  const handlePieClick: ComponentProps<typeof Pie>["onClick"] = onPick
+    ? (d) => {
+        const rec = d as { name?: string | number; payload?: { name?: string | number } }
+        const name = rec?.name ?? rec?.payload?.name
+        if (name != null) onPick(String(name))
+      }
+    : undefined
 
   return (
-    <div className="w-full min-w-0 rounded-xl border bg-card p-3.5 shadow-sm" role="img" aria-label={`${card.title}，${typeLabel}`}>
+    <div
+      className="w-full min-w-0 rounded-xl border bg-card p-3.5 shadow-sm"
+      role="img"
+      aria-label={`${card.title}，${typeLabel}`}
+    >
       <div className="mb-2 flex items-center gap-2">
         <BarChart3 className="size-4 text-primary" />
         <p className="text-sm font-semibold">{card.title}</p>
       </div>
+
       {empty ? (
         <div className="flex h-32 items-center justify-center text-xs text-muted-foreground">暂无数据</div>
       ) : card.chartType === "bar" ? (
-        <BarChart categories={card.categories ?? []} series={card.series} onPick={onPick} />
+        <ChartContainer config={chartConfig} className="h-44 w-full">
+          <BarChart accessibilityLayer data={barLineData} onClick={handleBarClick}>
+            <CartesianGrid vertical={false} strokeDasharray="3 3" />
+            <XAxis
+              dataKey="category"
+              tickFormatter={formatCategoryTick}
+              tickLine={false}
+              axisLine={false}
+              tickMargin={8}
+              interval="preserveStartEnd"
+              minTickGap={8}
+              angle={tilt ? -30 : 0}
+              textAnchor={tilt ? "end" : "middle"}
+              height={tilt ? 48 : 30}
+            />
+            <YAxis tickLine={false} axisLine={false} width={32} allowDecimals={false} />
+            <ChartTooltip cursor content={<ChartTooltipContent />} />
+            {series.map((_, i) => (
+              <Bar
+                key={i}
+                dataKey={`s${i}`}
+                fill={`var(--color-s${i})`}
+                radius={[3, 3, 0, 0]}
+                isAnimationActive={animate}
+                cursor={onPick ? "pointer" : undefined}
+              />
+            ))}
+          </BarChart>
+        </ChartContainer>
       ) : card.chartType === "line" ? (
-        <LineChart categories={card.categories ?? []} series={card.series} />
+        <ChartContainer config={chartConfig} className="h-44 w-full">
+          <AreaChart accessibilityLayer data={barLineData}>
+            <CartesianGrid vertical={false} strokeDasharray="3 3" />
+            <XAxis
+              dataKey="category"
+              tickFormatter={formatCategoryTick}
+              tickLine={false}
+              axisLine={false}
+              tickMargin={8}
+              interval="preserveStartEnd"
+              minTickGap={8}
+              angle={tilt ? -30 : 0}
+              textAnchor={tilt ? "end" : "middle"}
+              height={tilt ? 48 : 30}
+            />
+            <YAxis tickLine={false} axisLine={false} width={32} allowDecimals={false} />
+            <ChartTooltip cursor content={<ChartTooltipContent />} />
+            {series.map((_, i) => (
+              <Area
+                key={i}
+                dataKey={`s${i}`}
+                type="monotone"
+                stroke={`var(--color-s${i})`}
+                strokeWidth={2}
+                fill={`var(--color-s${i})`}
+                fillOpacity={i === 0 ? 0.12 : 0} // 首系列面积，其余仅线（对齐现状）
+                dot={false}
+                activeDot={{ r: 4 }}
+                isAnimationActive={animate}
+              />
+            ))}
+          </AreaChart>
+        </ChartContainer>
+      ) : card.chartType === "pie" ? (
+        <ChartContainer config={chartConfig} className="mx-auto h-52 w-full">
+          <PieChart>
+            <ChartTooltip content={<ChartTooltipContent nameKey="name" hideLabel />} />
+            <Pie
+              data={pieData}
+              dataKey="value"
+              nameKey="name"
+              innerRadius={52}
+              outerRadius={78}
+              strokeWidth={2}
+              paddingAngle={1}
+              isAnimationActive={animate}
+              onClick={handlePieClick}
+            >
+              {pieData.map((d, i) => (
+                <Cell key={i} fill={d.fill} cursor={onPick ? "pointer" : undefined} />
+              ))}
+              <Label
+                content={({ viewBox }) => {
+                  if (!viewBox || !("cx" in viewBox)) return null
+                  const { cx, cy } = viewBox as { cx: number; cy: number }
+                  return (
+                    <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle">
+                      <tspan x={cx} y={cy - 2} className="fill-foreground" fontSize={20} fontWeight={600}>
+                        {pieTotal}
+                      </tspan>
+                      <tspan x={cx} y={cy + 16} className="fill-muted-foreground" fontSize={11}>
+                        合计
+                      </tspan>
+                    </text>
+                  )
+                }}
+              />
+            </Pie>
+          </PieChart>
+        </ChartContainer>
       ) : (
-        <DonutChart series={card.series} onPick={onPick} />
+        <div className="flex h-32 items-center justify-center text-xs text-muted-foreground">暂无数据</div>
       )}
-      {!empty && <Legend items={legendItems} />}
+
+      {!empty && known && <Legend items={legendItems} />}
       {drilling && (
         <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
           <Loader2 className="size-3.5 animate-spin text-primary" /> 正在下钻「{drilling}」…
