@@ -2057,6 +2057,9 @@ async function mkProcFull(code, designer, extra = {}) {
   check("DP2 离职人 U 离职前可登录", !!uToken)
   const uAppr = await call(uToken, "POST", "/api/office/approvals", { title: `U历史单-${TS}`, type: "OTHER", reason: "历史归属测试" })
   const uApprId = uAppr.body?.data?.id
+  // DP2b：U 拥有一个知识空间（owner=U）→ 离职应交接给继任者 S，避免孤儿
+  const uSpaceId = (await call(uToken, "POST", "/api/kb/spaces", { name: `DP2b空间_${TS}`, code: `dp2bkb_${TS}`, visibility: "PRIVATE" })).body?.data?.id
+  check("DP2b 离职人 U 创建知识空间(owner=U)", !!uSpaceId, JSON.stringify(uSpaceId))
   // ② 部门负责人未指定继任 → 阻断
   const block = await call(admin.token, "POST", `/api/system/users/${u2Id}/resign`, { reason: "无继任" })
   check("DP2 部门负责人未指定继任→阻断(非 0)", block.body?.code !== 0, JSON.stringify(block.body))
@@ -2068,6 +2071,7 @@ async function mkProcFull(code, designer, extra = {}) {
   const items = hv.body?.data?.items ?? []
   check("DP2 扫描含 WF_TASK item(未办待办)", items.some((i) => i.itemType === "WF_TASK"), JSON.stringify(items.map((i) => i.itemType)))
   check("DP2 扫描含 DEPT_LEADER item(其为部门负责人 D)", items.some((i) => i.itemType === "DEPT_LEADER" && i.refId === String(dId)))
+  check("DP2b 扫描含 KB_SPACE_OWNER item(离职人拥有的知识空间)", items.some((i) => i.itemType === "KB_SPACE_OWNER" && i.refId === String(uSpaceId)), JSON.stringify(items.map((i) => i.itemType)))
   // ④ 离职用户禁登录 + 已发 token 失效 + 数据范围即时失效
   const uReLogin = await call(null, "POST", "/api/auth/login", { username: `dp2resign_${TS}`, password: "admin123" })
   check("DP2 离职用户禁登录(403)", uReLogin.status === 403 || uReLogin.body?.code === 403, JSON.stringify({ s: uReLogin.status, c: uReLogin.body?.code }))
@@ -2075,10 +2079,15 @@ async function mkProcFull(code, designer, extra = {}) {
   check("DP2 离职用户已发 token 即时失效(401)", uTokDead.status === 401, `status=${uTokDead.status}`)
   // ③ 执行交接 → 待办转办继任者 S + 部门负责人变更为 S
   const exec1 = await call(admin.token, "POST", `/api/system/handovers/${hId}/execute`)
-  check("DP2 执行交接 doneIds≥2(待办+部门负责人)", (exec1.body?.data?.doneIds ?? []).length >= 2 && (exec1.body?.data?.failed ?? []).length === 0, JSON.stringify(exec1.body?.data))
+  check("DP2 执行交接 doneIds≥3(待办+部门负责人+KB空间)", (exec1.body?.data?.doneIds ?? []).length >= 3 && (exec1.body?.data?.failed ?? []).length === 0, JSON.stringify(exec1.body?.data))
   const sLogin = await call(null, "POST", "/api/auth/login", { username: `dp2succ_${TS}`, password: "admin123" })
   const sTodo = await findTodo(sLogin.body?.data?.token, dpTitle)
   check("DP2 待办已转办给继任者 S", !!sTodo, JSON.stringify(sTodo))
+  // DP2b：执行后 KB 空间 owner=S + S 为该空间 ADMIN 成员
+  check("DP2b 执行后 KB 空间 owner=继任者 S", Number(psql(`SELECT owner_id FROM kb_space WHERE id=${uSpaceId}`)) === sId,
+    `owner=${psql(`SELECT owner_id FROM kb_space WHERE id=${uSpaceId}`)} S=${sId}`)
+  check("DP2b 继任者 S 已为该空间 ADMIN 成员",
+    psql(`SELECT role FROM kb_space_member WHERE space_id=${uSpaceId} AND principal_type='USER' AND principal_id=${sId}`) === "ADMIN")
   check("DP2 部门负责人已变更为继任者 S", (await deptLeaderId(dId)) === sId, `leader=${await deptLeaderId(dId)} S=${sId}`)
   // ⑥ 历史 applicant 不变（U 的历史单仍归 U）
   const uApprAfter = await call(admin.token, "GET", "/api/office/approvals?pageNum=1&pageSize=500")
@@ -2103,8 +2112,8 @@ async function mkProcFull(code, designer, extra = {}) {
   await call(admin.token, "DELETE", `/api/system/depts/${dId}`)
   await call(admin.token, "DELETE", `/api/system/depts/${d2Id}`)
   await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [uId, u2Id, sId] })
-  psql(`DELETE FROM sys_handover_item WHERE handover_id=${hId}; DELETE FROM sys_handover WHERE id=${hId}`)
-  check("DP2 自清完成(部门/用户/交接单删除)", true)
+  psql(`DELETE FROM kb_space_member WHERE space_id=${uSpaceId}; DELETE FROM kb_doc WHERE space_id=${uSpaceId}; DELETE FROM kb_space WHERE id=${uSpaceId}; DELETE FROM sys_handover_item WHERE handover_id=${hId}; DELETE FROM sys_handover WHERE id=${hId}`)
+  check("DP2 自清完成(部门/用户/交接单/KB空间删除)", true)
 }
 
 // --- DP3 转岗 transfer 治理（磐石：转岗封装/旧部门数据保留期/权限即时生效/待办保留/LEADER 随新部门） ---
@@ -2172,6 +2181,7 @@ async function mkProcFull(code, designer, extra = {}) {
   const transferResigned = await call(admin.token, "POST", `/api/system/users/${resignU}/transfer`, { deptId: bId, postId: postId3 })
   check("DP3 离职用户拒转岗 → 业务错(code 400,非 404)", transferResigned.body?.code === 400, JSON.stringify(transferResigned.body?.code))
   await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [resignU] })
+  psql3(`DELETE FROM sys_handover_item WHERE handover_id IN (SELECT id FROM sys_handover WHERE from_user_id=${resignU}); DELETE FROM sys_handover WHERE from_user_id=${resignU}`)
   // 自清（转岗/保留期测试复原）
   const inst3a = (await call(admin.token, "GET", "/api/wf/instances/my?pageNum=1&pageSize=200")).body?.data?.list?.find((r) => r.title === taskTitle)
   if (inst3a) await call(admin.token, "POST", `/api/wf/instances/${inst3a.id}/cancel`)
