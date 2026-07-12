@@ -52,6 +52,10 @@ public class AiChatSession {
     @Column(name = "summary_version", nullable = false)
     private Integer summaryVersion = 0;
 
+    /** §13.3 结构化滚动摘要游标：summary 已覆盖到此 message id（含）；MemoryAdvisor 只带 id &gt; 此值的近消息。 */
+    @Column(name = "summarized_until_message_id")
+    private Long summarizedUntilMessageId;
+
     /** §15.3 消息序号水位（会话内单调递增）。 */
     @Column(name = "last_message_seq", nullable = false)
     private Long lastMessageSeq = 0L;

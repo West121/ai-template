@@ -36,7 +36,7 @@ public class AiChatClientFactory {
     private final AiAdvisors.SecurityContextAdvisor securityContextAdvisor;
     private final AiAdvisors.QuotaAdvisor quotaAdvisor;
     private final AiAdvisors.ConversationMemoryAdvisor memoryAdvisor;
-    private final AiAdvisors.RagPlaceholderAdvisor ragPlaceholderAdvisor;
+    private final AiAdvisors.RetrievalAugmentationAdvisor retrievalAugmentationAdvisor;
     private final AiAdvisors.AuditAdvisor auditAdvisor;
     private final AiAdvisors.OutputSanitizationAdvisor outputSanitizationAdvisor;
 
@@ -68,7 +68,7 @@ public class AiChatClientFactory {
             return ChatClient.builder(model, ObservationRegistry.NOOP, null, null,
                             ToolCallingAdvisor.builder().toolCallingManager(manager))
                     .defaultAdvisors(List.of(requestIdAdvisor, securityContextAdvisor, quotaAdvisor,
-                            memoryAdvisor, ragPlaceholderAdvisor, auditAdvisor, outputSanitizationAdvisor))
+                            memoryAdvisor, retrievalAugmentationAdvisor, auditAdvisor, outputSanitizationAdvisor))
                     .build();
         } catch (Exception e) {
             log.warn("ChatModel 构建失败 credential={}: {}", cred.getId(), e.getMessage());

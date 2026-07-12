@@ -82,6 +82,24 @@ oa:
     model: ${OA_AI_MODEL:deepseek-chat}
     timeout-seconds: 20
 
+# AI 智能助手（oa-boot ai 域，V2）。凭据走 orch_credential（自动化编排-凭据），此处仅行为参数。
+ai-assistant:
+  # ai-assistant.credential-id：系统默认 LLM 凭据 id（0=取最新启用 LLM 凭据）；由 AiModelService 读取。
+  credential-id: ${OA_AI_ASSISTANT_CREDENTIAL_ID:0}
+  context:
+    # §13.2 短期上下文 token 预算（估算 token≈字符数/2）；超预算丢最早消息，保留最近。
+    token-budget: ${OA_AI_CONTEXT_TOKEN_BUDGET:8000}
+  summary:
+    # §13.3 结构化滚动摘要触发阈值（未摘要消息累计 token ≥ 此值触发；预算窗口外的更早消息进摘要）。
+    token-threshold: ${OA_AI_SUMMARY_TOKEN_THRESHOLD:8000}
+  rag:
+    # §12.2 RAG 检索增强开关；默认全文/ILIKE 降级（DeepSeek 无 /embeddings，无需嵌入凭据即可用）。
+    enabled: ${OA_AI_RAG_ENABLED:true}
+    # 嵌入向量：默认关闭 → 全文降级。开启且有支持 /embeddings 的凭据时才向量化并按 <=> 检索。
+    embedding-enabled: ${OA_AI_RAG_EMBEDDING_ENABLED:false}
+    embedding-credential-id: ${OA_AI_RAG_EMBEDDING_CREDENTIAL_ID:0}
+    embedding-model: ${OA_AI_RAG_EMBEDDING_MODEL:text-embedding-3-small}
+
 springdoc:
   api-docs:
     path: /v3/api-docs

@@ -2478,6 +2478,11 @@ async function hlCompleted(token, iid) {
           usage: { prompt_tokens: 12, completion_tokens: 7, total_tokens: 19 },
         })
         res.writeHead(200, { "Content-Type": "application/json" })
+        // 批D §13.3：结构化滚动摘要（summarizer system 含标记）→ 返回结构化 JSON 摘要
+        if (JSON.stringify(reqBody).includes("结构化JSON摘要")) {
+          res.end(completion({ role: "assistant", content: '{"userGoal":"分析待办与审批安排","activeEntities":{"scope":"本月"},"resolvedReferences":{}}' }))
+          return
+        }
         // 批B 亮点①：执行计划生成（Structured Output）——返回纯 JSON 计划
         if (lastUser.includes("生成执行计划")) {
           res.end(completion({ role: "assistant", content: '{"steps":[{"title":"查询我的待办"},{"title":"汇总分析结果"}]}' }))
@@ -2501,6 +2506,9 @@ async function hlCompleted(token, iid) {
           else if (lastUser.includes("V2日程")) tool = { name: "create_schedule", arguments: JSON.stringify({ title: `AI冒烟V2日程${TS}`, date: "2026-08-02", type: "OTHER" }) }
           else if (lastUser.includes("日程")) tool = { name: "create_schedule", arguments: JSON.stringify({ title: `AI冒烟日程${TS}`, date: "2026-08-01", type: "OTHER" }) }
           else if (lastUser.includes("公文")) tool = { name: "query_documents", arguments: "{}" }
+          // 批D §13.4：记住偏好（密码等敏感 → 工具层黑名单拒；普通偏好 → 确认卡）
+          else if (lastUser.includes("记住") && lastUser.includes("密码")) tool = { name: "memory_remember", arguments: JSON.stringify({ key: "登录密码", value: "secret123" }) }
+          else if (lastUser.includes("记住")) tool = { name: "memory_remember", arguments: JSON.stringify({ key: "常用部门", value: `技术部SMOKE${TS}` }) }
           if (tool) {
             res.end(completion({ role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: tool }] }, "tool_calls"))
             return
@@ -3496,10 +3504,11 @@ async function hlCompleted(token, iid) {
   // 6) 亮点④ 引用溯源：功能解释 → text part payload.citations（FEATURE 形状）
   const featChat = await call(admin.token, "POST", "/api/ai/chat", { message: "系统有哪些功能", credentialId: aiCred.body?.data?.id })
   const featTextPart = (featChat.body?.data?.messages?.[0]?.parts ?? []).find((p) => p.partType === "text")
+  // 批D 起 RAG 会追加 RAG_DOC 引用（如「系统使用指南」与本问相关）——断言含 FEATURE 引用且全部规范，不再要求独占 FEATURE
   check("aiV2C citations 形状(text part 带 FEATURE 引用)",
-    (featTextPart?.payload?.citations ?? []).length >= 1 &&
-      featTextPart.payload.citations.every((c) => c.sourceType === "FEATURE" && !!c.sourceId && !!c.title),
-    JSON.stringify((featTextPart?.payload?.citations ?? []).slice(0, 2)))
+    (featTextPart?.payload?.citations ?? []).some((c) => c.sourceType === "FEATURE" && !!c.sourceId && !!c.title) &&
+      (featTextPart?.payload?.citations ?? []).every((c) => !!c.sourceId && !!c.title),
+    JSON.stringify((featTextPart?.payload?.citations ?? []).slice(0, 3)))
 
   // 7) pageContext 注入：system 提示含当前页面名（服务端校验可见后注入）
   const iCtx = aiReqs.length
@@ -3513,6 +3522,139 @@ async function hlCompleted(token, iid) {
   // 8) 批C 自清（KEEP=1 亦执行）：数据集 + 冒烟审批单
   psql(`DELETE FROM ai_dataset WHERE id = ${Number(dsId)}`)
   psql(`DELETE FROM oa_approval WHERE title LIKE 'AI冒烟DS-%'`)
+
+  /* ---- AI 助手 V2 批D（V36）：Token 预算/结构化摘要游标/长期记忆/附件 fileId/RAG 全文降级/晨报 ---- */
+
+  const adminId = Number(psql("SELECT id FROM sys_user WHERE username='admin'"))
+  const aiCredId = aiCred.body?.data?.id
+
+  // 1) Token 预算裁剪：长会话早期消息不进 prompt（预算默认 8000 token≈16000 字符）
+  const budgSess = (await call(admin.token, "POST", "/api/ai/chat", { message: "你好开始", credentialId: aiCredId })).body?.data?.sessionId
+  const budgRows = []
+  for (let i = 1; i <= 12; i++) {
+    const role = i % 2 === 1 ? "USER" : "ASSISTANT"
+    budgRows.push(`('default', ${adminId}, ${budgSess}, '${role}', 'COMPLETED', 'EARLY_${i} ' || repeat('x', 2400), ${100 + i})`)
+  }
+  psql(`INSERT INTO ai_chat_message (tenant_id, user_id, session_id, role, status, content, sequence_no) VALUES ${budgRows.join(",")}`)
+  const iBudg = aiReqs.length
+  await call(admin.token, "POST", "/api/ai/chat", { sessionId: budgSess, message: "继续", credentialId: aiCredId })
+  const budgMsgs = JSON.stringify(aiReqs[iBudg]?.messages ?? [])
+  check("aiV2D Token 预算裁剪(最近 EARLY_12 在窗/最早 EARLY_1 出窗)",
+    budgMsgs.includes("EARLY_12") && !budgMsgs.includes("EARLY_1 "),
+    JSON.stringify({ has12: budgMsgs.includes("EARLY_12"), has1: budgMsgs.includes("EARLY_1 ") }))
+
+  // 2) 结构化摘要游标推进（同会话超阈值触发；游标推进 + summary 为结构化 JSON）
+  const summCur = psql(`SELECT COALESCE(summarized_until_message_id, 0) FROM ai_chat_session WHERE id = ${budgSess}`)
+  const summJson = psql(`SELECT COALESCE(summary, '') FROM ai_chat_session WHERE id = ${budgSess}`)
+  check("aiV2D 结构化摘要游标推进(summarized_until>0 + userGoal JSON)",
+    Number(summCur) > 0 && summJson.includes("userGoal"), JSON.stringify({ cur: summCur, sum: summJson.slice(0, 80) }))
+
+  // 3) 长期记忆：记住(确认卡二段式)→查→注入→删；敏感黑名单拒存
+  const remChat = await call(admin.token, "POST", "/api/ai/chat", { message: "记住我的常用部门", credentialId: aiCredId })
+  const remCard = (remChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "confirm")
+  check("aiV2D memory_remember 产确认卡(CONFIRM_REQUIRED 二段式)", !!remCard?.actionId, JSON.stringify(remCard?.actionId))
+  const remCf = await callH(admin.token, "POST", `/api/ai/actions/${remCard?.actionId}/confirm`, {}, {})
+  check("aiV2D 记忆确认后落库", remCf.body?.code === 0 && remCf.body?.data?.success === true, JSON.stringify(remCf.body?.data))
+  const mems1 = await call(admin.token, "GET", "/api/ai/memories")
+  const memHit = (mems1.body?.data ?? []).find((m) => m.memoryKey === "常用部门")
+  check("aiV2D GET /memories 命中", !!memHit && String(memHit.memoryValue).includes("技术部SMOKE"), JSON.stringify(memHit))
+  const iMem = aiReqs.length
+  await call(admin.token, "POST", "/api/ai/chat", { message: "我的常用部门在哪层楼", credentialId: aiCredId })
+  check("aiV2D 相关记忆注入 system", String(aiReqs[iMem]?.messages?.[0]?.content ?? "").includes("常用部门"),
+    JSON.stringify(String(aiReqs[iMem]?.messages?.[0]?.content ?? "").slice(-100)))
+  const memDel = await call(admin.token, "DELETE", `/api/ai/memories/${memHit?.id}`)
+  const mems2 = await call(admin.token, "GET", "/api/ai/memories")
+  check("aiV2D DELETE /memories 软删(不再返回)",
+    memDel.body?.code === 0 && !(mems2.body?.data ?? []).some((m) => m.id === memHit?.id), JSON.stringify(memDel.body?.code))
+  const blkChat = await call(admin.token, "POST", "/api/ai/chat", { message: "记住我的登录密码", credentialId: aiCredId })
+  const blkCard = (blkChat.body?.data?.messages?.[0]?.cards ?? []).find((c) => c.type === "confirm")
+  const mems3 = await call(admin.token, "GET", "/api/ai/memories")
+  check("aiV2D 敏感黑名单拒存(无确认卡+未落库)",
+    blkChat.body?.code === 0 && !blkCard && !(mems3.body?.data ?? []).some((m) => m.memoryKey === "登录密码"),
+    JSON.stringify({ card: !!blkCard }))
+
+  // 4) 附件 fileId 化：上传 → chat 引用注入 → 消息存引用 → 越权 403
+  const attUp = await (async () => {
+    const fd = new FormData()
+    fd.append("file", new Blob([`附件正文XYZ-${TS}`], { type: "text/plain" }), `smokeatt${TS}.txt`)
+    const res = await fetch(`${BASE}/api/ai/attachments`, { method: "POST", headers: { Authorization: `Bearer ${admin.token}` }, body: fd })
+    let j = null; try { j = await res.json() } catch { /* 非 JSON */ }
+    return { status: res.status, body: j }
+  })()
+  check("aiV2D 附件上传(attachmentId/kind/name/url)",
+    attUp.body?.code === 0 && !!attUp.body?.data?.attachmentId && attUp.body?.data?.kind === "TEXT" &&
+      attUp.body?.data?.name === `smokeatt${TS}.txt` && String(attUp.body?.data?.url ?? "").includes("/download"),
+    JSON.stringify(attUp.body?.data))
+  const attId = attUp.body?.data?.attachmentId
+  const iAtt = aiReqs.length
+  const attChat = await call(admin.token, "POST", "/api/ai/chat", {
+    message: "总结这个附件", credentialId: aiCredId, attachments: [{ attachmentId: attId, kind: "TEXT", name: `smokeatt${TS}.txt` }],
+  })
+  const attReqUser = [...(aiReqs[iAtt]?.messages ?? [])].reverse().find((m) => m.role === "user")?.content
+  check("aiV2D 附件 fileId 引用注入 user(TEXT 内容)",
+    attChat.body?.code === 0 && typeof attReqUser === "string" && attReqUser.includes(`附件正文XYZ-${TS}`),
+    JSON.stringify((attReqUser ?? "").slice(0, 80)))
+  const attSess = attChat.body?.data?.sessionId
+  const attMsgs = await call(admin.token, "GET", `/api/ai/sessions/${attSess}/messages`)
+  const attUserMsg = (attMsgs.body?.data?.list ?? []).find((m) => m.role === "USER" && (m.attachments ?? []).length)
+  check("aiV2D 消息存 attachmentId 引用(无 dataUrl)",
+    (attUserMsg?.attachments ?? []).some((a) => Number(a.attachmentId) === Number(attId) && !a.dataUrl),
+    JSON.stringify(attUserMsg?.attachments))
+  const zsRef = await call(zhangsan.token, "POST", "/api/ai/chat", {
+    message: "看附件", credentialId: aiCredId, attachments: [{ attachmentId: attId, kind: "TEXT", name: "x.txt" }],
+  })
+  check("aiV2D 附件越权引用 → 403", zsRef.body?.code === 403, JSON.stringify(zsRef.body?.code))
+
+  // 5) 存量 dataURL 清洗：插内联 dataURL → clean-legacy 改引用 → 幂等(第二次 0)
+  const legB64 = Buffer.from(`遗留附件LEGACY-${TS}`, "utf8").toString("base64")
+  const legSess = (await call(admin.token, "POST", "/api/ai/chat", { message: "遗留会话", credentialId: aiCredId })).body?.data?.sessionId
+  const legAtt = JSON.stringify([{ dataUrl: `data:text/plain;base64,${legB64}`, kind: "TEXT", name: `legacy${TS}.txt` }]).replace(/'/g, "''")
+  psql(`INSERT INTO ai_chat_message (tenant_id, user_id, session_id, role, status, content, sequence_no, attachments) VALUES ('default', ${adminId}, ${legSess}, 'USER', 'COMPLETED', '遗留消息', 200, '${legAtt}')`)
+  const clean1 = await call(admin.token, "POST", "/api/ai/attachments/clean-legacy")
+  check("aiV2D 存量 dataURL 清洗(cleaned≥1)", clean1.body?.code === 0 && Number(clean1.body?.data?.cleaned) >= 1, JSON.stringify(clean1.body?.data))
+  const legMsgs = await call(admin.token, "GET", `/api/ai/sessions/${legSess}/messages`)
+  const legMsg = (legMsgs.body?.data?.list ?? []).find((m) => (m.attachments ?? []).some((a) => a.name === `legacy${TS}.txt`))
+  check("aiV2D 清洗改存 attachmentId 引用(去 dataUrl)",
+    (legMsg?.attachments ?? []).some((a) => !!a.attachmentId && !a.dataUrl), JSON.stringify(legMsg?.attachments))
+  const clean2 = await call(admin.token, "POST", "/api/ai/attachments/clean-legacy")
+  check("aiV2D 清洗幂等(第二次 cleaned=0)", clean2.body?.code === 0 && Number(clean2.body?.data?.cleaned) === 0, JSON.stringify(clean2.body?.data))
+
+  // 6) RAG 全文降级：请假制度 → system 注入「参考资料」+ text part RAG_DOC 引用
+  const iRag = aiReqs.length
+  const ragChat = await call(admin.token, "POST", "/api/ai/chat", { message: "请假制度是什么", credentialId: aiCredId })
+  const ragSys = String(aiReqs[iRag]?.messages?.[0]?.content ?? "")
+  const ragText = (ragChat.body?.data?.messages?.[0]?.parts ?? []).find((p) => p.partType === "text")
+  const ragCite = (ragText?.payload?.citations ?? []).find((c) => c.sourceType === "RAG_DOC")
+  check("aiV2D RAG 全文降级(system 注入参考资料+请假 + RAG_DOC 引用)",
+    ragSys.includes("参考资料") && ragSys.includes("请假") && ragCite?.title === "请假制度" && !!ragCite?.sourceId,
+    JSON.stringify({ sysHas: ragSys.includes("参考资料"), cite: ragCite }))
+
+  // 7) 知识库 admin 增删（种子 + 权限）
+  const kbList = await call(admin.token, "GET", "/api/ai/knowledge")
+  check("aiV2D knowledge 列表(含种子 请假制度/公文办理流程/系统使用指南)",
+    ["请假制度", "公文办理流程", "系统使用指南"].every((t) => (kbList.body?.data ?? []).some((d) => d.title === t)),
+    JSON.stringify((kbList.body?.data ?? []).map((d) => d.title)))
+  const kbNew = await call(admin.token, "POST", "/api/ai/knowledge", { title: `smoke知识${TS}`, moduleCode: "test", content: "冒烟知识内容" })
+  const kbDel = kbNew.body?.data?.id ? await call(admin.token, "DELETE", `/api/ai/knowledge/${kbNew.body.data.id}`) : { body: {} }
+  check("aiV2D knowledge admin 增删", kbNew.body?.code === 0 && !!kbNew.body?.data?.id && kbDel.body?.code === 0, JSON.stringify(kbNew.body?.code))
+  const kbZs = await call(zhangsan.token, "GET", "/api/ai/knowledge")
+  check("aiV2D knowledge admin 鉴权(zhangsan 403)", kbZs.status === 403, JSON.stringify(kbZs.status))
+
+  // 8) 晨报（当日首次生成 + 当日缓存）
+  const brief1 = await call(admin.token, "GET", "/api/ai/briefing")
+  check("aiV2D briefing 形状(date/urgent/meetings/unreadCc/unreadCount)",
+    brief1.body?.code === 0 && !!brief1.body?.data?.date && Array.isArray(brief1.body?.data?.urgent) &&
+      Array.isArray(brief1.body?.data?.meetings) && Array.isArray(brief1.body?.data?.unreadCc) &&
+      typeof brief1.body?.data?.unreadCount === "number" && typeof brief1.body?.data?.cached === "boolean",
+    JSON.stringify({ date: brief1.body?.data?.date, cached: brief1.body?.data?.cached }))
+  // 当日缓存：连取两次，第二次必为缓存命中（cached=true；同进程当日缓存跨 run 保持，故不断言首取 false）
+  const brief2 = await call(admin.token, "GET", "/api/ai/briefing")
+  check("aiV2D briefing 当日缓存(再取 cached=true)", brief2.body?.data?.cached === true, JSON.stringify(brief2.body?.data?.cached))
+
+  // 批D 自清（KEEP=1 亦执行）：记忆/知识测试文档/上传文件
+  psql(`DELETE FROM ai_user_memory WHERE memory_value LIKE '%SMOKE%' OR memory_key IN ('常用部门','登录密码')`)
+  psql(`DELETE FROM ai_knowledge_doc WHERE title LIKE 'smoke%'`)
+  psql(`DELETE FROM sys_file WHERE original_name LIKE 'smokeatt%' OR original_name LIKE 'legacy%' OR original_name IN ('pic.png','note.txt')`)
 
   // 7) smoke 治理：本 run 造的冒烟凭据/档案清理——KEEP=1 亦执行（KEEP 语义=保用户数据，不保测试垃圾）；
   //    FAST/STANDARD 种子若指向被清凭据则自愈回最新真实凭据

@@ -70,9 +70,6 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class AiChatService {
 
-    private static final int WINDOW = 20;      // 上下文携带近 N 条（MemoryAdvisor 同值）
-    private static final int SUMMARY_TRIGGER = 40; // 消息数超此值触发滚动摘要
-
     private final AiChatSessionRepository sessionRepository;
     private final AiChatMessageRepository messageRepository;
     private final AiChatMessagePartRepository partRepository;
@@ -82,17 +79,33 @@ public class AiChatService {
     private final AuthorizedToolResolver toolResolver;
     private final AiPlanService planService;
     private final AiFeatureService featureService;
+    private final AiMemoryService memoryService;
+    private final AiAttachmentService attachmentService;
     private final AiToolSupport support;
     private final FileService fileService;
     private final AiSessionHolder sessionHolder;
     private final ObjectMapper objectMapper;
 
+    /** §13.2 上下文 token 预算（估算 token≈字符数/2）；§13.3 摘要触发的累计 token 阈值。 */
+    @org.springframework.beans.factory.annotation.Value("${ai-assistant.context.token-budget:8000}")
+    private int tokenBudget;
+
+    @org.springframework.beans.factory.annotation.Value("${ai-assistant.summary.token-threshold:8000}")
+    private int summaryThreshold;
+
     /** 旧 /api/ai/chat 响应形状（兼容期不变）。 */
     public record ChatResult(Long sessionId, List<Map<String, Object>> messages) {
     }
 
-    /** §11 附件：fileId=infra 文件 / dataUrl=前端直传（小图/文本 base64）；kind=IMAGE|TEXT。 */
-    public record Attachment(Long fileId, String dataUrl, String kind, String name) {
+    /**
+     * §11/§17 附件：attachmentId/fileId=infra 文件引用（批D 主形状）/ dataUrl=前端直传 base64（兼容期）；kind=IMAGE|TEXT。
+     * 批D：入库前一律归一化为 attachmentId 引用（dataUrl 抽到 FileService）——消息表不存大图 base64。
+     */
+    public record Attachment(Long fileId, Long attachmentId, String dataUrl, String kind, String name) {
+        /** 引用式 fileId：attachmentId 优先（批D），fileId 兼容（V1）。 */
+        public Long refFileId() {
+            return attachmentId != null ? attachmentId : fileId;
+        }
     }
 
     /** §9.1 页面上下文（批C）：注入系统提示（服务端校验 featureCode 可见后才注入，SERVER_CONTEXT 信任级）。 */
@@ -180,6 +193,8 @@ public class AiChatService {
         if (hasImage && resolved != null && !Boolean.TRUE.equals(resolved.credential().getSupportsVision())) {
             throw new BusinessException(400, "当前模型不支持图片，请切换支持视觉的模型");
         }
+        // §17 附件归一化（先于加锁）：引用越权 403 / dataUrl 抽到 FileService → attachmentId 引用（消息表不存 base64）
+        List<Attachment> normalized = normalizeAttachments(attachments, user);
 
         // 会话归属 + §15.2 串行化（PG 原子 IDLE→RUNNING；新会话直接以 RUNNING 创建）
         AiChatSession session;
@@ -212,21 +227,21 @@ public class AiChatService {
             userMsg.setClientMessageId(StringUtils.hasText(clientMessageId) ? clientMessageId : null);
             userMsg.setStatus(AiChatMessage.STATUS_COMPLETED);
             userMsg.setCompletedAt(OffsetDateTime.now());
-            userMsg.setAttachments(attachments == null || attachments.isEmpty() ? null : support.toJson(attachments));
+            userMsg.setAttachments(normalized.isEmpty() ? null : support.toJson(storedRefs(normalized)));
             userMsg = messageRepository.save(userMsg);
 
             AiChatMessage asstMsg = newMessage(session, user, AiChatMessage.ROLE_ASSISTANT, asstSeq, requestId, traceId);
             asstMsg.setStatus(AiChatMessage.STATUS_STREAMING);
             asstMsg = messageRepository.save(asstMsg);
 
-            String fullText = textWithAttachments(message, attachments);
-            List<Attachment> images = attachments == null ? List.of()
-                    : attachments.stream().filter(a -> "IMAGE".equalsIgnoreCase(a.kind())).toList();
+            String fullText = textWithAttachments(message, normalized);
+            List<Attachment> images = normalized.stream()
+                    .filter(a -> "IMAGE".equalsIgnoreCase(a.kind())).toList();
             return new TurnPlan(session, userMsg, asstMsg,
                     resolved == null ? null : resolved.credential(),
                     resolved == null ? null : resolved.apiKey(),
                     resolved == null ? null : resolved.model(),
-                    systemPrompt(user, session, pageContext), fullText, images, requestId, traceId);
+                    systemPrompt(user, session, pageContext, message), fullText, images, requestId, traceId);
         } catch (RuntimeException e) {
             sessionRepository.release(session.getId()); // 获取锁后准备失败：释放，不留死锁
             throw e;
@@ -279,7 +294,13 @@ public class AiChatService {
                         .advisors(a -> a
                                 .param(AiAdvisors.ConversationMemoryAdvisor.PARAM_SESSION_ID, session.getId())
                                 .param(AiAdvisors.ConversationMemoryAdvisor.PARAM_BEFORE_MESSAGE_ID,
-                                        plan.userMsg().getId()))
+                                        plan.userMsg().getId())
+                                // §13.3 摘要游标：低于此 id 的历史已被 system 摘要覆盖，MemoryAdvisor 不再逐条带
+                                .param(AiAdvisors.ConversationMemoryAdvisor.PARAM_SUMMARIZED_UNTIL,
+                                        session.getSummarizedUntilMessageId() == null ? 0L
+                                                : session.getSummarizedUntilMessageId())
+                                // §12.2 RAG：主轮次开启检索增强，命中引用汇入本轮 citations（亮点④）
+                                .param(AiAdvisors.RetrievalAugmentationAdvisor.PARAM_CITATIONS, citations))
                         .call().chatResponse();
             } catch (Exception e) {
                 log.warn("AI 对话模型调用失败: {}", e.getMessage());
@@ -716,10 +737,73 @@ public class AiChatService {
             if (a == null || !("IMAGE".equalsIgnoreCase(a.kind()) || "TEXT".equalsIgnoreCase(a.kind()))) {
                 throw new BusinessException(400, "附件 kind 须为 IMAGE/TEXT");
             }
-            if (a.fileId() == null && !StringUtils.hasText(a.dataUrl())) {
-                throw new BusinessException(400, "附件须提供 fileId 或 dataUrl: " + nz(a.name()));
+            if (a.refFileId() == null && !StringUtils.hasText(a.dataUrl())) {
+                throw new BusinessException(400, "附件须提供 attachmentId/fileId 或 dataUrl: " + nz(a.name()));
             }
         }
+    }
+
+    /**
+     * §17 归一化：引用式附件校验可读（越权 403）；dataUrl 抽到 FileService → attachmentId 引用
+     * （消息表不存 base64）。返回附件一律以 fileId 引用（dataUrl 已剥离）。
+     */
+    private List<Attachment> normalizeAttachments(List<Attachment> attachments, UserContext user) {
+        if (attachments == null || attachments.isEmpty()) {
+            return List.of();
+        }
+        List<Attachment> out = new ArrayList<>();
+        for (Attachment a : attachments) {
+            Long refId = a.refFileId();
+            if (refId != null) {
+                assertReadable(refId, a.name());
+                out.add(new Attachment(null, refId, null, a.kind(), a.name()));
+            } else if (StringUtils.hasText(a.dataUrl())) {
+                out.add(new Attachment(null, uploadDataUrl(a), null, a.kind(), a.name()));
+            }
+        }
+        return out;
+    }
+
+    /** 引用可读断言（越权 AccessDeniedException → 403）。 */
+    private void assertReadable(Long fileId, String name) {
+        try {
+            fileService.getReadableOrThrow(fileId);
+        } catch (org.springframework.security.access.AccessDeniedException e) {
+            throw new BusinessException(403, "无权引用该附件: " + nz(name));
+        }
+    }
+
+    /** dataUrl(base64/urlencoded) → FileService（uploader=当前用户），返回 fileId。 */
+    private Long uploadDataUrl(Attachment a) {
+        String dataUrl = a.dataUrl();
+        byte[] bytes;
+        String mime;
+        int comma = dataUrl.indexOf(',');
+        if (dataUrl.startsWith("data:") && comma > 0) {
+            String meta = dataUrl.substring(5, comma);
+            String payload = dataUrl.substring(comma + 1);
+            mime = meta.contains(";") ? meta.substring(0, meta.indexOf(';')) : meta;
+            bytes = meta.contains("base64") ? Base64.getDecoder().decode(payload)
+                    : java.net.URLDecoder.decode(payload, StandardCharsets.UTF_8).getBytes(StandardCharsets.UTF_8);
+        } else {
+            bytes = dataUrl.getBytes(StandardCharsets.UTF_8);
+            mime = "IMAGE".equalsIgnoreCase(a.kind()) ? "image/png" : "text/plain";
+        }
+        String name = StringUtils.hasText(a.name()) ? a.name() : "attachment";
+        return fileService.uploadBytes(bytes, name, mime).id();
+    }
+
+    /** 消息表存储的引用形状 [{attachmentId,kind,name}]（§17：不含 dataUrl 大 base64）。 */
+    private List<Map<String, Object>> storedRefs(List<Attachment> normalized) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Attachment a : normalized) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("attachmentId", a.refFileId());
+            m.put("kind", a.kind());
+            m.put("name", a.name());
+            out.add(m);
+        }
+        return out;
     }
 
     /** TEXT 附件读文本截 16k，以引用块注入 user content（读取失败给占位不阻断）。 */
@@ -748,7 +832,7 @@ public class AiChatService {
         if (StringUtils.hasText(a.dataUrl())) {
             return a.dataUrl();
         }
-        SysFile f = fileService.getReadableOrThrow(a.fileId());
+        SysFile f = fileService.getReadableOrThrow(a.refFileId());
         try (InputStream in = fileService.openStream(f)) {
             String mime = StringUtils.hasText(f.getContentType()) ? f.getContentType() : "image/png";
             return "data:" + mime + ";base64," + Base64.getEncoder().encodeToString(in.readAllBytes());
@@ -767,7 +851,7 @@ public class AiChatService {
                         : java.net.URLDecoder.decode(payload, StandardCharsets.UTF_8).getBytes(StandardCharsets.UTF_8);
                 return new String(bytes, StandardCharsets.UTF_8);
             }
-            SysFile f = fileService.getReadableOrThrow(a.fileId());
+            SysFile f = fileService.getReadableOrThrow(a.refFileId());
             try (InputStream in = fileService.openStream(f)) {
                 return new String(in.readNBytes(TEXT_ATTACHMENT_LIMIT * 4), StandardCharsets.UTF_8);
             }
@@ -776,7 +860,7 @@ public class AiChatService {
         }
     }
 
-    private String systemPrompt(UserContext user, AiChatSession session, PageContext pageContext) {
+    private String systemPrompt(UserContext user, AiChatSession session, PageContext pageContext, String message) {
         StringBuilder sb = new StringBuilder();
         sb.append("你是星辰 OA 系统的智能助手，帮助用户介绍功能、快速导航、以对话查询与操作系统数据、发起审批、查待办、出报表。\n");
         sb.append("规则（务必遵守）：\n");
@@ -799,38 +883,117 @@ public class AiChatService {
                 sb.append("，回答可结合该页面上下文。");
             }
         }
-        if (StringUtils.hasText(session.getSummary())) {
-            sb.append("\n[早前对话摘要] ").append(session.getSummary());
+        // §13.3 结构化滚动摘要（userGoal/activeEntities/resolvedReferences）注入
+        String summaryBlock = renderSummary(session.getSummary());
+        if (StringUtils.hasText(summaryBlock)) {
+            sb.append("\n[早前对话摘要] ").append(summaryBlock);
         }
+        // §13.4 相关长期记忆（keyword 检索命中才注入；不无条件全量注入）
+        sb.append(memoryService.promptBlock(user.getUserId(), message));
         return sb.toString();
     }
 
-    /** 超窗滚动摘要：LlmToolLoop 轻量单轮（无工具，编排同源基建），失败不影响主流程。 */
+    /** 结构化摘要渲染：JSON(userGoal/activeEntities/resolvedReferences) → 人话；非 JSON 原样返回。 */
+    private String renderSummary(String summary) {
+        if (!StringUtils.hasText(summary)) {
+            return "";
+        }
+        JsonNode node = parse(summary);
+        if (node == null || !node.isObject()) {
+            return summary;
+        }
+        StringBuilder sb = new StringBuilder();
+        if (StringUtils.hasText(node.path("userGoal").asString(null))) {
+            sb.append("目标：").append(node.path("userGoal").asString(""));
+        }
+        JsonNode entities = node.path("activeEntities");
+        if (entities.isObject() && !entities.isEmpty()) {
+            sb.append(sb.isEmpty() ? "" : "；").append("关注实体：").append(entities.toString());
+        }
+        JsonNode refs = node.path("resolvedReferences");
+        if (refs.isObject() && !refs.isEmpty()) {
+            sb.append(sb.isEmpty() ? "" : "；").append("指代：").append(refs.toString());
+        }
+        return sb.isEmpty() ? summary : sb.toString();
+    }
+
+    /**
+     * §13.3 结构化滚动摘要：按累计 token 阈值触发（游标 summarized_until_message_id 之后未摘要消息的
+     * token 累计 ≥ 阈值），把 token 预算窗口之外的<b>更早</b>消息压成结构化 JSON
+     * （userGoal/activeEntities/resolvedReferences）并<b>推进游标</b>——已摘要消息不再逐条进上下文。
+     * LlmToolLoop 轻量单轮（无工具，编排同源基建），失败不影响主流程。
+     */
     private void maybeSummarize(AiChatSession session, OrchCredential cred, String apiKey) {
         try {
-            if (cred == null || messageRepository.countBySessionId(session.getId()) < SUMMARY_TRIGGER) {
+            if (cred == null) {
                 return;
             }
-            List<AiChatMessage> older = messageRepository.findBySessionIdOrderByIdDesc(session.getId(),
-                    PageRequest.of(0, SUMMARY_TRIGGER));
-            Collections.reverse(older);
+            long cursor = session.getSummarizedUntilMessageId() == null ? 0L : session.getSummarizedUntilMessageId();
+            List<AiChatMessage> unsummarized = messageRepository
+                    .findBySessionIdAndIdGreaterThanOrderByIdAsc(session.getId(), cursor).stream()
+                    .filter(m -> !AiChatMessage.ROLE_TOOL.equals(m.getRole()) && StringUtils.hasText(m.getContent()))
+                    .toList();
+            long total = unsummarized.stream().mapToLong(m -> estTokens(m.getContent())).sum();
+            if (total < summaryThreshold) {
+                return; // 累计 token 未达阈值
+            }
+            // 保留最近的（token 预算窗口内），更早的进摘要
+            int firstKeep = unsummarized.size();
+            int budget = tokenBudget;
+            for (int i = unsummarized.size() - 1; i >= 0; i--) {
+                int est = estTokens(unsummarized.get(i).getContent());
+                if (budget - est < 0) {
+                    break;
+                }
+                budget -= est;
+                firstKeep = i;
+            }
+            List<AiChatMessage> older = unsummarized.subList(0, firstKeep);
+            if (older.isEmpty()) {
+                return;
+            }
             StringBuilder convo = new StringBuilder();
-            older.stream().limit(SUMMARY_TRIGGER - WINDOW).forEach(m ->
-                    convo.append(m.getRole()).append(": ").append(nz(m.getContent())).append("\n"));
+            if (StringUtils.hasText(session.getSummary())) {
+                convo.append("[已有摘要]\n").append(session.getSummary()).append("\n\n[新增对话]\n");
+            }
+            older.forEach(m -> convo.append(m.getRole()).append(": ").append(nz(m.getContent())).append("\n"));
             List<Map<String, Object>> msgs = new ArrayList<>();
-            msgs.add(Map.of("role", "system", "content", "把以下对话压缩成不超过 200 字的中文摘要，保留关键事实与用户偏好。"));
+            msgs.add(Map.of("role", "system", "content",
+                    "把以下对话压缩成结构化JSON摘要，只输出 JSON 不加解释，字段："
+                            + "userGoal(用户总体目标,字符串)、activeEntities(当前关注的实体/筛选条件,对象)、"
+                            + "resolvedReferences(指代消解,对象)。保留关键事实与用户偏好，不含密码等敏感信息。"));
             msgs.add(Map.of("role", "user", "content", convo.toString()));
             LlmToolLoop.Config cfg = new LlmToolLoop.Config(cred.getBaseUrl(), apiKey, cred.getModel(),
                     null, null, 1, 30_000);
             LlmToolLoop.Result r = LlmToolLoop.run(cfg, msgs, List.of(), (n, a) -> "", objectMapper);
             if (r.content() != null) {
-                session.setSummary(r.content());
+                session.setSummary(structuredSummary(r.content()));
+                session.setSummarizedUntilMessageId(older.get(older.size() - 1).getId());
                 session.setSummaryVersion(session.getSummaryVersion() == null ? 1 : session.getSummaryVersion() + 1);
                 sessionRepository.save(session);
             }
         } catch (Exception e) {
-            log.warn("会话滚动摘要失败 session={}: {}", session.getId(), e.getMessage());
+            log.warn("会话结构化滚动摘要失败 session={}: {}", session.getId(), e.getMessage());
         }
+    }
+
+    private int estTokens(String text) {
+        return text == null ? 0 : Math.max(1, text.length() / 2);
+    }
+
+    /** 归一化摘要为结构化 JSON 字符串：LLM 返回合法 JSON（含 ```json 围栏）直存；否则包成 {userGoal:...}。 */
+    private String structuredSummary(String content) {
+        String trimmed = content.trim();
+        if (trimmed.startsWith("```")) {
+            int nl = trimmed.indexOf('\n');
+            trimmed = nl > 0 ? trimmed.substring(nl + 1) : trimmed;
+            if (trimmed.endsWith("```")) {
+                trimmed = trimmed.substring(0, trimmed.length() - 3);
+            }
+            trimmed = trimmed.trim();
+        }
+        JsonNode node = parse(trimmed);
+        return node != null && node.isObject() ? trimmed : support.toJson(Map.of("userGoal", content));
     }
 
     private JsonNode parse(String json) {

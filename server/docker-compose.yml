@@ -1,6 +1,9 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    # pgvector/pgvector:pg17 = 官方 postgres:17 + pgvector 扩展（AI 助手批D RAG 用；V36 CREATE EXTENSION vector）。
+    # 数据卷 oa-pgdata 与 postgres:17-alpine 同为 PG17 数据格式，兼容——换镜像后需 `docker compose up -d`
+    # 重建容器（不删卷）。若容器已存在旧镜像，`up -d` 会以新镜像重建；扩展需重启后 Flyway V36 首次 CREATE。
+    image: pgvector/pgvector:pg17
     container_name: oa-postgres
     environment:
       POSTGRES_DB: oa_platform

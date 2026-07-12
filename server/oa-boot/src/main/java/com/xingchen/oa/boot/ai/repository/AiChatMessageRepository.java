@@ -12,6 +12,9 @@ public interface AiChatMessageRepository extends JpaRepository<AiChatMessage, Lo
 
     List<AiChatMessage> findBySessionIdOrderByIdDesc(Long sessionId, Pageable pageable);
 
+    /** §13.2 Token 预算窗口 / §13.3 摘要游标：取 id 大于游标的近消息（升序）。 */
+    List<AiChatMessage> findBySessionIdAndIdGreaterThanOrderByIdAsc(Long sessionId, Long afterId);
+
     Page<AiChatMessage> findBySessionIdOrderByIdAsc(Long sessionId, Pageable pageable);
 
     long countBySessionId(Long sessionId);

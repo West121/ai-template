@@ -119,6 +119,33 @@ public class FileService {
         return FileRecordResponse.of(record);
     }
 
+    /**
+     * 字节直传（内部复用：AI 附件端点 / 存量 dataURL 清洗 runner）。走同一存储 + 记录落库路径，
+     * uploader 取自 {@link CurrentUserHolder}（runner 逐消息 set 消息属主，保证归属可读）。
+     */
+    @Transactional
+    public FileRecordResponse uploadBytes(byte[] content, String originalName, String contentType) {
+        if (content == null || content.length == 0) {
+            throw new BusinessException(400, "上传内容不能为空");
+        }
+        String name = StringUtils.hasText(originalName) ? originalName : "unnamed";
+        String ext = extOf(name);
+        String objectKey = buildObjectKey(ext);
+        String hash;
+        try (InputStream in = new java.io.ByteArrayInputStream(content)) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (DigestInputStream din = new DigestInputStream(in, digest)) {
+                storageService.put(objectKey, din, content.length, contentType);
+            }
+            hash = HexFormat.of().formatHex(digest.digest());
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BusinessException(500, "文件上传失败: " + e.getMessage());
+        }
+        return FileRecordResponse.of(saveRecord(name, ext, content.length, contentType, objectKey, hash));
+    }
+
     @Transactional(readOnly = true)
     public SysFile getOrThrow(Long id) {
         return fileRepository.findById(id)
