@@ -21,6 +21,8 @@ export interface GwOpinion {
   id: number
   /** 环节 key：拟稿/核稿/会签/签发/用印/拟办/批办/承办/传阅… */
   taskKey: string
+  /** 流程图节点 id（磐石补：对齐 gw_send/gw_recv designerJson 节点 id，供图内逐节点回填办理信息） */
+  nodeId?: string
   userId?: number
   userName: string
   opinion: string

@@ -303,6 +303,8 @@ function isDemo(): boolean {
 interface RawTimeline {
   id: number
   taskKey: string
+  /** 流程图节点 id（磐石补，对齐 gw_send/gw_recv designerJson） */
+  nodeId?: string
   userId?: number
   userName?: string
   opinion?: string
@@ -423,6 +425,7 @@ function mapDetail(r: RawDetail): GwDoc {
     opinions: (r.timeline ?? []).map((t) => ({
       id: t.id,
       taskKey: t.taskKey,
+      nodeId: t.nodeId,
       userId: t.userId,
       userName: t.userName ?? "系统",
       opinion: t.opinion ?? "",

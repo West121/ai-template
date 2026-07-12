@@ -7,10 +7,9 @@
 import { useState } from "react"
 import { toast } from "sonner"
 import { Check, RotateCcw, Send, Share2, Stamp, Archive, FileSignature } from "lucide-react"
-import { cn } from "@/lib/utils"
 import { useHasPerm } from "@/stores/auth-store"
 import { Button } from "@/components/ui/button"
-import { RichTextEditor, RichTextViewer } from "@/components/rich-text"
+import { RichTextEditor } from "@/components/rich-text"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -22,77 +21,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { archiveDoc, sealDoc, signIssue, submitOpinion } from "./mock"
-import { DECISION_META, gwFormatTime, type GwDoc, type GwOpinion } from "./types"
+import type { GwDoc } from "./types"
 
-/* ============================ 办理时间线 ============================ */
-
-export function OpinionTimeline({
-  items,
-  current,
-}: {
-  items: GwOpinion[]
-  /** 正在办理的环节（未终态时传入）：时间线末尾追加「办理中」条目 */
-  current?: { node: string; assignee?: string }
-}) {
-  if ((!items || items.length === 0) && !current) {
-    return <div className="py-6 text-center text-sm text-muted-foreground">暂无办理记录</div>
-  }
-  return (
-    <div className="space-y-0 py-1">
-      {items.map((item, index) => {
-        const meta = DECISION_META[item.decision] ?? { label: item.decision, dot: "bg-muted-foreground/30" }
-        return (
-          <div
-            key={item.id ?? index}
-            className={cn("relative flex gap-3", index === items.length - 1 && !current ? "pb-0" : "pb-6")}
-          >
-            {(index < items.length - 1 || current) && (
-              <div className="absolute left-[5px] top-4 h-full w-px bg-border" />
-            )}
-            <div className={cn("mt-1 size-[11px] shrink-0 rounded-full", meta.dot)} />
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium">{meta.label}</span>
-                <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                  {item.taskKey}
-                </span>
-              </div>
-              <div className="mt-0.5 text-xs text-muted-foreground">
-                {item.userName} · {gwFormatTime(item.createdAt)}
-              </div>
-              {item.opinion && (
-                <div className="mt-1 rounded bg-muted/60 px-2 py-1">
-                  {/* 意见可能是富文本 HTML（升级后）或存量纯文本，统一走 Viewer（内部 sanitize） */}
-                  <RichTextViewer html={item.opinion} className="text-xs leading-relaxed" />
-                </div>
-              )}
-            </div>
-          </div>
-        )
-      })}
-      {/* 正在办理的环节（脉冲蓝点 + 环节名 + 当前办理人） */}
-      {current && (
-        <div className="relative flex gap-3">
-          <span className="relative mt-1 flex size-[11px] shrink-0">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/50" />
-            <span className="relative inline-flex size-[11px] rounded-full bg-primary" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium text-primary">办理中</span>
-              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">{current.node}</span>
-            </div>
-            <div className="mt-0.5 text-xs text-muted-foreground">
-              当前办理人：{current.assignee ?? "按规则运行时确定"}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-/* ============================ 办文动作条 ============================ */
+/* ============================ 办文动作条（办理时间线已收敛到基座 ShellTimeline） ============================ */
 
 type DecisionMode = "AGREE" | "REJECT" | "TRANSFER" | "SUBMIT" | "SIGN" | "SEAL"
 
