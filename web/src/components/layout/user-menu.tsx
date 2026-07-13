@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom"
 import { BriefcaseBusiness, Check, CircleUserRound, KeyRound, Layers, LogOut } from "lucide-react"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import {
   DropdownMenu,
@@ -36,6 +36,7 @@ export function UserMenu() {
       <DropdownMenuTrigger asChild>
         <button type="button" className="flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-accent">
           <Avatar className="size-7">
+            {user?.avatar && <AvatarImage src={user.avatar} alt={user.name} />}
             <AvatarFallback className="bg-primary text-xs text-primary-foreground">
               {user?.name?.slice(0, 1) ?? "客"}
             </AvatarFallback>
@@ -101,11 +102,11 @@ export function UserMenu() {
         )}
 
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => toast.info("演示环境：个人中心未实现")}>
+        <DropdownMenuItem onClick={() => navigate("/profile")}>
           <CircleUserRound className="size-4" />
           个人中心
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => toast.info("演示环境：修改密码未实现")}>
+        <DropdownMenuItem onClick={() => navigate("/profile?tab=security")}>
           <KeyRound className="size-4" />
           修改密码
         </DropdownMenuItem>

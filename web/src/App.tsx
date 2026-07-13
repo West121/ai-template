@@ -10,6 +10,7 @@ import { useAuthStore } from "@/stores/auth-store"
 
 const LoginPage = lazy(() => import("@/pages/login"))
 const DashboardPage = lazy(() => import("@/pages/dashboard"))
+const ProfilePage = lazy(() => import("@/pages/profile"))
 const WorkflowTasksPage = lazy(() => import("@/pages/workflow/tasks"))
 const WorkflowStartPage = lazy(() => import("@/pages/workflow/start"))
 const WorkflowMonitorPage = lazy(() => import("@/pages/workflow/monitor"))
@@ -113,6 +114,8 @@ export default function App() {
           >
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<DashboardPage />} />
+            {/* 个人中心：从用户菜单进，非主导航（menu.ts 挂隐藏项供面包屑/标签解析） */}
+            <Route path="profile" element={<ProfilePage />} />
             {/* 审批中心已退役并入流程中心，旧路径统一重定向到「我的审批」 */}
             <Route path="approval/*" element={<Navigate to="/workflow/tasks" replace />} />
             <Route path="workflow">

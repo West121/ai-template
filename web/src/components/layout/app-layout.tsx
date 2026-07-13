@@ -2,7 +2,7 @@ import { useEffect } from "react"
 import { Outlet, useLocation, useNavigate } from "react-router-dom"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react"
-import { findMenuByPath, findRootMenu, menuTree, type MenuItem } from "@/config/menu"
+import { findMenuByPath, findRootMenu, visibleMenuTree, type MenuItem } from "@/config/menu"
 import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -134,7 +134,7 @@ export function AppLayout() {
     <div className="flex h-screen overflow-hidden bg-background">
       {layout === "vertical" && (
         <>
-          <Sidebar items={menuTree} showLogo />
+          <Sidebar items={visibleMenuTree} showLogo />
           <div className="flex min-w-0 flex-1 flex-col">
             <Header
               left={
@@ -156,7 +156,7 @@ export function AppLayout() {
               <>
                 <Logo className="h-auto px-0" />
                 <div className="ml-2 min-w-0 flex-1">
-                  <HorizontalMenu items={menuTree} />
+                  <HorizontalMenu items={visibleMenuTree} />
                 </div>
               </>
             }
@@ -173,7 +173,7 @@ export function AppLayout() {
                 <Logo className="h-auto px-0" />
                 <div className="ml-2 min-w-0 flex-1">
                   <HorizontalMenu
-                    items={menuTree}
+                    items={visibleMenuTree}
                     rootOnly
                     onRootChange={(item) => navigate(firstLeaf(item).path)}
                   />

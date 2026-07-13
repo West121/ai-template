@@ -5,6 +5,9 @@ export interface UserInfo {
   name: string
   account: string
   avatar?: string
+  /** 自助可改的安全字段（个人中心）——来自 /api/auth/me，磐石补齐 */
+  email?: string
+  phone?: string
   dept: string
   post: string
   roles: string[]
@@ -22,7 +25,7 @@ export interface AssignmentInfo {
 
 interface LoginData {
   token: string
-  user: { id: number; username: string; name: string }
+  user: { id: number; username: string; name: string; email?: string; phone?: string; avatar?: string }
   assignments: AssignmentInfo[]
   activeAssignmentId: string
   permissions: string[]
@@ -45,6 +48,8 @@ interface AuthState {
   switchAssignment: (assignmentId: string) => Promise<void>
   /** 用 /api/auth/me 刷新本地缓存的权限/任职（后端权限变更后无需重新登录） */
   refreshMe: () => Promise<void>
+  /** 个人中心保存资料后就地合并本人安全字段（名字/头像变了顶栏也随之更新） */
+  patchUser: (partial: Partial<UserInfo>) => void
   logout: () => void
 }
 
@@ -59,6 +64,9 @@ function applyLoginData(data: LoginData) {
     user: {
       name: data.user.name,
       account: data.user.username,
+      avatar: data.user.avatar,
+      email: data.user.email,
+      phone: data.user.phone,
       dept: active?.deptName ?? "",
       post: active?.postName ?? "",
       roles: active?.roleNames ?? [],
@@ -136,6 +144,9 @@ export const useAuthStore = create<AuthState>()(
           // 网络异常时保持现状，由各页面的离线兜底处理
         }
       },
+
+      patchUser: (partial) =>
+        set((state) => (state.user ? { user: { ...state.user, ...partial } } : {})),
 
       logout: () =>
         set({

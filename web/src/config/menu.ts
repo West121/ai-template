@@ -46,6 +46,7 @@ import {
   FileCog,
   LayoutTemplate,
   Library,
+  CircleUserRound,
 } from "lucide-react"
 
 export interface MenuItem {
@@ -58,6 +59,8 @@ export interface MenuItem {
   badge?: number
   /** 外部链接：点击新窗口打开，不参与路由/标签页 */
   external?: boolean
+  /** 隐藏项：不在主导航/⌘K 渲染，但仍供面包屑/标签解析（如个人中心从用户菜单进） */
+  hidden?: boolean
   children?: MenuItem[]
 }
 
@@ -166,7 +169,17 @@ export const menuTree: MenuItem[] = [
       { title: "流程设计器", path: "/demo/flow-designer", icon: Workflow },
     ],
   },
+  // 隐藏项：不在主导航渲染，仅供面包屑/标签解析（个人中心从用户菜单进）
+  { title: "个人中心", path: "/profile", icon: CircleUserRound, hidden: true },
 ]
+
+/** 主导航可见菜单（过滤 hidden 项）——渲染侧用它；finder 函数仍用全量 menuTree 以解析隐藏页 */
+function stripHidden(items: MenuItem[]): MenuItem[] {
+  return items
+    .filter((i) => !i.hidden)
+    .map((i) => (i.children ? { ...i, children: stripHidden(i.children) } : i))
+}
+export const visibleMenuTree: MenuItem[] = stripHidden(menuTree)
 
 /** 统一的菜单打开逻辑：外链新窗口，内部路径走路由 */
 export function openMenuItem(item: MenuItem, navigate: (path: string) => void) {

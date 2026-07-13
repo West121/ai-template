@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/command"
 import { useUiStore } from "@/stores/ui-store"
 
-const searchableItems = flattenMenu().filter((item) => !item.children?.length)
+const searchableItems = flattenMenu().filter((item) => !item.children?.length && !item.hidden)
 
 export function GlobalSearch() {
   const navigate = useNavigate()
