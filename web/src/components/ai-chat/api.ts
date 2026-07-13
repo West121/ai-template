@@ -770,7 +770,7 @@ async function runMockStream(req: ChatSendRequest, h: ChatStreamHandlers): Promi
  * 3) 旧端点也不可用 → SSE mock；
  * 业务错误（409/410/§22 码）不回退，转文案后抛出。message.failed 事件同样以异常抛出。
  */
-export async function sendChatStream(req: ChatSendRequest, h: ChatStreamHandlers): Promise<ChatStreamOutcome> {
+export async function sendChatStream(req: ChatSendRequest, h: ChatStreamHandlers, signal?: AbortSignal): Promise<ChatStreamOutcome> {
   if (useAuthStore.getState().offline) return runMockStream(req, h)
 
   // ---- 1) SSE 主路径 ----
@@ -788,6 +788,7 @@ export async function sendChatStream(req: ChatSendRequest, h: ChatStreamHandlers
         pageContext: req.pageContext ?? null,
       },
       (evt) => dispatchEvent(evt, h, acc),
+      signal,
     )
     if (acc.failed) throw new ApiError(500, friendlyAiError(new Error(acc.failed)))
     return { sessionId: acc.sessionId ?? req.sessionId, demo: false, mode: "sse" }

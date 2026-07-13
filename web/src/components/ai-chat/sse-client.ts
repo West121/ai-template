@@ -81,19 +81,33 @@ export async function streamChatMessage(req: ChatMessageRequest, onEvent: (evt: 
 
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
+  // 终止事件即止：收到 message.completed / message.failed 就停读——SSE 正常语义是「消息完成即结束」，
+  // 不必干等连接关闭（reader.read() 会一直挂起），否则本轮 sending 锁死（输入框/发送按钮无法复用）。
+  let terminated = false
   const parser = createSseParser((frame) => {
     const evt = parseAiEvent(frame)
-    if (evt) onEvent(evt)
+    if (!evt) return
+    onEvent(evt)
+    if (evt.type === "message.completed" || evt.type === "message.failed") terminated = true
   })
   try {
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
       parser.feed(decoder.decode(value, { stream: true }))
+      if (terminated) break
     }
-    parser.feed(decoder.decode())
-    parser.end()
+    if (!terminated) {
+      parser.feed(decoder.decode())
+      parser.end()
+    }
   } finally {
-    reader.releaseLock()
+    // 主动取消底层流：终止事件提前结束 / abort / 正常读尽都在此关闭连接，避免悬挂连接泄漏。
+    // 已关闭或已取消时 cancel() 会 reject —— 吞掉即可（连接本就该结束）。
+    try {
+      await reader.cancel()
+    } catch {
+      /* 流已关闭/取消 */
+    }
   }
 }

@@ -44,6 +44,8 @@ export function AiAssistant() {
   const [focusSignal, setFocusSignal] = useState(0)
   /** 面板首次打开时恢复上次会话（只做一次，之后保持当前会话） */
   const restoredRef = useRef(false)
+  /** 当前发送轮次的 AbortController：新一轮发送 / 组件卸载时 abort 上一轮，杜绝悬挂流泄漏与旧回调污染 */
+  const abortRef = useRef<AbortController | null>(null)
 
   /* ---- V2 模型档案（§4.3）：FAST/STANDARD/REASONING/VISION；端点 404 回退旧凭据；会话内记忆 ---- */
   const [models, setModels] = useState<AiModelChoice[]>([])
@@ -143,6 +145,10 @@ export function AiAssistant() {
         import("./route-registry"),
       ])
       const clientMessageId = (isRetry && lastSentRef.current?.clientMessageId) || ulid()
+      // 新一轮发送：中止上一轮可能悬挂的流（避免连接泄漏 + 旧流回调污染新轮）
+      abortRef.current?.abort()
+      const ac = new AbortController()
+      abortRef.current = ac
       setSending(true)
       setSendError(null)
       setToolStatuses([])
@@ -221,6 +227,7 @@ export function AiAssistant() {
               setMessages((prev) => [...prev, msg])
             },
           },
+          ac.signal,
         )
         setDemo(res.demo)
         // 完成：把本轮工具步骤快照写进落地助手消息 thinking（收成一行可回看；无工具则不写）
@@ -233,15 +240,25 @@ export function AiAssistant() {
         }
         if (!sessionTitle) setSessionTitle(text.slice(0, 20) || "附件对话")
       } catch (err) {
-        // 业务失败：§22 错误码/明确文案；已产生的流式局部内容保留
-        setSendError(friendlyAiError(err, "") || "")
+        // 被新一轮/卸载主动 abort：静默（不呈现错误、不触碰新一轮的态）
+        if ((err as Error)?.name !== "AbortError") {
+          // 业务失败：§22 错误码/明确文案；已产生的流式局部内容保留
+          setSendError(friendlyAiError(err, "") || "")
+        }
       } finally {
-        setSending(false)
-        setToolStatuses([])
+        // 仅当自己仍是当前轮次时复位——旧轮被 abort 后不得误清新轮的 sending
+        if (abortRef.current === ac) {
+          setSending(false)
+          setToolStatuses([])
+          abortRef.current = null
+        }
       }
     },
     [sessionId, sessionTitle, models, modelId],
   )
+
+  // 组件卸载：中止在途流，避免悬挂 fetch 泄漏（原先靠卸载丢弃连接，现主动收敛）
+  useEffect(() => () => abortRef.current?.abort(), [])
 
   const handleSend = useCallback((text: string, attachments: AiAttachment[]) => void doSend(text, attachments, false), [doSend])
   const handleRetry = useCallback(() => {
