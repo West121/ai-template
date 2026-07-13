@@ -22,8 +22,51 @@ import "./gongwen.css"
 /** A4 纸宽 210mm ≈ 794px（96dpi），用于 scale-to-fit 计算 */
 const PAPER_PX = 794
 
-export function printGongwen() {
-  window.print()
+/**
+ * 打印 / 生成 PDF:把红头正文塞进**隔离 iframe** 再打印,彻底摆脱 app 布局祖先链。
+ *
+ * 原做法 `window.print()` + gongwen.css 的 `@media print`(`body *` 隐藏 + `.gongwen-paper`
+ * `position:absolute;inset:0`)在复杂 SPA 里会空白:`.gongwen-paper` 的绝对定位包含块是最近的
+ * 定位/`transform` 祖先(布局里到处是滚动容器/定位卡片/动画 transform),纸张被限制在某个隐藏或
+ * 裁剪的小容器内 → 打印无内容。隔离 iframe 里没有这些祖先,纸张相对页面正常排布。
+ *
+ * 复制父文档全部样式表(含 gongwen.css)进 iframe → 版式一致;srcdoc `onload` 后再打印,等样式生效。
+ */
+export function printGongwenPaper(innerHtml: string) {
+  if (!innerHtml) return
+  const styleTags = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+    .map((n) => n.outerHTML)
+    .join("\n")
+  const srcdoc =
+    `<!doctype html><html><head><meta charset="utf-8">${styleTags}` +
+    `<style>@page{size:A4;margin:0}html,body{margin:0!important;padding:0!important;background:#fff}` +
+    `.gongwen-paper{position:static!important;visibility:visible!important}` +
+    `.gongwen-paper *{visibility:visible!important}` +
+    `.gw-page{box-shadow:none!important;transform:none!important;margin:0 auto!important}` +
+    `.gw-seal--pending,.gw-editing-only{display:none!important}</style></head>` +
+    `<body><div class="gongwen-paper"><div class="gw-page">${innerHtml}</div></div></body></html>`
+  const iframe = document.createElement("iframe")
+  iframe.setAttribute("aria-hidden", "true")
+  iframe.title = "打印"
+  iframe.style.cssText = "position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;"
+  iframe.onload = () => {
+    const cw = iframe.contentWindow
+    if (!cw) {
+      iframe.remove()
+      window.print() // 兜底:iframe 不可用退回整页打印
+      return
+    }
+    window.setTimeout(() => {
+      try {
+        cw.focus()
+        cw.print()
+      } finally {
+        window.setTimeout(() => iframe.remove(), 800)
+      }
+    }, 250)
+  }
+  iframe.srcdoc = srcdoc
+  document.body.appendChild(iframe)
 }
 
 export function GongwenPreview({
@@ -79,7 +122,12 @@ export function GongwenPreview({
             <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2" onClick={() => void load()}>
               <RotateCw className="size-3.5" /> 刷新
             </Button>
-            <Button size="sm" className="h-7 gap-1.5 px-2.5" onClick={printGongwen}>
+            <Button
+              size="sm"
+              className="h-7 gap-1.5 px-2.5"
+              disabled={!html}
+              onClick={() => html && printGongwenPaper(html)}
+            >
               <Printer className="size-3.5" /> 打印 / PDF
             </Button>
           </div>

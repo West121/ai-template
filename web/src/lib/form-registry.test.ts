@@ -72,7 +72,7 @@ describe("formRegistry", () => {
       formType: "ONLINE",
       fields: [{ key: "days", label: "请假天数", type: "number" }],
     }
-    const fetchSpy = vi.fn(async () =>
+    const fetchSpy = vi.fn(async (_url?: unknown) =>
       new Response(JSON.stringify({ code: 0, message: "ok", data: online }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
