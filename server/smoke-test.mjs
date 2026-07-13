@@ -913,13 +913,16 @@ if (taskA) {
 const detA = await call(zhangsan.token, "GET", `/api/wf/instances/${iidA}`)
 check("wf days=2 实例结束为 APPROVED", detA.body?.data?.bizStatus === "APPROVED", detA.body?.data?.bizStatus)
 check("wf 时间线含 SUBMIT+APPROVE", (detA.body?.data?.timeline ?? []).map((t) => t.action).join(",").includes("APPROVE"))
-// 跟踪图分流：DINGTALK 定义详情回传 designerType=DINGTALK + designerJson(钉钉模型，含节点 id 供高亮)，前端据此渲染钉钉跟踪图
-check("wf 详情返回 designerType=DINGTALK", detA.body?.data?.designerType === "DINGTALK", detA.body?.data?.designerType)
+// leave 已正式转 GRAPH（钉钉/图形设计器平权）：详情 designerType=GRAPH；DINGTALK 跟踪图分流覆盖由后续
+// DINGTALK 流程(ref-name/p3 完整链路)保住。此处改验 GRAPH 静态预测真实工作（补齐 predict 的 GRAPH 支持）。
+check("wf 详情返回 designerType=GRAPH(leave 已转 GRAPH)", detA.body?.data?.designerType === "GRAPH", detA.body?.data?.designerType)
+const predA = await call(zhangsan.token, "POST", `/api/wf/instances/${iidA}/predict`)
 check(
-  "wf 详情返回 designerJson(含节点 mgr/cc1)",
-  Array.isArray(detA.body?.data?.designerJson?.nodes) &&
-    detA.body.data.designerJson.nodes.some((n) => n.id === "mgr"),
-  JSON.stringify(detA.body?.data?.designerJson?.nodes?.map((n) => n.id)),
+  "wf leave(GRAPH) 静态预测出链路(含 mgr 节点，跳过网关)",
+  Array.isArray(predA.body?.data?.path) &&
+    predA.body.data.path.some((n) => n.nodeId === "mgr") &&
+    !predA.body.data.path.some((n) => n.type === "exclusiveGateway"),
+  JSON.stringify(predA.body?.data?.path?.map((n) => n.nodeId)),
 )
 const mgrDone = await call(manager.token, "GET", "/api/wf/tasks/done?pageNum=1&pageSize=100")
 check("wf 经理已办含该任务", (mgrDone.body?.data?.list ?? []).some((t) => t.instanceTitle === titleA))
@@ -1028,7 +1031,7 @@ check("wf OR 流程走通=APPROVED", orDetail.body?.data?.bizStatus === "APPROVE
 const seedDef = await call(admin.token, "GET", "/api/wf/process-defs/leave_approval/latest")
 const seedXml = seedDef.body?.data?.bpmnXml ?? ""
 check("wf 种子 bpmnXml 含 BPMNShape(DI)", (seedXml.match(/<bpmndi:BPMNShape/g) ?? []).length >= 7, String((seedXml.match(/<bpmndi:BPMNShape/g) ?? []).length))
-check("wf 种子 designerJson ORG 引用为 id 制", /"refs":\s*\[\s*\{\s*"kind":\s*"USER",\s*"id":\s*1/.test(seedDef.body?.data?.designerJson ?? ""), seedDef.body?.data?.designerJson)
+check("wf 种子(GRAPH) designerJson ORG 引用为 id 制", /"refs":\s*\[\s*\{\s*"type":\s*"USER",\s*"id":\s*1/.test(seedDef.body?.data?.designerJson ?? ""), seedDef.body?.data?.designerJson)
 
 /* ---------- 15. 工作流 P2 批次1：核心操作 ---------- */
 const lisi = await login("lisi")
@@ -1098,6 +1101,9 @@ const P_AGENT = await mkProc(`p2agent_${TS}`, [approvalNode("ap", "代理审批"
   // ② 实例详情端点（InstanceDetailResponse.designerJson 对象）补 name —— 用户实测的跟踪图数据源
   const refInst = await startInst(refDefCode, `refname-${TS}`) // 停在首节点(王五)，d/r 不激活亦返回全树
   const refDet = await call(zhangsan.token, "GET", `/api/wf/instances/${refInst.id}`)
+  // 钉钉跟踪图分流覆盖（原 leave 承载，leave 转 GRAPH 后由此 DINGTALK 样例保住）：详情回 designerType=DINGTALK + designerJson
+  check("refname detail designerType=DINGTALK + designerJson(钉钉跟踪图分流覆盖)",
+    refDet.body?.data?.designerType === "DINGTALK" && Array.isArray(refDet.body?.data?.designerJson?.nodes), refDet.body?.data?.designerType)
   const djNodes = refDet.body?.data?.designerJson?.nodes ?? []
   const detRefName = (nid) => djNodes.find((n) => n.id === nid)?.assigneeRules?.[0]?.refs?.[0]?.name
   check("refname detail designerJson USER ref 补真名=王五(非空/非成员#N)", detRefName("u") === "王五", `got=${detRefName("u")}`)

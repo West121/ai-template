@@ -922,8 +922,12 @@ public class InstanceService {
                 .orElseThrow(() -> new BusinessException(404, "实例不存在"));
         WfProcessExt def = processRepository.findByDefCode(inst.getDefCode())
                 .orElseThrow(() -> new BusinessException(404, "流程定义不存在"));
-        if (!WfProcessExt.TYPE_DINGTALK.equals(def.getDesignerType())
-                || !StringUtils.hasText(def.getDesignerJson())) {
+        // 静态预测支持 DINGTALK（nodes 树）与 GRAPH（nodes/edges 图）两种设计器，功能对等；
+        // 仅 BPMN 专业模式（无 designerJson 归一模型）不支持。
+        boolean predictable = StringUtils.hasText(def.getDesignerJson())
+                && (WfProcessExt.TYPE_DINGTALK.equals(def.getDesignerType())
+                    || WfProcessExt.TYPE_GRAPH.equals(def.getDesignerType()));
+        if (!predictable) {
             return new PredictResponse(List.of(), "该流程为 BPMN 专业模式，暂不支持静态预测");
         }
         String pid = inst.getProcInstId();
@@ -983,8 +987,13 @@ public class InstanceService {
             JsonNode root = objectMapper.readTree(def.getDesignerJson());
             PredictState state = new PredictState();
             state.startTarget = startTargetOf(root.path("nodes"), inst); // 回发起人兜底目标
-            predictWalk(root.path("nodes"), values, inst, completed, active, path,
-                    rejectDisabled, rejectToPrev, state, null);
+            if (WfProcessExt.TYPE_GRAPH.equals(def.getDesignerType())) {
+                predictWalkGraph(root, values, inst, completed, active, path,
+                        rejectDisabled, rejectToPrev, state);
+            } else {
+                predictWalk(root.path("nodes"), values, inst, completed, active, path,
+                        rejectDisabled, rejectToPrev, state, null);
+            }
         } catch (Exception e) {
             log.warn("流程预测失败 id={}: {}", id, e.getMessage());
         }
@@ -1089,6 +1098,165 @@ public class InstanceService {
         }
     }
 
+    // ---------------- P3：GRAPH（nodes/edges 图）静态预测，与 DINGTALK 功能对等 ----------------
+
+    /** GRAPH 条件运算符名 → 符号（与 GraphToBpmnConverter OP_SYMBOL 一致），供离线条件求值。 */
+    private static final Map<String, String> GRAPH_OP_SYMBOL = Map.of(
+            "eq", "==", "ne", "!=", "gt", ">", "gte", ">=", "lt", "<", "lte", "<=");
+
+    /**
+     * GRAPH 完整链路：从 startEvent 沿 edges 走全程。网关（exclusive/inclusive/parallel）仅路由、
+     * <b>不入 predictChain</b>（无 assigneeName）；userTask 复用 resolveOffline/nameResolver 出预测办理人，
+     * 与 DINGTALK 路径功能对等（条件按当前值走命中分支、并签 multiMode、驳回目标、并行分组、抄送节点）。
+     */
+    private void predictWalkGraph(JsonNode root, Map<String, Object> values, WfInstanceExt inst,
+                                  Set<String> completed, Set<String> active, List<PredictNode> path,
+                                  boolean rejectDisabled, boolean rejectToPrev, PredictState state) {
+        JsonNode nodesArr = root.path("nodes");
+        if (!nodesArr.isArray()) {
+            return;
+        }
+        Map<String, JsonNode> nodeById = new LinkedHashMap<>();
+        for (JsonNode n : nodesArr) {
+            nodeById.put(n.path("id").asString(""), n);
+        }
+        Map<String, List<JsonNode>> edgesBySource = new LinkedHashMap<>();
+        for (JsonNode e : root.path("edges")) {
+            edgesBySource.computeIfAbsent(e.path("source").asString(""), k -> new ArrayList<>()).add(e);
+        }
+        String startId = null;
+        for (JsonNode n : nodesArr) {
+            String t = n.path("type").asString("");
+            if ("startEvent".equals(t) || "start".equals(t)) {
+                startId = n.path("id").asString("");
+                break;
+            }
+        }
+        if (startId != null) {
+            walkGraph(startId, nodeById, edgesBySource, values, inst, completed, active, path,
+                    rejectDisabled, rejectToPrev, state, null, new LinkedHashSet<>());
+        }
+    }
+
+    private void walkGraph(String nodeId, Map<String, JsonNode> nodeById,
+                           Map<String, List<JsonNode>> edgesBySource, Map<String, Object> values,
+                           WfInstanceExt inst, Set<String> completed, Set<String> active,
+                           List<PredictNode> path, boolean rejectDisabled, boolean rejectToPrev,
+                           PredictState state, String parallelGroup, Set<String> visited) {
+        if (nodeId == null || nodeId.isEmpty() || visited.contains(nodeId)) {
+            return;
+        }
+        JsonNode node = nodeById.get(nodeId);
+        if (node == null) {
+            return;
+        }
+        visited.add(nodeId);
+        String type = node.path("type").asString("");
+        List<JsonNode> outs = edgesBySource.getOrDefault(nodeId, List.of());
+
+        // 排它/包容网关：按当前值走命中出边（跳过网关自身，不入链）
+        if ("exclusiveGateway".equals(type) || "inclusiveGateway".equals(type)) {
+            boolean inclusive = "inclusiveGateway".equals(type);
+            JsonNode defaultEdge = null;
+            boolean anyMatched = false;
+            for (JsonNode e : outs) {
+                if (e.path("isDefault").asBoolean(false)) {
+                    defaultEdge = e;
+                    continue;
+                }
+                if (graphEdgeMatches(e.path("condition"), values)) {
+                    anyMatched = true;
+                    walkGraph(e.path("target").asString(""), nodeById, edgesBySource, values, inst,
+                            completed, active, path, rejectDisabled, rejectToPrev, state, parallelGroup, visited);
+                    if (!inclusive) {
+                        break;
+                    }
+                }
+            }
+            if (!anyMatched && defaultEdge != null) {
+                walkGraph(defaultEdge.path("target").asString(""), nodeById, edgesBySource, values, inst,
+                        completed, active, path, rejectDisabled, rejectToPrev, state, parallelGroup, visited);
+            }
+            return;
+        }
+        // 并行网关：fork 各出边同组并排；join 单出边（visited 处理汇聚）
+        if ("parallelGateway".equals(type)) {
+            String group = outs.size() > 1 ? nodeId : parallelGroup;
+            for (JsonNode e : outs) {
+                walkGraph(e.path("target").asString(""), nodeById, edgesBySource, values, inst,
+                        completed, active, path, rejectDisabled, rejectToPrev, state, group, visited);
+            }
+            return;
+        }
+        // endEvent：终点不入链（与 DINGTALK 无显式 end 节点对齐）
+        if ("endEvent".equals(type)) {
+            return;
+        }
+
+        // 普通节点入链（startEvent→start / userTask→approval / cc / 其它透传）
+        JsonNode props = node.path("props");
+        String semantic = mapGraphType(type);
+        String status = statusOf(nodeId, semantic, completed, active);
+        List<AssigneeName> assignees = List.of();
+        String multiMode = null;
+        boolean canReject = false;
+        RejectTarget rejectTo = null;
+        if ("userTask".equals(type)) {
+            List<Long> ids = assigneeResolver.resolveOffline(props.path("assigneeRules"),
+                    inst.getInitiatorId(), inst.getInitiatorDeptId(), values);
+            assignees = ids.stream().map(uid -> new AssigneeName(nameResolver.name(uid))).toList();
+            multiMode = props.path("multiMode").asString("ANY");
+            canReject = !rejectDisabled && nodeAllowsReject(props);
+            if (canReject) {
+                rejectTo = (rejectToPrev && state.lastApproval != null) ? state.lastApproval : state.startTarget;
+            }
+        }
+        String nodeName = node.path("name").asString(semantic);
+        path.add(new PredictNode(nodeId, nodeName, semantic, assignees, status, semantic,
+                canReject, rejectTo, multiMode, parallelGroup));
+        if ("userTask".equals(type)) {
+            state.lastApproval = new RejectTarget(nodeId, nodeName);
+        }
+        for (JsonNode e : outs) {
+            walkGraph(e.path("target").asString(""), nodeById, edgesBySource, values, inst,
+                    completed, active, path, rejectDisabled, rejectToPrev, state, parallelGroup, visited);
+        }
+    }
+
+    /** GRAPH 节点类型 → 与 DINGTALK 对齐的语义类型（前端一致渲染）。 */
+    private String mapGraphType(String graphType) {
+        return switch (graphType) {
+            case "startEvent" -> "start";
+            case "userTask" -> "approval";
+            case "endEvent" -> "end";
+            default -> graphType; // cc / autoApprove / ai / timer / subprocess … 透传
+        };
+    }
+
+    /** GRAPH 出边条件离线求值：{logic, items:[{field,operator,value}]}，运算符名映射符号后交 ConditionEvaluator。 */
+    private boolean graphEdgeMatches(JsonNode condition, Map<String, Object> values) {
+        if (condition == null || condition.isMissingNode() || condition.isNull()) {
+            return true; // 无条件出边恒真
+        }
+        JsonNode items = condition.path("items");
+        if (!items.isArray() || items.isEmpty()) {
+            return true;
+        }
+        var conditions = objectMapper.createArrayNode();
+        for (JsonNode item : items) {
+            var o = objectMapper.createObjectNode();
+            o.put("field", item.path("field").asString(""));
+            String op = item.path("operator").asString("");
+            o.put("operator", GRAPH_OP_SYMBOL.getOrDefault(op, op));
+            JsonNode v = item.get("value");
+            if (v != null) {
+                o.set("value", v);
+            }
+            conditions.add(o);
+        }
+        return ConditionEvaluator.eval(conditions, condition.path("logic").asString("AND"), values);
+    }
+
     /** 链路状态：起点恒 done；活动集合 current；历史完成 done；其余 future。 */
     private String statusOf(String nid, String type, Set<String> completed, Set<String> active) {
         if ("start".equals(type)) {
@@ -1134,7 +1302,8 @@ public class InstanceService {
         String sname = null;
         if (rootNodes != null && rootNodes.isArray()) {
             for (JsonNode n : rootNodes) {
-                if ("start".equals(n.path("type").asString(""))) {
+                String t = n.path("type").asString("");
+                if ("start".equals(t) || "startEvent".equals(t)) { // DINGTALK start / GRAPH startEvent
                     sid = n.path("id").asString("start");
                     sname = n.path("name").asString(null);
                     break;
