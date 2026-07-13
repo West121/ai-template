@@ -21,8 +21,9 @@ export interface OnlineSession extends Record<string, unknown> {
   ip: string
   location: string
   client: string
-  loginTime: string
-  lastActive: string
+  /** 后端返回毫秒时间戳(number);演示 mock 可用字符串——formatTime 两者都兼容 */
+  loginTime: string | number
+  lastActive: string | number
   current: boolean
 }
 export interface DpResult<T> {

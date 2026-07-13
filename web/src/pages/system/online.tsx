@@ -26,8 +26,15 @@ import { Card, CardContent } from "@/components/ui/card"
 import { useAuthStore, useHasPerm } from "@/stores/auth-store"
 import { fetchOnline, kickSession, type OnlineSession } from "./online-api"
 
-function formatTime(v?: string) {
-  if (!v) return "—"
+/** 时间格式化:兼容后端毫秒时间戳(number)与字符串日期(ISO / yyyy-MM-dd HH:mm:ss)。 */
+function formatTime(v?: string | number | null) {
+  if (v == null || v === "") return "—"
+  if (typeof v === "number") {
+    const d = new Date(v)
+    if (Number.isNaN(d.getTime())) return "—"
+    const pad = (n: number) => String(n).padStart(2, "0")
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  }
   return v.slice(0, 19).replace("T", " ")
 }
 
