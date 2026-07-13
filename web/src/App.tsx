@@ -44,6 +44,7 @@ const SchedulePage = lazy(() => import("@/pages/schedule"))
 const DeptPage = lazy(() => import("@/pages/system/dept"))
 const PostPage = lazy(() => import("@/pages/system/post"))
 const UserPage = lazy(() => import("@/pages/system/user"))
+const OnlinePage = lazy(() => import("@/pages/system/online"))
 const RolePage = lazy(() => import("@/pages/system/role"))
 const MenuPage = lazy(() => import("@/pages/system/menu"))
 const JobPage = lazy(() => import("@/pages/system/job"))
@@ -188,6 +189,7 @@ export default function App() {
                 <Route path="post" element={<PostPage />} />
               </Route>
               <Route path="user" element={<UserPage />} />
+              <Route path="online" element={<OnlinePage />} />
               <Route path="role" element={<RolePage />} />
               <Route path="menu" element={<MenuPage />} />
               <Route path="job" element={<JobPage />} />

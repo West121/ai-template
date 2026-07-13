@@ -47,6 +47,7 @@ import {
   LayoutTemplate,
   Library,
   CircleUserRound,
+  MonitorSmartphone,
 } from "lucide-react"
 
 export interface MenuItem {
@@ -138,6 +139,7 @@ export const menuTree: MenuItem[] = [
         ],
       },
       { title: "用户管理", path: "/system/user", icon: Users },
+      { title: "在线用户", path: "/system/online", icon: MonitorSmartphone },
       { title: "角色管理", path: "/system/role", icon: ShieldCheck },
       { title: "菜单管理", path: "/system/menu", icon: ListTree },
       { title: "定时任务", path: "/system/job", icon: AlarmClock },
