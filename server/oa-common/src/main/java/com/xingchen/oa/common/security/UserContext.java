@@ -42,4 +42,9 @@ public class UserContext {
      * 按激活身份解析出的数据权限范围。
      */
     private DataScope dataScope;
+
+    /**
+     * 在线会话 id（由 JwtAuthFilter 从 token sid claim 填充；老 token 为 null）。用于「本人当前会话」标记 + 踢人护栏。
+     */
+    private String sessionId;
 }

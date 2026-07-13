@@ -37,7 +37,8 @@ public class AuthController {
     @PostMapping("/switch")
     public R<LoginResponse> switchAssignment(@Valid @RequestBody SwitchAssignmentRequest request) {
         UserContext context = requireContext();
-        return R.ok(authService.switchAssignment(context.getUsername(), request.assignmentId()));
+        return R.ok(authService.switchAssignment(context.getUsername(), request.assignmentId(),
+                context.getSessionId()));
     }
 
     @GetMapping("/me")

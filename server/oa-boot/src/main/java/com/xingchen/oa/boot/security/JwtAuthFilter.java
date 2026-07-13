@@ -2,6 +2,7 @@ package com.xingchen.oa.boot.security;
 
 import com.xingchen.oa.common.security.CurrentUserHolder;
 import com.xingchen.oa.common.security.UserContext;
+import com.xingchen.oa.system.online.OnlineSessionService;
 import com.xingchen.oa.system.security.JwtTokenProvider;
 import com.xingchen.oa.system.service.PermissionService;
 import jakarta.servlet.FilterChain;
@@ -36,6 +37,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider jwtTokenProvider;
     private final PermissionService permissionService;
+    private final OnlineSessionService onlineSessionService;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -47,15 +49,24 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 String token = header.substring(BEARER_PREFIX.length());
                 try {
                     JwtTokenProvider.TokenPayload payload = jwtTokenProvider.parse(token);
-                    UserContext context = permissionService.loadUserContext(
-                            payload.username(), payload.assignment());
-                    List<SimpleGrantedAuthority> authorities = context.getPermissions().stream()
-                            .map(SimpleGrantedAuthority::new)
-                            .toList();
-                    UsernamePasswordAuthenticationToken authentication =
-                            new UsernamePasswordAuthenticationToken(payload.username(), null, authorities);
-                    SecurityContextHolder.getContext().setAuthentication(authentication);
-                    CurrentUserHolder.set(context);
+                    // 在线会话校验：sid 存在且已被踢（Redis 有效但会话 key 不存在）→ 不装配上下文 → 后续按未认证 401。
+                    // 老 token（sid=null）/ Redis 降级 → isKicked 返回 false，正常放行（向后兼容 + 不锁死全站）。
+                    if (onlineSessionService.isKicked(payload.sessionId())) {
+                        SecurityContextHolder.clearContext();
+                        CurrentUserHolder.clear();
+                    } else {
+                        UserContext context = permissionService.loadUserContext(
+                                payload.username(), payload.assignment());
+                        context.setSessionId(payload.sessionId());
+                        List<SimpleGrantedAuthority> authorities = context.getPermissions().stream()
+                                .map(SimpleGrantedAuthority::new)
+                                .toList();
+                        UsernamePasswordAuthenticationToken authentication =
+                                new UsernamePasswordAuthenticationToken(payload.username(), null, authorities);
+                        SecurityContextHolder.getContext().setAuthentication(authentication);
+                        CurrentUserHolder.set(context);
+                        onlineSessionService.touch(payload.sessionId()); // 节流更新 lastActive + 滑动续期
+                    }
                 } catch (Exception e) {
                     log.debug("JWT 解析/权限装配失败: {}", e.getMessage());
                     SecurityContextHolder.clearContext();

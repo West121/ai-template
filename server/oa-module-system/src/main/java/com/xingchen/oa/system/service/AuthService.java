@@ -10,6 +10,7 @@ import com.xingchen.oa.system.dto.LoginResponse;
 import com.xingchen.oa.system.dto.ProfileUpdateRequest;
 import com.xingchen.oa.system.entity.SysUser;
 import com.xingchen.oa.system.entity.SysUserAssignment;
+import com.xingchen.oa.system.online.OnlineSessionService;
 import com.xingchen.oa.system.repository.SysUserRepository;
 import com.xingchen.oa.system.security.JwtTokenProvider;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -30,6 +32,7 @@ public class AuthService {
     private final PermissionService permissionService;
     private final LoginLogService loginLogService;
     private final DataDimensionService dataDimensionService;
+    private final OnlineSessionService onlineSessionService;
 
     @Transactional(readOnly = true)
     public LoginResponse login(LoginRequest request) {
@@ -45,8 +48,11 @@ public class AuthService {
             if (Boolean.FALSE.equals(user.getEnabled())) {
                 throw new BusinessException(403, "账号已被禁用");
             }
-            // 默认激活主任职
-            LoginResponse response = buildResponse(user, null, true);
+            // 默认激活主任职；新登录 = 新在线会话（新 sessionId）
+            String sessionId = UUID.randomUUID().toString();
+            LoginResponse response = buildResponse(user, null, true, sessionId);
+            onlineSessionService.register(user.getId(), user.getUsername(), user.getName(),
+                    response.activeAssignmentId(), sessionId);
             dataDimensionService.prewarm(user.getId()); // DP1b：登录即预热各维可见范围缓存
             loginLogService.record(request.username(), true, "登录成功");
             return response;
@@ -59,9 +65,10 @@ public class AuthService {
 
     /**
      * 身份切换：target 为本人任职 id 或 "ALL"（全部身份并集），校验归属后重签 JWT。
+     * 保持同一 sessionId（换身份不算新上线）；老 token（无 sid）切换时补一个新会话。
      */
     @Transactional(readOnly = true)
-    public LoginResponse switchAssignment(String username, String target) {
+    public LoginResponse switchAssignment(String username, String target, String currentSessionId) {
         SysUser user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new BusinessException(401, "用户不存在"));
         if (!PermissionService.ASSIGNMENT_ALL.equalsIgnoreCase(target)) {
@@ -71,14 +78,18 @@ public class AuthService {
                 throw new BusinessException(403, "无效的任职身份，或该任职不属于当前用户");
             }
         }
-        return buildResponse(user, target, true);
+        String sessionId = currentSessionId != null ? currentSessionId : UUID.randomUUID().toString();
+        LoginResponse response = buildResponse(user, target, true, sessionId);
+        onlineSessionService.register(user.getId(), user.getUsername(), user.getName(),
+                response.activeAssignmentId(), sessionId);
+        return response;
     }
 
     @Transactional(readOnly = true)
     public LoginResponse me(String username, String activeAssignment) {
         SysUser user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new BusinessException(401, "用户不存在"));
-        return buildResponse(user, activeAssignment, false);
+        return buildResponse(user, activeAssignment, false, null);
     }
 
     /**
@@ -124,15 +135,15 @@ public class AuthService {
             user.setAvatar(req.avatar());
         }
         userRepository.save(user);
-        return buildResponse(user, activeAssignment, false);
+        return buildResponse(user, activeAssignment, false, null);
     }
 
-    private LoginResponse buildResponse(SysUser user, String activeAssignment, boolean withToken) {
+    private LoginResponse buildResponse(SysUser user, String activeAssignment, boolean withToken, String sessionId) {
         List<SysUserAssignment> assignments = permissionService.findEnabledAssignments(user.getId());
         String active = permissionService.normalizeActive(activeAssignment, assignments);
         UserContext context = permissionService.loadUserContext(user.getUsername(), active);
         String token = withToken
-                ? jwtTokenProvider.createToken(user.getUsername(), user.getName(), active)
+                ? jwtTokenProvider.createToken(user.getUsername(), user.getName(), active, sessionId)
                 : null;
         return new LoginResponse(
                 token,

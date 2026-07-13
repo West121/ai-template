@@ -819,6 +819,37 @@ await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [lmainI
   await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [puId] })
 }
 
+/* ---------- 11f. 在线用户管理 + 踢人下线（磐石；临时会话，别搞死种子会话） ---------- */
+{
+  const OTS = Date.now()
+  const postIdO = (await call(admin.token, "GET", "/api/system/posts?pageNum=1&pageSize=5")).body?.data?.list?.[0]?.id
+  const empRoleO = (await call(admin.token, "GET", "/api/system/roles?pageNum=1&pageSize=100")).body?.data?.list?.find((r) => r.code === "EMPLOYEE")?.id
+  const ouName = `online_${OTS}`
+  const ou = await call(admin.token, "POST", "/api/system/users", { username: ouName, name: "在线测试", password: "onlinepass123", deptId: 2, postId: postIdO, roleIds: [empRoleO] })
+  const ouId = ou.body?.data?.id ?? ou.body?.data
+  const ouTok = (await call(null, "POST", "/api/auth/login", { username: ouName, password: "onlinepass123" })).body?.data?.token
+  check("在线用户:临时用户登录", !!ouTok)
+  // 列表含该会话（ip/location(ip2region)/client）+ 标记本人当前会话
+  const onlineList = await call(admin.token, "GET", "/api/system/online")
+  check("在线用户:列表端点鉴权(admin 可查)", onlineList.body?.code === 0, JSON.stringify(onlineList.status))
+  const ouSess = (onlineList.body?.data ?? []).find((s) => s.username === ouName)
+  check("在线用户:列表含该会话(有 ip/location/client)", !!ouSess && !!ouSess.ip && !!ouSess.location && !!ouSess.client, JSON.stringify(ouSess))
+  check("在线用户:标记请求者本人当前会话(current=true)", (onlineList.body?.data ?? []).some((s) => s.current === true))
+  // 无权限用户(zhangsan 无 system:online:list) → 403
+  check("在线用户:无权限(zhangsan)调列表→403", (await call(zhangsan.token, "GET", "/api/system/online")).status === 403)
+  // 护栏:不能踢自己当前会话 → 400
+  const mySess = (onlineList.body?.data ?? []).find((s) => s.current === true)
+  check("在线用户:不能踢自己当前会话→400", mySess && (await call(admin.token, "POST", `/api/system/online/${mySess.sessionId}/kick`)).body?.code === 400)
+  // 被踢前 token 可用 → 踢 → 下次请求 401
+  check("在线用户:被踢前 token 可用", (await call(ouTok, "GET", "/api/auth/me")).body?.code === 0)
+  const kick = await call(admin.token, "POST", `/api/system/online/${ouSess.sessionId}/kick`)
+  check("在线用户:踢下线成功", kick.body?.code === 0, JSON.stringify(kick.body))
+  check("在线用户:被踢后该 token 下次请求→401(已下线)", (await call(ouTok, "GET", "/api/auth/me")).status === 401)
+  check("在线用户:被踢后列表不再含该会话", !((await call(admin.token, "GET", "/api/system/online")).body?.data ?? []).some((s) => s.sessionId === ouSess.sessionId))
+  // 自清（删临时用户；其会话已删）
+  await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [ouId] })
+}
+
 /* ---------- 12. 定时任务信息 ---------- */
 const jobs = await call(admin.token, "GET", "/api/system/jobs")
 check("定时任务信息(3 个 handler)", jobs.body?.data?.handlers?.length === 3 && jobs.body.data.appname === "oa-executor")
