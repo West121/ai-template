@@ -4,8 +4,10 @@ import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.common.security.UserContext;
 import com.xingchen.oa.infra.service.LoginLogService;
 import com.xingchen.oa.system.datadim.DataDimensionService;
+import com.xingchen.oa.system.dto.ChangePasswordRequest;
 import com.xingchen.oa.system.dto.LoginRequest;
 import com.xingchen.oa.system.dto.LoginResponse;
+import com.xingchen.oa.system.dto.ProfileUpdateRequest;
 import com.xingchen.oa.system.entity.SysUser;
 import com.xingchen.oa.system.entity.SysUserAssignment;
 import com.xingchen.oa.system.repository.SysUserRepository;
@@ -14,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.util.List;
 
@@ -78,6 +81,52 @@ public class AuthService {
         return buildResponse(user, activeAssignment, false);
     }
 
+    /**
+     * 个人中心·修改密码（改自己，仅需登录，按 CurrentUserHolder 定位本人）。
+     * 原密码错 → 400；新密码 &lt;6 位或与原密码相同 → 400。token 不失效（保持简单）。
+     */
+    @Transactional
+    public void changePassword(String username, ChangePasswordRequest req) {
+        SysUser user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new BusinessException(401, "用户不存在"));
+        if (!passwordEncoder.matches(req.oldPassword(), user.getPassword())) {
+            throw new BusinessException(400, "原密码错误");
+        }
+        String pwd = req.newPassword();
+        if (pwd == null || pwd.length() < 6) {
+            throw new BusinessException(400, "新密码长度至少 6 位");
+        }
+        if (passwordEncoder.matches(pwd, user.getPassword())) {
+            throw new BusinessException(400, "新密码不能与原密码相同");
+        }
+        user.setPassword(passwordEncoder.encode(pwd));
+        userRepository.save(user);
+    }
+
+    /**
+     * 个人中心·更新本人安全档案（仅本人）：nickname→name（非空才改）、phone/email/avatar（null 不改，空串可清）。
+     * <b>绝不</b>改 dept/post/role/status/enabled 等身份/权限字段。返回同 /me 形状（含更新后 user，不重签 token）。
+     */
+    @Transactional
+    public LoginResponse updateProfile(String username, ProfileUpdateRequest req, String activeAssignment) {
+        SysUser user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new BusinessException(401, "用户不存在"));
+        if (StringUtils.hasText(req.nickname())) {
+            user.setName(req.nickname().trim()); // name NOT NULL：仅非空覆盖
+        }
+        if (req.phone() != null) {
+            user.setPhone(req.phone().trim());
+        }
+        if (req.email() != null) {
+            user.setEmail(req.email().trim());
+        }
+        if (req.avatar() != null) {
+            user.setAvatar(req.avatar());
+        }
+        userRepository.save(user);
+        return buildResponse(user, activeAssignment, false);
+    }
+
     private LoginResponse buildResponse(SysUser user, String activeAssignment, boolean withToken) {
         List<SysUserAssignment> assignments = permissionService.findEnabledAssignments(user.getId());
         String active = permissionService.normalizeActive(activeAssignment, assignments);
@@ -87,7 +136,8 @@ public class AuthService {
                 : null;
         return new LoginResponse(
                 token,
-                new LoginResponse.UserInfo(user.getId(), user.getUsername(), user.getName()),
+                new LoginResponse.UserInfo(user.getId(), user.getUsername(), user.getName(),
+                        user.getEmail(), user.getPhone(), user.getAvatar()),
                 permissionService.toAssignmentInfos(assignments),
                 active,
                 context.getPermissions());

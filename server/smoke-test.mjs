@@ -781,6 +781,44 @@ await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [lmainI
   check("DP 清空后读回为空", ((await call(admin.token, "GET", "/api/system/users/1/data-dimensions")).body?.data ?? []).length === 0)
 }
 
+/* ---------- 11e. 个人中心自助端点（磐石：change-password / profile，仅本人，不动种子密码） ---------- */
+{
+  const PTS = Date.now()
+  const postIdP = (await call(admin.token, "GET", "/api/system/posts?pageNum=1&pageSize=5")).body?.data?.list?.[0]?.id
+  const empRoleP = (await call(admin.token, "GET", "/api/system/roles?pageNum=1&pageSize=100")).body?.data?.list?.find((r) => r.code === "EMPLOYEE")?.id
+  const puName = `pctest_${PTS}`
+  const pu = await call(admin.token, "POST", "/api/system/users", { username: puName, name: "个人中心测试", password: "oldpass123", deptId: 2, postId: postIdP, roleIds: [empRoleP] })
+  const puId = pu.body?.data?.id ?? pu.body?.data
+  const puTok = (await call(null, "POST", "/api/auth/login", { username: puName, password: "oldpass123" })).body?.data?.token
+  check("个人中心:临时测试用户创建+登录", !!(puId && puTok))
+  // /me user 补 email/phone/avatar
+  const me1 = await call(puTok, "GET", "/api/auth/me")
+  const u1 = me1.body?.data?.user
+  check("个人中心:/me user 含 email/phone/avatar 字段", !!u1 && "email" in u1 && "phone" in u1 && "avatar" in u1, JSON.stringify(Object.keys(u1 ?? {})))
+  // change-password 红线
+  check("个人中心:改密码 原密码错→400", (await call(puTok, "POST", "/api/auth/change-password", { oldPassword: "wrongold", newPassword: "newpass123" })).body?.code === 400)
+  check("个人中心:改密码 新密码<6位→400", (await call(puTok, "POST", "/api/auth/change-password", { oldPassword: "oldpass123", newPassword: "12345" })).body?.code === 400)
+  check("个人中心:改密码 新=原→400", (await call(puTok, "POST", "/api/auth/change-password", { oldPassword: "oldpass123", newPassword: "oldpass123" })).body?.code === 400)
+  const cpOk = await call(puTok, "POST", "/api/auth/change-password", { oldPassword: "oldpass123", newPassword: "newpass456" })
+  check("个人中心:改密码 正确→ok", cpOk.body?.code === 0, JSON.stringify(cpOk.body))
+  // 新密码可登录、旧密码拒登录
+  const reNew = await call(null, "POST", "/api/auth/login", { username: puName, password: "newpass456" })
+  check("个人中心:改密后新密码可登录", reNew.body?.code === 0 && !!reNew.body?.data?.token)
+  check("个人中心:改密后旧密码拒登录", (await call(null, "POST", "/api/auth/login", { username: puName, password: "oldpass123" })).body?.code !== 0)
+  // profile 更新 nickname/phone/email → 返回更新后 user + /me 反映；越权字段不受影响
+  const newTok = reNew.body?.data?.token
+  const prof = await call(newTok, "PUT", "/api/auth/profile", { nickname: "新昵称", phone: "13900001111", email: "pc@test.com" })
+  const up = prof.body?.data?.user
+  check("个人中心:profile 更新返回 user(同 /me 形状,nickname→name)",
+    prof.body?.code === 0 && up?.name === "新昵称" && up?.phone === "13900001111" && up?.email === "pc@test.com", JSON.stringify(up))
+  const me2u = (await call(newTok, "GET", "/api/auth/me")).body?.data?.user
+  check("个人中心:/me 反映 profile 更新(name/phone/email)", me2u?.name === "新昵称" && me2u?.phone === "13900001111" && me2u?.email === "pc@test.com")
+  // 越权/未登录防护
+  check("个人中心:未登录改密码→401", (await call(null, "POST", "/api/auth/change-password", { oldPassword: "x", newPassword: "yyyyyy" })).status === 401)
+  // 自清（临时用户删除，绝不残留可登录账号）
+  await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [puId] })
+}
+
 /* ---------- 12. 定时任务信息 ---------- */
 const jobs = await call(admin.token, "GET", "/api/system/jobs")
 check("定时任务信息(3 个 handler)", jobs.body?.data?.handlers?.length === 3 && jobs.body.data.appname === "oa-executor")

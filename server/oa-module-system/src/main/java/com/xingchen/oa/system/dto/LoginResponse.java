@@ -14,6 +14,6 @@ public record LoginResponse(
         List<String> permissions
 ) {
 
-    public record UserInfo(Long id, String username, String name) {
+    public record UserInfo(Long id, String username, String name, String email, String phone, String avatar) {
     }
 }
