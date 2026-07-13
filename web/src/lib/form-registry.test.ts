@@ -66,6 +66,36 @@ describe("formRegistry", () => {
     expect(m).toEqual(online)
   })
 
+  it("getFormManifest：ONLINE formKey 带版本(leave:1) → 后端用纯 code(leave) 查", async () => {
+    const online: FormFieldManifest = {
+      formKey: "leave",
+      formType: "ONLINE",
+      fields: [{ key: "days", label: "请假天数", type: "number" }],
+    }
+    const fetchSpy = vi.fn(async () =>
+      new Response(JSON.stringify({ code: 0, message: "ok", data: online }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    vi.stubGlobal("fetch", fetchSpy)
+    const m = await getFormManifest("leave:1")
+    expect(m).toEqual(online)
+    // 关键:请求的是 /api/wf/forms/leave/fields,不是 leave:1(去掉版本后缀)
+    const url = String(fetchSpy.mock.calls[0]?.[0] ?? "")
+    expect(url).toContain("/api/wf/forms/leave/fields")
+    expect(url).not.toContain("leave:1")
+  })
+
+  it("getFormManifest：CODE formKey 带版本 → registry 按纯 code 兜底命中，不发请求", async () => {
+    registerForm("demo_code", { component: Dummy, manifest: codeManifest })
+    const fetchSpy = vi.fn()
+    vi.stubGlobal("fetch", fetchSpy)
+    const m = await getFormManifest("demo_code:3")
+    expect(m).toEqual(codeManifest)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
   it("getFormManifest：ONLINE 404 → 抛清晰错误", async () => {
     vi.stubGlobal(
       "fetch",

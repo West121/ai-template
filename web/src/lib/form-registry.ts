@@ -71,11 +71,15 @@ export function registeredFormKeys(): string[] {
  * 找不到时抛出清晰错误，区分「后端未连接」与「表单不存在」。
  */
 export async function getFormManifest(formKey: string): Promise<FormFieldManifest> {
-  const local = registry.get(formKey)
+  // formKey 约定为 `formCode` 或 `formCode:version`（GRAPH 流程 userTask 绑定含版本号）。
+  // CODE registry 按原 key 命中;ONLINE 后端字段清单端点按 **纯 code** 解析（取最新/绑定版本），
+  // 故去掉 `:version` 后缀——否则 `leave:1` 会被当成 code 查不到（表单不存在: leave:1）。
+  const codeOnly = formKey.includes(":") ? formKey.slice(0, formKey.indexOf(":")) : formKey
+  const local = registry.get(formKey) ?? registry.get(codeOnly)
   if (local) return local.manifest
 
   try {
-    return await api<FormFieldManifest>(`/api/wf/forms/${encodeURIComponent(formKey)}/fields`)
+    return await api<FormFieldManifest>(`/api/wf/forms/${encodeURIComponent(codeOnly)}/fields`)
   } catch (err) {
     if (err instanceof NetworkError) {
       throw new Error(`无法加载表单「${formKey}」的字段清单：后端未连接`)
