@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import type { ColumnDef } from "@tanstack/react-table"
-import { History, KeyRound, Play, Plus, RotateCcw, Workflow } from "lucide-react"
+import { History, KeyRound, Play, Plus, RotateCcw, Trash2, Workflow } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader } from "@/components/page-header"
 import { DataTable } from "@/components/data-table/data-table"
@@ -37,9 +37,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { DemoBanner } from "@/pages/document/gongwen/shared"
 import {
   deleteCredential,
+  deleteFlow,
   fetchCredentials,
   fetchExecDetail,
   fetchExecs,
@@ -389,6 +399,8 @@ export default function AutomationPage() {
   const [demo, setDemo] = useState(false)
   const [execsFor, setExecsFor] = useState<OrchFlow | null>(null)
   const [credsOpen, setCredsOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<OrchFlow | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -503,6 +515,11 @@ export default function AutomationPage() {
                 <Play className="size-3.5" /> 运行
               </Button>
             )}
+            {canWrite && (
+              <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs text-rose-600 hover:text-rose-600" onClick={(e) => { e.stopPropagation(); setDeleteTarget(row.original) }}>
+                <Trash2 className="size-3.5" /> 删除
+              </Button>
+            )}
           </div>
         ),
       },
@@ -542,6 +559,41 @@ export default function AutomationPage() {
       />
 
       <ExecsDrawer flow={execsFor} open={execsFor !== null} onClose={() => setExecsFor(null)} />
+
+      {/* 删除编排流程确认 */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && !deleting && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除编排「{deleteTarget?.name}」?</AlertDialogTitle>
+            <AlertDialogDescription>
+              将删除该自动化编排及其执行记录,不可恢复。若有触发器(定时/事件/Webhook)将一并失效。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              disabled={deleting}
+              onClick={async () => {
+                if (!deleteTarget) return
+                setDeleting(true)
+                try {
+                  await deleteFlow(deleteTarget.id)
+                  toast.success(`已删除「${deleteTarget.name}」`)
+                  setDeleteTarget(null)
+                  void load()
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : "删除失败")
+                } finally {
+                  setDeleting(false)
+                }
+              }}
+            >
+              {deleting ? "删除中…" : "删除"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <CredentialsDialog open={credsOpen} onClose={() => setCredsOpen(false)} />
     </div>
   )

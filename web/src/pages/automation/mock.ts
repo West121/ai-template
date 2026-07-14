@@ -361,6 +361,17 @@ export function toggleFlow(id: number, enabled: boolean): Promise<OrchResult<voi
   )
 }
 
+/** 删除编排流程（后端 DELETE /api/orch/flows/{id}，级联执行记录由后端处理）。 */
+export function deleteFlow(id: number): Promise<OrchResult<void>> {
+  return withMock(
+    () => api<void>(`/api/orch/flows/${id}`, { method: "DELETE" }),
+    () => {
+      const i = FLOWS.findIndex((x) => x.id === id)
+      if (i >= 0) FLOWS.splice(i, 1)
+    },
+  )
+}
+
 /* ============================ run / execs ============================ */
 
 /** 手动/测试运行：返回 execId，随后轮询 fetchExecDetail */
