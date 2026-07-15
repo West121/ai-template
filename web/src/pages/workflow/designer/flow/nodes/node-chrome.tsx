@@ -2,7 +2,7 @@
  * 自定义节点共享外观：连线锚点样式、节点名标签、选中/校验高亮环、
  * 圆角矩形活动卡（ActivityCard）、菱形网关壳（GatewayShell）、节点悬浮操作条（NodeToolbarActions）。
  */
-import { createContext, Fragment, useContext, type ComponentType, type ReactNode } from "react"
+import { createContext, useContext, type ComponentType, type ReactNode } from "react"
 import { Handle, NodeToolbar, Position } from "@xyflow/react"
 import { Copy, Lock, Trash2, type LucideProps } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -40,9 +40,10 @@ export const handleClass = (extra?: string) =>
 
 /**
  * 四边连接锚点（对齐 bpmn-js：节点四边皆可作连线出入点，平时隐、hover 显）。
- * 每条边叠一层 `source` + 一层 `target`（react-flow 默认 source 只出、target 只入）：任意边都能拉出/接入。
- * 起点/终点语义（起始只出、结束只入…）由 validate.ts 的连接规则校验保证，视觉上锚点全给。
- * react-flow 会据拖拽方向就近选边；实际成线由 sequence-flow-edge 的浮动几何决定，故 Handle id 不入序列化、往返无关。
+ * 每条边只渲染**一个** `source` handle（配合画布 `ConnectionMode.Loose`，同一 handle 可发可收）——
+ * 不再在同点叠放 source+target（strict 下上层 target 会盖住 source，导致源节点拖不出线）。
+ * 起点/终点语义（起始只出、结束只入…）由 validate.ts 的连接规则校验保证。
+ * react-flow 据拖拽方向就近选边；实际成线由 sequence-flow-edge 的浮动几何决定，故 Handle id 不入序列化、往返无关。
  */
 const HANDLE_SIDES = [Position.Top, Position.Right, Position.Bottom, Position.Left] as const
 
@@ -50,10 +51,7 @@ export function NodeHandles({ color }: { color: string }) {
   return (
     <>
       {HANDLE_SIDES.map((pos) => (
-        <Fragment key={pos}>
-          <Handle type="target" id={`t-${pos}`} position={pos} className={handleClass(color)} />
-          <Handle type="source" id={`s-${pos}`} position={pos} className={handleClass(color)} />
-        </Fragment>
+        <Handle key={pos} type="source" id={`s-${pos}`} position={pos} className={handleClass(color)} />
       ))}
     </>
   )

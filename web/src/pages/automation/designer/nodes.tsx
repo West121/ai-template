@@ -3,7 +3,6 @@
  * 全类型共用一个卡片壳（按类型取色/图标/摘要），执行态（测试运行回放）用 data.execStatus 徽标呈现。
  */
 import type { ComponentType } from "react"
-import { Fragment } from "react"
 import { Handle, Position, type NodeProps, type NodeTypes } from "@xyflow/react"
 import {
   Bell,
@@ -197,8 +196,6 @@ function OrchCard({ id: _id, type, data, selected }: NodeProps<OrchRfNode>) {
   const meta = NODE_META[(type ?? "http") as OrchNodeType]
   const Icon = meta.icon
   const exec = data.execStatus ? EXEC_BADGE[data.execStatus] : null
-  const noIn = type === "trigger"
-  const noOut = type === "end"
   return (
     <div
       className={cn(
@@ -220,31 +217,19 @@ function OrchCard({ id: _id, type, data, selected }: NodeProps<OrchRfNode>) {
         {exec && <exec.icon className={cn("size-3.5 shrink-0", exec.cls)} />}
       </div>
       <div className="truncate px-3 py-2 text-xs text-muted-foreground">{summarizeNode(meta.type, data)}</div>
+      {/* 每边只一个 source handle（ConnectionMode.Loose 下可发可收）——避免 source/target 叠放，
+          方向交给 checkConnection（触发不入、结束不出）。边为浮动锚点（OrchEdge），不依赖 handle id。 */}
       {HANDLE_SIDES.map((pos) => (
-        <Fragment key={pos}>
-          {!noOut && (
-            <Handle
-              type="source"
-              id={`s-${pos}`}
-              position={pos}
-              className={cn(
-                "!size-2.5 !rounded-full !border-2 !border-background opacity-0 transition-opacity duration-150 group-hover:opacity-100",
-                meta.handleColor,
-              )}
-            />
+        <Handle
+          key={pos}
+          type="source"
+          id={`s-${pos}`}
+          position={pos}
+          className={cn(
+            "!size-2.5 !rounded-full !border-2 !border-background opacity-0 transition-opacity duration-150 group-hover:opacity-100",
+            meta.handleColor,
           )}
-          {!noIn && (
-            <Handle
-              type="target"
-              id={`t-${pos}`}
-              position={pos}
-              className={cn(
-                "!size-2.5 !rounded-full !border-2 !border-background opacity-0 transition-opacity duration-150 group-hover:opacity-100",
-                meta.handleColor,
-              )}
-            />
-          )}
-        </Fragment>
+        />
       ))}
     </div>
   )

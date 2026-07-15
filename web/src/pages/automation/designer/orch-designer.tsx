@@ -11,6 +11,7 @@ import {
   addEdge,
   Background,
   BackgroundVariant,
+  ConnectionMode,
   Controls,
   getSmoothStepPath,
   Position,
@@ -37,6 +38,7 @@ import { defaultConfig, validateOrchModel, type OrchIssue, type OrchModel, type 
 import { NODE_META, ORCH_DND_MIME, orchNodeTypes, PALETTE_GROUPS } from "./nodes"
 import { OrchEdgePanel, OrchNodePanel, type UpstreamNode } from "./panel"
 import {
+  checkConnection,
   fromOrchModel,
   ORCH_EDGE_TYPE,
   toOrchModel,
@@ -163,15 +165,6 @@ function layoutNodes(nodes: OrchRfNode[], edges: OrchRfEdge[]): OrchRfNode[] {
 }
 
 /* ============================ 连线校验 ============================ */
-
-function checkConnection(source: OrchRfNode | undefined, target: OrchRfNode | undefined, edges: OrchRfEdge[], c: Connection): string | null {
-  if (!source || !target) return "节点不存在"
-  if (c.source === c.target) return "不能连接自身"
-  if (target.type === "trigger") return "触发节点不能有入边"
-  if (source.type === "end") return "结束节点不能有出边"
-  if (edges.some((e) => e.source === c.source && e.target === c.target)) return "已存在同向连线"
-  return null
-}
 
 /* ============================ 主体 ============================ */
 
@@ -415,6 +408,9 @@ function OrchDesignerInner({ initialModel, meta, credentials, flows, onDirty, re
         <div className="min-w-0 flex-1" onDragOver={(e) => { if (e.dataTransfer.types.includes(ORCH_DND_MIME)) e.preventDefault() }} onDrop={onDrop}>
           <ReactFlow<OrchRfNode, OrchRfEdge>
             colorMode={dark ? "dark" : "light"}
+            // Loose：每节点每边只一个 handle，可发可收；方向完全由 checkConnection 判定
+            // （否则 strict 下同点叠放的 target 盖住 source，脚本这类源节点拖不出线）
+            connectionMode={ConnectionMode.Loose}
             nodes={displayNodes}
             edges={edges}
             nodeTypes={orchNodeTypes}

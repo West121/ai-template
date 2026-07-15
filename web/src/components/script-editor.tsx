@@ -14,12 +14,13 @@
  * 禁 any；类型导入一律 import type。
  */
 import { useState } from "react"
-import { AlertTriangle, Loader2, Play, ShieldAlert } from "lucide-react"
+import { AlertTriangle, ChevronDown, FlaskConical, Loader2, Play, ShieldAlert } from "lucide-react"
 import { api, ApiError, NetworkError } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { useHasPerm } from "@/stores/auth-store"
 import { CodeEditor, type CodeLanguage } from "@/components/code-editor"
 import type { ScriptConfig, ScriptLang } from "@/pages/workflow/designer/flow/model"
@@ -92,6 +93,8 @@ export function ScriptEditor({ value, onChange, className }: ScriptEditorProps) 
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<ScriptTestRunResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [warnOpen, setWarnOpen] = useState(false) // 安全警告详情（一行常显 + 可展开）
+  const [debugOpen, setDebugOpen] = useState(false) // 测试运行/调试折叠区（默认收起）
 
   const langMeta = LANGS.find((l) => l.value === value.lang) ?? LANGS[0]
 
@@ -148,17 +151,22 @@ export function ScriptEditor({ value, onChange, className }: ScriptEditorProps) 
 
   return (
     <div className={cn("space-y-3", className)}>
-      {/* 诚实标注：非沙箱、完整权限、仅受信管理员可写（治理 §3.3） */}
-      <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-700 dark:text-amber-400">
-        <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
-        <div className="space-y-0.5">
-          <div className="font-medium">脚本以应用完整权限运行 · 非沙箱</div>
-          <div>
-            后端脚本可读写流程变量、调用任意 Spring Bean，等同受信代码；仅平台管理员（
-            <code className="font-mono">wf:script:write</code>）可编写与测试运行。请勿粘贴不可信脚本。
-          </div>
+      {/* 诚实标注（治理 §3.3「不撒谎」红线）：非沙箱 + 完整权限一行常显，详情可展开——警告必可见，压成一行不占版面 */}
+      <Collapsible open={warnOpen} onOpenChange={setWarnOpen}>
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-700 dark:text-amber-400">
+          <CollapsibleTrigger className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left">
+            <ShieldAlert className="size-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate font-medium">
+              脚本以应用完整权限运行 · 非沙箱（仅 <code className="font-mono">wf:script:write</code> 受信管理员可写）
+            </span>
+            <span className="shrink-0 text-[10px] opacity-80">{warnOpen ? "收起" : "详情"}</span>
+            <ChevronDown className={cn("size-3.5 shrink-0 transition-transform", warnOpen && "rotate-180")} />
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pb-2 pl-7 pr-2.5 leading-relaxed">
+            后端脚本可读写流程变量、调用任意 Spring Bean，等同受信代码；前端绝不 eval/new Function，脚本只在后端受控执行、同权限同审计。请勿粘贴不可信脚本。
+          </CollapsibleContent>
         </div>
-      </div>
+      </Collapsible>
 
       {/* 语言切换 */}
       <Tabs value={value.lang} onValueChange={setLang}>
@@ -186,92 +194,104 @@ export function ScriptEditor({ value, onChange, className }: ScriptEditorProps) 
         ariaLabel="脚本代码"
       />
 
-      {/* 上下文变量/函数速查 */}
-      <div className="space-y-1 rounded-md border bg-muted/40 px-2.5 py-2">
-        <div className="text-[11px] font-medium text-muted-foreground">可用上下文（后端注入）</div>
-        <ul className="grid grid-cols-1 gap-x-3 gap-y-0.5 sm:grid-cols-2">
-          {CONTEXT_HINTS.map((h) => (
-            <li key={h.name} className="flex items-baseline gap-1.5 text-[11px]">
-              <code className="shrink-0 font-mono text-foreground">{h.name}</code>
-              <span className="text-muted-foreground">{h.desc}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-
       {readOnly && (
         <div className="flex items-center gap-1.5 rounded-md border border-dashed px-2.5 py-1.5 text-[11px] text-muted-foreground">
           <AlertTriangle className="size-3.5" /> 只读：编写/测试运行脚本需 <code className="font-mono">wf:script:write</code> 权限（仅受信管理员）
         </div>
       )}
 
-      {/* 测试运行 */}
-      {!readOnly && (
-        <div className="space-y-2">
-          <div className="space-y-1">
-            <div className="text-[11px] text-muted-foreground">样例流程变量（可选，JSON 对象；测试运行时注入 vars）</div>
-            <Textarea
-              value={sampleVarsText}
-              onChange={(e) => setSampleVarsText(e.target.value)}
-              placeholder={'{ "days": 2, "amount": 500 }'}
-              spellCheck={false}
-              rows={2}
-              className="font-mono text-[11px]"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              className="h-7 text-xs"
-              disabled={running || value.code.trim() === ""}
-              onClick={runTest}
-            >
-              {running ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
-              测试运行
-            </Button>
-            <span className="text-[11px] text-muted-foreground">调用后端脚本引擎（同权限、同审计）</span>
-          </div>
-        </div>
-      )}
-
-      {/* 错误 */}
-      {error && (
-        <div className="rounded-md border border-rose-500/30 bg-rose-500/5 px-2.5 py-1.5 text-[11px] text-rose-600">
-          {error}
-        </div>
-      )}
-
-      {/* 结果 */}
-      {result && (
-        <div
-          className={cn(
-            "space-y-1.5 rounded-md border px-2.5 py-2 text-[11px]",
-            result.success ? "border-emerald-500/30 bg-emerald-500/5" : "border-rose-500/30 bg-rose-500/5",
-          )}
-        >
-          <div className="flex items-center justify-between">
-            <span className={result.success ? "font-medium text-emerald-600" : "font-medium text-rose-600"}>
-              {result.success ? "运行成功" : "运行失败"}
+      {/* 测试运行 / 调试（默认收起）：上下文速查 + 样例变量 + 测试运行 + 结果，全部功能保留、不占主版面 */}
+      <Collapsible open={debugOpen} onOpenChange={setDebugOpen} className="rounded-md border">
+        <CollapsibleTrigger className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs font-medium">
+          <FlaskConical className="size-3.5 text-muted-foreground" />
+          <span className="flex-1">测试运行 / 调试</span>
+          {result && (
+            <span className={cn("text-[10px]", result.success ? "text-emerald-600" : "text-rose-600")}>
+              {result.success ? "上次成功" : "上次失败"}
             </span>
-            <span className="text-muted-foreground">耗时 {result.costMs}ms</span>
+          )}
+          <ChevronDown className={cn("size-3.5 shrink-0 transition-transform", debugOpen && "rotate-180")} />
+        </CollapsibleTrigger>
+        <CollapsibleContent className="space-y-2 border-t px-2.5 py-2">
+          {/* 可用上下文速查（后端注入） */}
+          <div className="space-y-1">
+            <div className="text-[11px] font-medium text-muted-foreground">可用上下文（后端注入）</div>
+            <ul className="grid grid-cols-1 gap-x-3 gap-y-0.5 sm:grid-cols-2">
+              {CONTEXT_HINTS.map((h) => (
+                <li key={h.name} className="flex items-baseline gap-1.5 text-[11px]">
+                  <code className="shrink-0 font-mono text-foreground">{h.name}</code>
+                  <span className="text-muted-foreground">{h.desc}</span>
+                </li>
+              ))}
+            </ul>
           </div>
-          {result.error && <div className="whitespace-pre-wrap font-mono text-rose-600">{result.error}</div>}
-          {result.success && (
-            <div>
-              返回值
-              {result.resultType && <span className="text-muted-foreground">（{result.resultType}）</span>}：
-              <span className="font-mono text-foreground"> {formatValue(result.result)}</span>
+
+          {!readOnly && (
+            <div className="space-y-2">
+              <div className="space-y-1">
+                <div className="text-[11px] text-muted-foreground">样例流程变量（可选，JSON 对象；测试运行时注入 vars）</div>
+                <Textarea
+                  value={sampleVarsText}
+                  onChange={(e) => setSampleVarsText(e.target.value)}
+                  placeholder={'{ "days": 2, "amount": 500 }'}
+                  spellCheck={false}
+                  rows={2}
+                  className="font-mono text-[11px]"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-7 text-xs"
+                  disabled={running || value.code.trim() === ""}
+                  onClick={runTest}
+                >
+                  {running ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
+                  测试运行
+                </Button>
+                <span className="text-[11px] text-muted-foreground">调用后端脚本引擎（同权限、同审计）</span>
+              </div>
             </div>
           )}
-          <div>
-            <div className="text-muted-foreground">运行后流程变量 vars：</div>
-            <pre className="mt-0.5 max-h-40 overflow-auto rounded border bg-background px-2 py-1.5 font-mono">
-              {JSON.stringify(result.vars, null, 2)}
-            </pre>
-          </div>
-        </div>
-      )}
+
+          {error && (
+            <div className="rounded-md border border-rose-500/30 bg-rose-500/5 px-2.5 py-1.5 text-[11px] text-rose-600">
+              {error}
+            </div>
+          )}
+
+          {result && (
+            <div
+              className={cn(
+                "space-y-1.5 rounded-md border px-2.5 py-2 text-[11px]",
+                result.success ? "border-emerald-500/30 bg-emerald-500/5" : "border-rose-500/30 bg-rose-500/5",
+              )}
+            >
+              <div className="flex items-center justify-between">
+                <span className={result.success ? "font-medium text-emerald-600" : "font-medium text-rose-600"}>
+                  {result.success ? "运行成功" : "运行失败"}
+                </span>
+                <span className="text-muted-foreground">耗时 {result.costMs}ms</span>
+              </div>
+              {result.error && <div className="whitespace-pre-wrap font-mono text-rose-600">{result.error}</div>}
+              {result.success && (
+                <div>
+                  返回值
+                  {result.resultType && <span className="text-muted-foreground">（{result.resultType}）</span>}：
+                  <span className="font-mono text-foreground"> {formatValue(result.result)}</span>
+                </div>
+              )}
+              <div>
+                <div className="text-muted-foreground">运行后流程变量 vars：</div>
+                <pre className="mt-0.5 max-h-40 overflow-auto rounded border bg-background px-2 py-1.5 font-mono">
+                  {JSON.stringify(result.vars, null, 2)}
+                </pre>
+              </div>
+            </div>
+          )}
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   )
 }

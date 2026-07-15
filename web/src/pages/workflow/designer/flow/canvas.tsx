@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState, type DragEvent } from "react"
 import {
   Background,
   BackgroundVariant,
+  ConnectionMode,
   Controls,
   ReactFlow,
   ReactFlowProvider,
@@ -159,6 +160,8 @@ function FlowCanvasInner(props: FlowCanvasProps) {
     >
       <ReactFlow<WfRfNode, WfRfEdge>
         colorMode={dark ? "dark" : "light"}
+        // Loose：每节点每边只一个 handle，可发可收；方向由 validateConnection 判定（起始只出/结束只入/边界只附着）
+        connectionMode={ConnectionMode.Loose}
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}

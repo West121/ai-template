@@ -4,7 +4,7 @@
  * react-flow 侧：`node.type` 复用 OrchNodeType 判别键；领域数据挂 `node.data`
  * （name + config），边条件挂 `edge.data`。往返无损（serialize.test.ts 锁定）。
  */
-import type { Edge, Node } from "@xyflow/react"
+import type { Connection, Edge, Node } from "@xyflow/react"
 import type { BranchCondition } from "@/pages/workflow/designer/types"
 import type { OrchEdge, OrchModel, OrchNode, OrchNodeConfig, OrchNodeType } from "./model"
 
@@ -33,6 +33,25 @@ export type OrchRfNode = Node<OrchNodeData>
 export type OrchRfEdge = Edge<OrchEdgeData>
 
 export const ORCH_EDGE_TYPE = "orchEdge"
+
+/**
+ * 连线即时校验：非法连接直接拒绝（返回原因供提示；null=可连）。
+ * 方向完全由此判定（触发不入、结束不出、禁自连、禁同向重复）——不依赖 handle 类型，
+ * 故画布用 `ConnectionMode.Loose` + 每边单 source handle 时方向仍严格正确。
+ */
+export function checkConnection(
+  source: OrchRfNode | undefined,
+  target: OrchRfNode | undefined,
+  edges: OrchRfEdge[],
+  c: Connection,
+): string | null {
+  if (!source || !target) return "节点不存在"
+  if (c.source === c.target) return "不能连接自身"
+  if (target.type === "trigger") return "触发节点不能有入边"
+  if (source.type === "end") return "结束节点不能有出边"
+  if (edges.some((e) => e.source === c.source && e.target === c.target)) return "已存在同向连线"
+  return null
+}
 
 export interface OrchMeta {
   key: string
