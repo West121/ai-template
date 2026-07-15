@@ -5,7 +5,7 @@
  *  - 「测试运行 / 调试」默认收起（上下文/样例变量/测试运行折进去）；展开后功能齐全
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useAuthStore } from "@/stores/auth-store"
@@ -52,5 +52,21 @@ describe("ScriptEditor 精简布局", () => {
     expect(await screen.findByText("可用上下文（后端注入）")).toBeTruthy()
     expect(screen.getByRole("button", { name: "测试运行" })).toBeTruthy()
     expect(screen.getByText(/样例流程变量/)).toBeTruthy()
+  })
+
+  it("放大 → Modal 里是完整 ScriptEditor（语言 Tab 在弹窗内可切）+ 防递归 + 可全屏", async () => {
+    const user = userEvent.setup()
+    renderEditor()
+    // 内嵌：语言 Tab 3 个 + 一个「放大」按钮
+    expect(screen.getAllByRole("tab")).toHaveLength(3)
+    await user.click(screen.getByRole("button", { name: "放大编辑" }))
+    // Modal：标题 + 完整 ScriptEditor（语言 Tab 变 3×2=6，安全警告两份）
+    expect(await screen.findByText("编辑脚本")).toBeTruthy()
+    await waitFor(() => expect(document.querySelectorAll('[role="tab"]').length).toBe(6))
+    expect(document.querySelectorAll(".cm-editor").length).toBe(2)
+    // 防递归：弹窗内实例无放大按钮（全局仍 1 个）
+    expect(document.querySelectorAll('[aria-label="放大编辑"]')).toHaveLength(1)
+    // 项目高级弹窗：带「全屏」按钮（fullscreenable）
+    expect(document.querySelector('[aria-label="全屏"]')).toBeTruthy()
   })
 })

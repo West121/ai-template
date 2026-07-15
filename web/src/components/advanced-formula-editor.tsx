@@ -19,7 +19,7 @@ import { AlertCircle, CheckCircle2, FunctionSquare, Maximize2, Search } from "lu
 import ReactCodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Modal } from "@/components/modal"
 import { Input } from "@/components/ui/input"
 import { isDarkMode } from "@/lib/theme"
 import { useAppStore } from "@/stores/app-store"
@@ -377,33 +377,36 @@ export function AdvancedFormulaEditor({
       </div>
     </div>
 
-    {/* 放大到弹窗：复用同一套 createFormulaExtensions（字段补全/校验不降级）+ 同 value/onChange 实时同步 */}
+    {/* 放大：项目高级弹窗（拖拽/全屏/伸缩）里是**完整**公式编辑器——复用同一套 createFormulaExtensions
+        （字段补全/校验/参数提示/函数库/预览不降级）+ 同 value/onChange 实时同步；autoFocus=false 放行
+        CodeMirror 焦点（否则无法输入）；内层 expandable=false 防递归 */}
     {expandable && (
-      <Dialog open={expanded} onOpenChange={setExpanded}>
-        <DialogContent className="max-w-4xl">
-          <DialogHeader>
-            <DialogTitle>编辑公式 · fx</DialogTitle>
-          </DialogHeader>
-          <div className="h-[62vh]">
-            <AdvancedFormulaEditor
-              value={value}
-              onChange={onChange}
-              functions={functions}
-              fields={fields}
-              validate={validate}
-              evaluate={evaluate}
-              sampleContext={sampleContext}
-              keywords={keywords}
-              placeholder={placeholder}
-              className="h-full"
-              expandable={false}
-            />
-          </div>
-          <DialogFooter>
-            <Button onClick={() => setExpanded(false)}>完成</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <Modal
+        open={expanded}
+        onOpenChange={setExpanded}
+        title="编辑公式 · fx"
+        width={typeof window === "undefined" ? 960 : Math.min(1080, Math.round(window.innerWidth * 0.82))}
+        height={typeof window === "undefined" ? 640 : Math.min(760, Math.round(window.innerHeight * 0.82))}
+        autoFocus={false}
+        bodyClassName="flex flex-col p-3"
+        footer={<Button onClick={() => setExpanded(false)}>完成</Button>}
+      >
+        <div className="min-h-0 flex-1">
+          <AdvancedFormulaEditor
+            value={value}
+            onChange={onChange}
+            functions={functions}
+            fields={fields}
+            validate={validate}
+            evaluate={evaluate}
+            sampleContext={sampleContext}
+            keywords={keywords}
+            placeholder={placeholder}
+            className="h-full"
+            expandable={false}
+          />
+        </div>
+      </Modal>
     )}
     </>
   )

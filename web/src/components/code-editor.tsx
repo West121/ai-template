@@ -3,8 +3,8 @@
  *
  * 特性：行号 / 语法高亮 / 括号匹配·自动闭合 / 自动缩进 / 撤销重做；json 带 autocomplete + 实时 lint 标红；
  * 主题跟随 app-store themeMode 自动明暗（复用 isDarkMode）；base 主题透明底 + 等宽，外框（边框/聚焦环）由本组件容器给。
- * `expandable`：右上角「放大」按钮 → 打开大 Dialog，内嵌**同一受控** CodeEditor（同 value/onChange，实时同步），
- * 弹窗内不再 expandable（防无限递归）。
+ * `expandable`：右上角「放大」按钮 → 打开项目高级弹窗 `Modal`（可拖拽/可全屏/可伸缩，`autoFocus=false`
+ * 放行 CodeMirror 焦点），内嵌**同一受控** CodeEditor（同 value/onChange，实时同步），弹窗内不再 expandable（防递归）。
  *
  * 防白屏：value 非字符串一律容错为字符串；扩展工厂 codeEditorExtensions 无副作用；组件轻量、可被 lazy 包。
  */
@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils"
 import { isDarkMode } from "@/lib/theme"
 import { useAppStore } from "@/stores/app-store"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Modal } from "@/components/modal"
 import { codeEditorExtensions, type CodeLanguage } from "@/lib/code-editor-cm"
 
 export type { CodeLanguage } from "@/lib/code-editor-cm"
@@ -32,6 +32,15 @@ const LANGUAGE_LABEL: Record<CodeLanguage, string> = {
   python: "Python",
   expression: "表达式",
   text: "文本",
+}
+
+/** 放大弹窗初始尺寸（可拖拽/伸缩/全屏，仅初始值） */
+function modalSize(): { width: number; height: number } {
+  if (typeof window === "undefined") return { width: 960, height: 640 }
+  return {
+    width: Math.min(1080, Math.round(window.innerWidth * 0.82)),
+    height: Math.min(760, Math.round(window.innerHeight * 0.82)),
+  }
 }
 
 export interface CodeEditorProps {
@@ -53,6 +62,8 @@ export interface CodeEditorProps {
   lint?: boolean
   /** 右上角「放大到弹窗」编辑（内嵌区太小时用）；默认 false */
   expandable?: boolean
+  /** 撑满父容器（弹窗内用）：容器 h-full + 编辑器 100% 高 */
+  fill?: boolean
   className?: string
   ariaLabel?: string
 }
@@ -69,6 +80,7 @@ export function CodeEditor({
   lineNumbers = true,
   lint,
   expandable = false,
+  fill = false,
   className,
   ariaLabel,
 }: CodeEditorProps) {
@@ -88,6 +100,7 @@ export function CodeEditor({
         className={cn(
           "relative overflow-hidden rounded-md border bg-background focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
           readOnly ? "border-dashed opacity-90" : "border-input",
+          fill && "h-full [&_.cm-editor]:h-full [&>div]:h-full",
           className,
         )}
       >
@@ -98,10 +111,11 @@ export function CodeEditor({
           basicSetup={false}
           extensions={extensions}
           placeholder={placeholder}
-          minHeight={minHeight}
-          maxHeight={maxHeight}
+          minHeight={fill ? undefined : minHeight}
+          maxHeight={fill ? undefined : maxHeight}
+          height={fill ? "100%" : undefined}
           editable={!readOnly}
-          style={{ minHeight }}
+          style={fill ? { height: "100%" } : { minHeight }}
         />
         {expandable && (
           <button
@@ -116,13 +130,19 @@ export function CodeEditor({
         )}
       </div>
 
+      {/* 放大：项目高级弹窗（拖拽/全屏/伸缩）；autoFocus=false 放行 CodeMirror 焦点（否则无法输入） */}
       {expandable && (
-        <Dialog open={expanded} onOpenChange={setExpanded}>
-          <DialogContent className="max-w-4xl">
-            <DialogHeader>
-              <DialogTitle>编辑代码 · {LANGUAGE_LABEL[language]}</DialogTitle>
-            </DialogHeader>
-            {/* 同一受控编辑器：弹窗内改 → onChange → parent value 更新 → 内嵌同步；expandable=false 防递归 */}
+        <Modal
+          open={expanded}
+          onOpenChange={setExpanded}
+          title={`编辑代码 · ${LANGUAGE_LABEL[language]}`}
+          {...modalSize()}
+          autoFocus={false}
+          bodyClassName="flex flex-col p-3"
+          footer={<Button onClick={() => setExpanded(false)}>完成</Button>}
+        >
+          {/* 同一受控编辑器：弹窗内改 → onChange → parent value 更新 → 内嵌同步；expandable=false 防递归 */}
+          <div className="min-h-0 flex-1">
             <CodeEditor
               value={value}
               onChange={onChange}
@@ -133,15 +153,11 @@ export function CodeEditor({
               lineNumbers={lineNumbers}
               lint={lint}
               ariaLabel={ariaLabel}
-              minHeight="62vh"
-              maxHeight="62vh"
+              fill
               expandable={false}
             />
-            <DialogFooter>
-              <Button onClick={() => setExpanded(false)}>完成</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+          </div>
+        </Modal>
       )}
     </>
   )

@@ -38,6 +38,12 @@ export interface ModalProps {
   fullscreenable?: boolean
   /** 点击遮罩关闭，默认 true */
   maskClosable?: boolean
+  /**
+   * 打开时自动聚焦弹窗内首个可聚焦元素（Radix 默认行为），默认 true。
+   * 内嵌 CodeMirror 等富编辑器时传 false：阻止 Radix FocusScope 的挂载抢焦点，
+   * 否则焦点被夺走/来回争抢会导致编辑器无法输入（打字、方向键失效）。
+   */
+  autoFocus?: boolean
   className?: string
   /** 内容区（滚动容器）自定义样式 */
   bodyClassName?: string
@@ -62,6 +68,7 @@ export function Modal({
   resizable = true,
   fullscreenable = true,
   maskClosable = true,
+  autoFocus = true,
   className,
   bodyClassName,
 }: ModalProps) {
@@ -267,6 +274,7 @@ export function Modal({
           }}
           {...(description ? {} : { "aria-describedby": undefined })}
           onInteractOutside={maskClosable ? undefined : (e) => e.preventDefault()}
+          onOpenAutoFocus={autoFocus ? undefined : (e) => e.preventDefault()}
           className={cn(
             "fixed left-1/2 top-1/2 z-50 flex flex-col overflow-hidden border bg-background shadow-xl outline-none",
             "transition-[width,height,transform,border-radius] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]",

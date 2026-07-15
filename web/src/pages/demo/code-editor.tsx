@@ -216,6 +216,7 @@ export default function CodeEditorDemoPage() {
             readOnly={readOnly}
             lineWrap={lineWrap}
             lineNumbers={lineNumbers}
+            expandable
             minHeight="12rem"
             maxHeight="28rem"
             ariaLabel="代码编辑器演示"

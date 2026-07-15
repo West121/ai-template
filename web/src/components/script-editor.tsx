@@ -14,13 +14,14 @@
  * 禁 any；类型导入一律 import type。
  */
 import { useState } from "react"
-import { AlertTriangle, ChevronDown, FlaskConical, Loader2, Play, ShieldAlert } from "lucide-react"
+import { AlertTriangle, ChevronDown, FlaskConical, Loader2, Maximize2, Play, ShieldAlert } from "lucide-react"
 import { api, ApiError, NetworkError } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { Modal } from "@/components/modal"
 import { useHasPerm } from "@/stores/auth-store"
 import { CodeEditor, type CodeLanguage } from "@/components/code-editor"
 import type { ScriptConfig, ScriptLang } from "@/pages/workflow/designer/flow/model"
@@ -83,9 +84,13 @@ export interface ScriptEditorProps {
   value: ScriptConfig
   onChange: (next: ScriptConfig) => void
   className?: string
+  /** 「放大到弹窗」按钮（语言 Tab 旁），默认开；弹窗内实例传 false 防递归 */
+  expandable?: boolean
+  /** 弹窗内大号编辑区（代码区更高） */
+  large?: boolean
 }
 
-export function ScriptEditor({ value, onChange, className }: ScriptEditorProps) {
+export function ScriptEditor({ value, onChange, className, expandable = true, large = false }: ScriptEditorProps) {
   const canWrite = useHasPerm("wf:script:write")
   const readOnly = !canWrite
 
@@ -95,6 +100,7 @@ export function ScriptEditor({ value, onChange, className }: ScriptEditorProps) 
   const [error, setError] = useState<string | null>(null)
   const [warnOpen, setWarnOpen] = useState(false) // 安全警告详情（一行常显 + 可展开）
   const [debugOpen, setDebugOpen] = useState(false) // 测试运行/调试折叠区（默认收起）
+  const [expanded, setExpanded] = useState(false) // 整个脚本编辑体验放大到弹窗
 
   const langMeta = LANGS.find((l) => l.value === value.lang) ?? LANGS[0]
 
@@ -168,30 +174,44 @@ export function ScriptEditor({ value, onChange, className }: ScriptEditorProps) 
         </div>
       </Collapsible>
 
-      {/* 语言切换 */}
-      <Tabs value={value.lang} onValueChange={setLang}>
-        <TabsList className="h-8">
-          {LANGS.map((l) => (
-            <TabsTrigger key={l.value} value={l.value} disabled={readOnly} className="text-xs">
-              {l.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+      {/* 语言切换 + 放大（整个脚本编辑体验进弹窗：语言 Tab / 编辑器 / 调试全套） */}
+      <div className="flex items-center justify-between gap-2">
+        <Tabs value={value.lang} onValueChange={setLang}>
+          <TabsList className="h-8">
+            {LANGS.map((l) => (
+              <TabsTrigger key={l.value} value={l.value} disabled={readOnly} className="text-xs">
+                {l.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+        {expandable && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1 px-2 text-xs text-muted-foreground"
+            aria-label="放大编辑"
+            title="放大到弹窗编辑"
+            onClick={() => setExpanded(true)}
+          >
+            <Maximize2 className="size-3.5" /> 放大
+          </Button>
+        )}
+      </div>
 
       {/* return 语义提示（随语言变化） */}
       <p className="text-[11px] text-muted-foreground">{langMeta.returnHint}</p>
 
-      {/* 代码编辑区（统一 CodeEditor：行号 + 语法高亮 + 缩进/括号匹配，语言随 lang 切换；右上角可放大到弹窗） */}
+      {/* 代码编辑区（统一 CodeEditor：行号 + 语法高亮 + 缩进/括号匹配，语言随 lang 切换） */}
       <CodeEditor
         value={value.code}
         onChange={setCode}
         language={toCodeLanguage(value.lang)}
         readOnly={readOnly}
         placeholder={langMeta.placeholder}
-        minHeight="10rem"
-        maxHeight="24rem"
-        expandable
+        minHeight={large ? "20rem" : "10rem"}
+        maxHeight={large ? "52vh" : "24rem"}
         ariaLabel="脚本代码"
       />
 
@@ -293,6 +313,21 @@ export function ScriptEditor({ value, onChange, className }: ScriptEditorProps) 
           )}
         </CollapsibleContent>
       </Collapsible>
+
+      {/* 放大：项目高级弹窗（拖拽/全屏/伸缩）里是**完整 ScriptEditor**（安全警告/语言 Tab/编辑器/调试全套，
+          同一受控 value/onChange 实时同步）；autoFocus=false 放行 CodeMirror 焦点；内层 expandable=false 防递归 */}
+      {expandable && (
+        <Modal
+          open={expanded}
+          onOpenChange={setExpanded}
+          title="编辑脚本"
+          width={typeof window === "undefined" ? 960 : Math.min(1080, Math.round(window.innerWidth * 0.82))}
+          autoFocus={false}
+          footer={<Button onClick={() => setExpanded(false)}>完成</Button>}
+        >
+          <ScriptEditor value={value} onChange={onChange} expandable={false} large />
+        </Modal>
+      )}
     </div>
   )
 }
