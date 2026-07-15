@@ -238,6 +238,14 @@ export interface FormulaExtensionsOptions {
   dark: boolean
 }
 
+/**
+ * 通用表达式语言扩展（复用本文件的分词内核 `tokenize`，无字段/关键字上下文即为纯表达式着色）。
+ * 供统一 `<CodeEditor language="expression">` 复用，避免重造 StreamLanguage。
+ */
+export function expressionLanguage(fieldKeys: readonly string[] = [], keywords: readonly string[] = []): Extension {
+  return StreamLanguage.define(makeStreamParser(fieldKeys, keywords))
+}
+
 /** 构建公式编辑区的完整 CodeMirror 扩展集（配合 `basicSetup={false}` 使用）。 */
 export function createFormulaExtensions(opts: FormulaExtensionsOptions): Extension[] {
   const fieldKeys = opts.fields.map((f) => f.key)

@@ -6,6 +6,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react"
 import { AlertTriangle, Check, Copy, Download, Upload } from "lucide-react"
 import { toast } from "sonner"
 import { Modal } from "@/components/modal"
+import { CodeEditor } from "@/components/code-editor"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { PaperRenderer } from "@/components/bizdoc/paper-renderer"
@@ -178,11 +179,14 @@ export function JsonDialog({
         </>
       }
     >
-      <textarea
+      {/* 统一 CodeEditor：JSON 高亮 + 行号 + 实时校验标红（应用前即可发现非法 JSON） */}
+      <CodeEditor
         value={text}
-        onChange={(e) => setText(e.target.value)}
-        spellCheck={false}
-        className="h-[52vh] w-full resize-none rounded-md border bg-muted/30 p-3 font-mono text-xs leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        onChange={setText}
+        language="json"
+        minHeight="52vh"
+        maxHeight="52vh"
+        ariaLabel="模板 JSON 源码"
       />
     </Modal>
   )

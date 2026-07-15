@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { CodeEditor } from "@/components/code-editor"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1014,7 +1015,7 @@ function DbQueryFields({ config, patch, credentials }: OrchNodePanelProps & { co
         </Select>
       </Field>
       <Field label="SQL（SELECT，支持 {{...}} 插值）">
-        <Textarea value={config.sql} onChange={(e) => patch({ sql: e.target.value })} rows={4} className="font-mono text-xs" placeholder="select id, name from sys_user where dept_id = {{payload.deptId}}" />
+        <CodeEditor value={config.sql} onChange={(sql) => patch({ sql })} language="sql" minHeight="6rem" maxHeight="16rem" ariaLabel="SQL 查询" placeholder="select id, name from sys_user where dept_id = {{payload.deptId}}" />
       </Field>
       <div className="grid grid-cols-2 gap-2">
         <Field label="行数上限（≤1000）">

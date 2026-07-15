@@ -13,19 +13,21 @@
  * 绝不在前端 eval/new Function 执行后端脚本——脚本只在后端受控执行；前端只做编辑与联调。
  * 禁 any；类型导入一律 import type。
  */
-import { useMemo, useState } from "react"
+import { useState } from "react"
 import { AlertTriangle, Loader2, Play, ShieldAlert } from "lucide-react"
-import ReactCodeMirror from "@uiw/react-codemirror"
 import { api, ApiError, NetworkError } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useHasPerm } from "@/stores/auth-store"
-import { isDarkMode } from "@/lib/theme"
-import { useAppStore } from "@/stores/app-store"
-import { createScriptExtensions } from "@/lib/script-codemirror"
+import { CodeEditor, type CodeLanguage } from "@/components/code-editor"
 import type { ScriptConfig, ScriptLang } from "@/pages/workflow/designer/flow/model"
+
+/** 脚本语言（ScriptLang）→ 统一编辑器语言（js 走 javascript，groovy/python 同名） */
+function toCodeLanguage(lang: ScriptLang): CodeLanguage {
+  return lang === "js" ? "javascript" : lang
+}
 
 /** test-run 端点响应体（api<T> 已拆 R<> 信封，此处是 data 部分） */
 interface ScriptTestRunResult {
@@ -92,12 +94,6 @@ export function ScriptEditor({ value, onChange, className }: ScriptEditorProps) 
   const [error, setError] = useState<string | null>(null)
 
   const langMeta = LANGS.find((l) => l.value === value.lang) ?? LANGS[0]
-
-  const dark = isDarkMode(useAppStore((s) => s.themeMode))
-  const extensions = useMemo(
-    () => createScriptExtensions({ lang: value.lang, dark, readOnly }),
-    [value.lang, dark, readOnly],
-  )
 
   const setLang = (lang: string) => onChange({ ...value, lang: lang as ScriptLang })
   const setCode = (code: string) => onChange({ ...value, code })
@@ -178,25 +174,17 @@ export function ScriptEditor({ value, onChange, className }: ScriptEditorProps) 
       {/* return 语义提示（随语言变化） */}
       <p className="text-[11px] text-muted-foreground">{langMeta.returnHint}</p>
 
-      {/* 代码编辑区（CodeMirror：行号 + 语法高亮 + 缩进/括号匹配，语言随 lang 切换） */}
-      <div
-        className={cn(
-          "overflow-hidden rounded-md border bg-background focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
-          readOnly ? "border-dashed opacity-90" : "border-input",
-        )}
-      >
-        <ReactCodeMirror
-          value={value.code}
-          onChange={setCode}
-          theme="none"
-          basicSetup={false}
-          extensions={extensions}
-          placeholder={langMeta.placeholder}
-          minHeight="10rem"
-          maxHeight="24rem"
-          className="[&_.cm-editor]:min-h-[10rem]"
-        />
-      </div>
+      {/* 代码编辑区（统一 CodeEditor：行号 + 语法高亮 + 缩进/括号匹配，语言随 lang 切换） */}
+      <CodeEditor
+        value={value.code}
+        onChange={setCode}
+        language={toCodeLanguage(value.lang)}
+        readOnly={readOnly}
+        placeholder={langMeta.placeholder}
+        minHeight="10rem"
+        maxHeight="24rem"
+        ariaLabel="脚本代码"
+      />
 
       {/* 上下文变量/函数速查 */}
       <div className="space-y-1 rounded-md border bg-muted/40 px-2.5 py-2">
