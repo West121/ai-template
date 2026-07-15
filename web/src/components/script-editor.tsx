@@ -13,7 +13,7 @@
  * 绝不在前端 eval/new Function 执行后端脚本——脚本只在后端受控执行；前端只做编辑与联调。
  * 禁 any；类型导入一律 import type。
  */
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { AlertTriangle, ChevronDown, FlaskConical, Loader2, Maximize2, Play, ShieldAlert } from "lucide-react"
 import { api, ApiError, NetworkError } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -24,6 +24,11 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Modal } from "@/components/modal"
 import { useHasPerm } from "@/stores/auth-store"
 import { CodeEditor, type CodeLanguage } from "@/components/code-editor"
+import {
+  fetchScriptContextManifest,
+  scriptContextCompletionExt,
+  type ScriptContextManifest,
+} from "@/lib/script-context-completion"
 import type { ScriptConfig, ScriptLang } from "@/pages/workflow/designer/flow/model"
 
 /** 脚本语言（ScriptLang）→ 统一编辑器语言（js 走 javascript，groovy/python 同名） */
@@ -68,6 +73,14 @@ const LANGS: LangMeta[] = [
     returnHint: "Jython / Python 2：支持 return；无 C 扩展（numpy/pandas 不可用）。",
     placeholder: 'log.info("hello from jython")\nvars["approved"] = form["days"] <= 3\nreturn vars["approved"]',
   },
+  {
+    value: "java",
+    label: "Java",
+    returnHint:
+      "真 Java（javax.tools 编译）：方法体语义——语句 + 显式 return（无返回写 return null;）。上下文带类型注入，已预置 import java.util.*，其它类型用全限定名。",
+    placeholder:
+      'log.info("hello from java");\nint days = ((Number) form.getOrDefault("days", 0)).intValue();\nvars.put("approved", days <= 3);\nreturn vars.get("approved");',
+  },
 ]
 
 /** 脚本上下文速查（所有语言通用；后端注入） */
@@ -101,6 +114,20 @@ export function ScriptEditor({ value, onChange, className, expandable = true, la
   const [warnOpen, setWarnOpen] = useState(false) // 安全警告详情（一行常显 + 可展开）
   const [debugOpen, setDebugOpen] = useState(false) // 测试运行/调试折叠区（默认收起）
   const [expanded, setExpanded] = useState(false) // 整个脚本编辑体验放大到弹窗
+
+  // 上下文补全 manifest（wf:script:write 才拉——readOnly 不拉；模块级缓存；失败静默 null 降级）
+  const [manifest, setManifest] = useState<ScriptContextManifest | null>(null)
+  useEffect(() => {
+    if (readOnly) return
+    let alive = true
+    void fetchScriptContextManifest().then((m) => {
+      if (alive) setManifest(m)
+    })
+    return () => {
+      alive = false
+    }
+  }, [readOnly])
+  const contextExtensions = useMemo(() => (manifest ? [scriptContextCompletionExt(manifest)] : undefined), [manifest])
 
   const langMeta = LANGS.find((l) => l.value === value.lang) ?? LANGS[0]
 
@@ -203,7 +230,8 @@ export function ScriptEditor({ value, onChange, className, expandable = true, la
       {/* return 语义提示（随语言变化） */}
       <p className="text-[11px] text-muted-foreground">{langMeta.returnHint}</p>
 
-      {/* 代码编辑区（统一 CodeEditor：行号 + 语法高亮 + 缩进/括号匹配，语言随 lang 切换） */}
+      {/* 代码编辑区（统一 CodeEditor：行号 + 语法高亮 + 缩进/括号匹配，语言随 lang 切换；
+          extraExtensions=上下文补全：vars/form/spring/log 顶层 + spring.bean("…") bean 名/方法，四语言通用） */}
       <CodeEditor
         value={value.code}
         onChange={setCode}
@@ -212,6 +240,7 @@ export function ScriptEditor({ value, onChange, className, expandable = true, la
         placeholder={langMeta.placeholder}
         minHeight={large ? "20rem" : "10rem"}
         maxHeight={large ? "52vh" : "24rem"}
+        extraExtensions={contextExtensions}
         ariaLabel="脚本代码"
       />
 
@@ -234,11 +263,14 @@ export function ScriptEditor({ value, onChange, className, expandable = true, la
           <ChevronDown className={cn("size-3.5 shrink-0 transition-transform", debugOpen && "rotate-180")} />
         </CollapsibleTrigger>
         <CollapsibleContent className="space-y-2 border-t px-2.5 py-2">
-          {/* 可用上下文速查（后端注入） */}
+          {/* 可用上下文速查：manifest 驱动（vars 五项 + beans 折叠列表）；拉不到时回退硬编码 */}
           <div className="space-y-1">
             <div className="text-[11px] font-medium text-muted-foreground">可用上下文（后端注入）</div>
             <ul className="grid grid-cols-1 gap-x-3 gap-y-0.5 sm:grid-cols-2">
-              {CONTEXT_HINTS.map((h) => (
+              {(manifest?.vars.length
+                ? manifest.vars.map((v) => ({ name: `${v.name}: ${v.type}`, desc: v.desc ?? "" }))
+                : CONTEXT_HINTS
+              ).map((h) => (
                 <li key={h.name} className="flex items-baseline gap-1.5 text-[11px]">
                   <code className="shrink-0 font-mono text-foreground">{h.name}</code>
                   <span className="text-muted-foreground">{h.desc}</span>
@@ -246,6 +278,36 @@ export function ScriptEditor({ value, onChange, className, expandable = true, la
               ))}
             </ul>
           </div>
+
+          {/* 受信 Spring Beans（manifest 驱动，折叠）：bean 名 + 方法签名 + doc */}
+          {manifest && manifest.beans.length > 0 && (
+            <Collapsible className="rounded-md border bg-muted/30">
+              <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11px] font-medium text-muted-foreground [&[data-state=open]>svg]:rotate-180">
+                受信 Spring Beans（{manifest.beans.length}）— spring.bean("名称") 取用
+                <ChevronDown className="ml-auto size-3 shrink-0 transition-transform" />
+              </CollapsibleTrigger>
+              <CollapsibleContent className="space-y-1.5 border-t px-2 py-1.5">
+                {manifest.beans.map((b) => (
+                  <div key={b.name} className="space-y-0.5">
+                    <div className="flex items-baseline gap-1.5 text-[11px]">
+                      <code className="font-mono font-medium text-foreground">{b.name}</code>
+                      {b.desc && <span className="min-w-0 truncate text-muted-foreground">{b.desc}</span>}
+                    </div>
+                    <ul className="space-y-0.5 pl-3">
+                      {b.methods.map((m, i) => (
+                        <li key={`${m.name}-${i}`} className="text-[11px]">
+                          <code className="font-mono text-foreground">
+                            {m.name}({m.params.map((pp) => (pp.name ? `${pp.name}: ${pp.type}` : pp.type)).join(", ")}): {m.returnType}
+                          </code>
+                          {m.doc && <span className="ml-1.5 text-muted-foreground">{m.doc}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </CollapsibleContent>
+            </Collapsible>
+          )}
 
           {!readOnly && (
             <div className="space-y-2">

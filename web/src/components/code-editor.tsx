@@ -10,6 +10,7 @@
  */
 import { useMemo, useState } from "react"
 import ReactCodeMirror from "@uiw/react-codemirror"
+import type { Extension } from "@codemirror/state"
 import { Maximize2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { isDarkMode } from "@/lib/theme"
@@ -64,6 +65,8 @@ export interface CodeEditorProps {
   expandable?: boolean
   /** 撑满父容器（弹窗内用）：容器 h-full + 编辑器 100% 高 */
   fill?: boolean
+  /** 追加的 CodeMirror 扩展（如脚本上下文补全）；调用方需 useMemo 保持引用稳定 */
+  extraExtensions?: Extension[]
   className?: string
   ariaLabel?: string
 }
@@ -81,6 +84,7 @@ export function CodeEditor({
   lint,
   expandable = false,
   fill = false,
+  extraExtensions,
   className,
   ariaLabel,
 }: CodeEditorProps) {
@@ -90,8 +94,8 @@ export function CodeEditor({
   const safeValue = typeof value === "string" ? value : value == null ? "" : String(value)
 
   const extensions = useMemo(
-    () => codeEditorExtensions({ language, dark, readOnly, lineNumbers, lineWrap, lint, ariaLabel }),
-    [language, dark, readOnly, lineNumbers, lineWrap, lint, ariaLabel],
+    () => [...codeEditorExtensions({ language, dark, readOnly, lineNumbers, lineWrap, lint, ariaLabel }), ...(extraExtensions ?? [])],
+    [language, dark, readOnly, lineNumbers, lineWrap, lint, ariaLabel, extraExtensions],
   )
 
   return (
@@ -152,6 +156,7 @@ export function CodeEditor({
               lineWrap={lineWrap}
               lineNumbers={lineNumbers}
               lint={lint}
+              extraExtensions={extraExtensions}
               ariaLabel={ariaLabel}
               fill
               expandable={false}

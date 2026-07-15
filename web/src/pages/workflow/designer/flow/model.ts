@@ -297,8 +297,8 @@ export type ServiceTaskConfig =
     }
   | { impl: "script" }
 
-/** 脚本语言（与后端脚本引擎对齐）：groovy=LiteFlow Groovy / js=GraalJS / python=Jython(Py2) */
-export type ScriptLang = "groovy" | "js" | "python"
+/** 脚本语言（与后端脚本引擎对齐）：groovy=LiteFlow Groovy / js=GraalJS / python=Jython(Py2) / java=javax.tools 真编译（Liquor） */
+export type ScriptLang = "groovy" | "js" | "python" | "java"
 
 /**
  * 脚本任务体（scriptTask）：与后端 `FlowNodeDto.script` 对齐。
