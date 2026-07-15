@@ -63,14 +63,16 @@ export type CodeLanguage =
   | "text"
 
 /**
- * language → 语言扩展（真 Lezer 解析 + 补全 + 折叠；json 附带 lint）：
+ * language → 语言扩展（真 Lezer 解析 + 补全 + 折叠；json 默认附带 lint，可关）：
  *  js/ts/tsx → @codemirror/lang-javascript（typescript/jsx 开关）；python → lang-python；java → lang-java；
  *  groovy 无官方 lang 包，沿用 legacy-modes（仅词法着色，无解析补全）；sql 沿用 legacy standardSQL。
+ *  `lint`：仅 json 有严格解析 lint——默认开；`lint===false` 时 json 只着色不校验（用于含 {{变量}} 的模板 JSON，避免误报）。
  */
-function languageExtension(language: CodeLanguage): Extension[] {
+function languageExtension(language: CodeLanguage, lint: boolean | undefined): Extension[] {
   switch (language) {
     case "json":
-      return [json(), linter(jsonParseLinter(), { delay: 300 })]
+      // 默认（undefined）开 lint；显式 false 关闭（模板 JSON 含 {{}} 严格校验会误报）
+      return lint === false ? [json()] : [json(), linter(jsonParseLinter(), { delay: 300 })]
     case "javascript":
       return [javascript()]
     case "typescript":
@@ -207,6 +209,8 @@ export interface CodeEditorExtOptions {
   lineNumbers?: boolean
   /** 自动换行 */
   lineWrap?: boolean
+  /** json 严格解析 lint：默认开（仅 json 有效）；模板 JSON（含 {{变量}}）传 false 关闭以免误报 */
+  lint?: boolean
   /** 无障碍标签（写到 .cm-content 的 aria-label） */
   ariaLabel?: string
 }
@@ -231,7 +235,7 @@ export function codeEditorExtensions(opts: CodeEditorExtOptions): Extension[] {
     EditorState.allowMultipleSelections.of(true),
     rectangularSelection(),
     crosshairCursor(),
-    ...languageExtension(opts.language),
+    ...languageExtension(opts.language, opts.lint),
     syntaxHighlighting(opts.dark ? darkHighlight : lightHighlight),
     autocompletion(),
     EditorView.editable.of(!opts.readOnly),

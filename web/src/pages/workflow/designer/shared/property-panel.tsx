@@ -49,6 +49,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { CodeEditor } from "@/components/code-editor"
 import {
   EMPTY_STRATEGY_META,
   FORM_PERM_META,
@@ -1298,26 +1299,33 @@ function EventActionPayload<E extends EventActionConfig>({
           </div>
           <div className="space-y-1">
             <FieldLabel>请求头（每行 Name: Value）</FieldLabel>
-            <Textarea
+            {/* 统一 CodeEditor：Name:Value 列表非 JSON，用 text（无 lint，行号/折叠/查找/换行齐全） */}
+            <CodeEditor
               value={api.headers ?? ""}
-              onChange={(e) => setApi({ headers: e.target.value })}
+              onChange={(headers) => setApi({ headers })}
+              language="text"
+              readOnly={trustedReadonly}
+              lineWrap
+              minHeight="3rem"
+              maxHeight="12rem"
               placeholder={"Content-Type: application/json\nAuthorization: Bearer ..."}
-              spellCheck={false}
-              rows={2}
-              className="font-mono text-[11px]"
-              disabled={trustedReadonly}
+              ariaLabel="请求头"
             />
           </div>
           <div className="space-y-1">
             <FieldLabel>请求体（JSON / 模板串）</FieldLabel>
-            <Textarea
+            {/* 模板 JSON（含 ${...} 变量）：lint 关避免误报，保留着色/行号/折叠/查找 */}
+            <CodeEditor
               value={api.body ?? ""}
-              onChange={(e) => setApi({ body: e.target.value })}
+              onChange={(body) => setApi({ body })}
+              language="json"
+              lint={false}
+              readOnly={trustedReadonly}
+              lineWrap
+              minHeight="4rem"
+              maxHeight="16rem"
               placeholder={'{ "instanceId": "${instanceId}" }'}
-              spellCheck={false}
-              rows={3}
-              className="font-mono text-[11px]"
-              disabled={trustedReadonly}
+              ariaLabel="请求体（模板 JSON）"
             />
           </div>
         </div>

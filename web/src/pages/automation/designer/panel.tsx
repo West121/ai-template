@@ -7,13 +7,9 @@
  * - script 复用 ScriptEditor；http headers/body 用 CodeMirror JSON；llm=凭据+model+prompt+输出模式。
  * - 边面板：结构化条件（复用 BranchCondition/OPERATOR_META，field 写上下文表达式）+ Aviator 逃生口 + 默认支。
  */
-import { useMemo, useRef, useState, type ComponentType, type ReactNode } from "react"
-import ReactCodeMirror from "@uiw/react-codemirror"
-import { json } from "@codemirror/lang-json"
+import { useRef, useState, type ComponentType, type ReactNode } from "react"
 import { Braces, Plus, Trash2, Variable } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { isDarkMode } from "@/lib/theme"
-import { useAppStore } from "@/stores/app-store"
 import { ScriptEditor } from "@/components/script-editor"
 import { OrgPicker, OrgPickerField, type OrgRef } from "@/components/org-picker"
 import { Button } from "@/components/ui/button"
@@ -188,22 +184,21 @@ function TplTextarea({
   )
 }
 
-/** CodeMirror JSON 编辑器（http headers/body） */
+/** JSON 编辑器（http headers/body 等模板 JSON）：统一 CodeEditor，行号/折叠/查找/着色齐全；
+ *  lint 关（模板串含 {{变量}}，严格 JSON 校验会误报）；lineWrap 便于长模板串换行查看。 */
 function JsonEditor({ value, onChange, placeholder, height = "120px" }: { value: string; onChange: (v: string) => void; placeholder?: string; height?: string }) {
-  const dark = isDarkMode(useAppStore((s) => s.themeMode))
-  const extensions = useMemo(() => [json()], [])
   return (
-    <div className="overflow-hidden rounded-md border text-xs [&_.cm-editor]:text-xs">
-      <ReactCodeMirror
-        value={value}
-        onChange={onChange}
-        extensions={extensions}
-        theme={dark ? "dark" : "light"}
-        height={height}
-        placeholder={placeholder}
-        basicSetup={{ lineNumbers: false, foldGutter: false }}
-      />
-    </div>
+    <CodeEditor
+      value={value}
+      onChange={onChange}
+      language="json"
+      lint={false}
+      lineWrap
+      minHeight={height}
+      maxHeight="20rem"
+      placeholder={placeholder}
+      ariaLabel="JSON（模板串）"
+    />
   )
 }
 

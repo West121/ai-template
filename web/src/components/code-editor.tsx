@@ -30,6 +30,8 @@ export interface CodeEditorProps {
   lineWrap?: boolean
   /** 显示行号（默认 true） */
   lineNumbers?: boolean
+  /** json 严格解析 lint：默认 json 开、其它语言无 lint；模板 JSON（含 {{变量}}）传 false 关闭以免误报 */
+  lint?: boolean
   className?: string
   ariaLabel?: string
 }
@@ -44,6 +46,7 @@ export function CodeEditor({
   maxHeight = "24rem",
   lineWrap = false,
   lineNumbers = true,
+  lint,
   className,
   ariaLabel,
 }: CodeEditorProps) {
@@ -52,8 +55,8 @@ export function CodeEditor({
   const safeValue = typeof value === "string" ? value : value == null ? "" : String(value)
 
   const extensions = useMemo(
-    () => codeEditorExtensions({ language, dark, readOnly, lineNumbers, lineWrap, ariaLabel }),
-    [language, dark, readOnly, lineNumbers, lineWrap, ariaLabel],
+    () => codeEditorExtensions({ language, dark, readOnly, lineNumbers, lineWrap, lint, ariaLabel }),
+    [language, dark, readOnly, lineNumbers, lineWrap, lint, ariaLabel],
   )
 
   return (
