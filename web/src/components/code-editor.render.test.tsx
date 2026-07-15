@@ -11,11 +11,16 @@ afterEach(cleanup)
 vi.spyOn(console, "error").mockImplementation(() => {})
 
 describe("CodeEditor", () => {
-  const langs: CodeLanguage[] = ["json", "javascript", "sql", "groovy", "python", "expression", "text"]
+  const langs: CodeLanguage[] = ["json", "javascript", "typescript", "tsx", "java", "sql", "groovy", "python", "expression", "text"]
 
-  it.each(langs)("language=%s 挂载不炸", (language) => {
+  it.each(langs)("language=%s 挂载不炸（真解析语言含 ts/java）", (language) => {
     const { container } = render(<CodeEditor value={`// ${language}\n{"a":1}`} language={language} onChange={() => {}} />)
     expect(container.querySelector(".cm-editor")).toBeTruthy()
+  })
+
+  it("默认启用 IDE 功能：折叠 gutter 随行号出现", () => {
+    const { container } = render(<CodeEditor value={"function f() {\n  return 1\n}"} language="typescript" />)
+    expect(container.querySelector(".cm-foldGutter")).toBeTruthy()
   })
 
   it("value 非字符串（null/对象）→ 容错为字符串，不白屏", () => {

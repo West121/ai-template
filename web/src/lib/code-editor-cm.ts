@@ -15,26 +15,34 @@
 import { EditorState, type Extension } from "@codemirror/state"
 import {
   EditorView,
+  crosshairCursor,
   drawSelection,
+  dropCursor,
   highlightActiveLine,
   highlightActiveLineGutter,
   highlightSpecialChars,
   keymap,
   lineNumbers as cmLineNumbers,
+  rectangularSelection,
 } from "@codemirror/view"
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands"
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete"
 import { linter, lintKeymap } from "@codemirror/lint"
+import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search"
 import {
   bracketMatching,
+  codeFolding,
+  foldGutter,
+  foldKeymap,
   HighlightStyle,
   indentOnInput,
   indentUnit,
   StreamLanguage,
   syntaxHighlighting,
 } from "@codemirror/language"
-import { javascript } from "@codemirror/legacy-modes/mode/javascript"
-import { python } from "@codemirror/legacy-modes/mode/python"
+import { javascript } from "@codemirror/lang-javascript"
+import { python } from "@codemirror/lang-python"
+import { java } from "@codemirror/lang-java"
 import { groovy } from "@codemirror/legacy-modes/mode/groovy"
 import { standardSQL } from "@codemirror/legacy-modes/mode/sql"
 import { json, jsonParseLinter } from "@codemirror/lang-json"
@@ -42,19 +50,39 @@ import { tags as t } from "@lezer/highlight"
 import { expressionLanguage } from "@/lib/formula-codemirror"
 
 /** 统一编辑器支持的语言（默认 text）。 */
-export type CodeLanguage = "json" | "javascript" | "sql" | "groovy" | "python" | "expression" | "text"
+export type CodeLanguage =
+  | "json"
+  | "javascript"
+  | "typescript"
+  | "tsx"
+  | "java"
+  | "sql"
+  | "groovy"
+  | "python"
+  | "expression"
+  | "text"
 
-/** language → 语言扩展（json 附带 lint；其余为 StreamLanguage / 空）。 */
+/**
+ * language → 语言扩展（真 Lezer 解析 + 补全 + 折叠；json 附带 lint）：
+ *  js/ts/tsx → @codemirror/lang-javascript（typescript/jsx 开关）；python → lang-python；java → lang-java；
+ *  groovy 无官方 lang 包，沿用 legacy-modes（仅词法着色，无解析补全）；sql 沿用 legacy standardSQL。
+ */
 function languageExtension(language: CodeLanguage): Extension[] {
   switch (language) {
     case "json":
       return [json(), linter(jsonParseLinter(), { delay: 300 })]
     case "javascript":
-      return [StreamLanguage.define(javascript)]
+      return [javascript()]
+    case "typescript":
+      return [javascript({ typescript: true })]
+    case "tsx":
+      return [javascript({ jsx: true, typescript: true })]
     case "python":
-      return [StreamLanguage.define(python)]
+      return [python()]
+    case "java":
+      return [java()]
     case "groovy":
-      return [StreamLanguage.define(groovy)]
+      return [StreamLanguage.define(groovy)] // 无官方 lang-groovy：legacy-modes 词法着色
     case "sql":
       return [StreamLanguage.define(standardSQL)]
     case "expression":
@@ -65,31 +93,39 @@ function languageExtension(language: CodeLanguage): Extension[] {
   }
 }
 
-/** 亮 / 暗两套着色（超集：覆盖 legacy-modes 通用 token + 公式的 paren/separator）。 */
+/** 亮 / 暗两套着色（超集：兼容 legacy-modes + 公式 + lang-javascript/python/java 的 Lezer tag）。 */
 const lightHighlight = HighlightStyle.define([
-  { tag: [t.keyword, t.moduleKeyword, t.controlKeyword], color: "#d97706", fontWeight: "500" },
-  { tag: [t.string, t.special(t.string)], color: "#059669" },
-  { tag: [t.number, t.bool, t.null], color: "#ea580c" },
+  { tag: [t.keyword, t.moduleKeyword, t.controlKeyword, t.operatorKeyword, t.self], color: "#d97706", fontWeight: "500" },
+  { tag: [t.string, t.special(t.string), t.docString], color: "#059669" },
+  { tag: [t.regexp], color: "#0891b2" },
+  { tag: [t.escape], color: "#c2410c" },
+  { tag: [t.number, t.bool, t.null, t.atom], color: "#ea580c" },
   { tag: [t.comment, t.lineComment, t.blockComment], color: "#94a3b8", fontStyle: "italic" },
-  { tag: [t.function(t.variableName), t.function(t.propertyName)], color: "#7c3aed", fontWeight: "500" },
-  { tag: [t.definitionKeyword, t.typeName, t.className], color: "#0284c7" },
-  { tag: t.propertyName, color: "#0284c7" },
-  { tag: [t.operator, t.operatorKeyword], color: "#db2777" },
-  { tag: [t.bracket, t.paren, t.brace, t.separator], color: "#64748b" },
-  { tag: t.variableName, color: "var(--foreground)" },
+  { tag: [t.function(t.variableName), t.function(t.propertyName), t.function(t.definition(t.variableName))], color: "#7c3aed", fontWeight: "500" },
+  { tag: [t.definitionKeyword, t.typeName, t.className, t.namespace, t.typeOperator], color: "#0284c7" },
+  { tag: [t.propertyName, t.attributeName], color: "#0284c7" },
+  { tag: [t.tagName, t.angleBracket], color: "#dc2626" },
+  { tag: [t.meta, t.annotation, t.special(t.variableName)], color: "#9333ea" },
+  { tag: [t.operator, t.derefOperator], color: "#db2777" },
+  { tag: [t.bracket, t.paren, t.brace, t.separator, t.punctuation], color: "#64748b" },
+  { tag: [t.variableName, t.definition(t.variableName), t.local(t.variableName), t.labelName], color: "var(--foreground)" },
 ])
 
 const darkHighlight = HighlightStyle.define([
-  { tag: [t.keyword, t.moduleKeyword, t.controlKeyword], color: "#fbbf24", fontWeight: "500" },
-  { tag: [t.string, t.special(t.string)], color: "#34d399" },
-  { tag: [t.number, t.bool, t.null], color: "#fb923c" },
+  { tag: [t.keyword, t.moduleKeyword, t.controlKeyword, t.operatorKeyword, t.self], color: "#fbbf24", fontWeight: "500" },
+  { tag: [t.string, t.special(t.string), t.docString], color: "#34d399" },
+  { tag: [t.regexp], color: "#22d3ee" },
+  { tag: [t.escape], color: "#fdba74" },
+  { tag: [t.number, t.bool, t.null, t.atom], color: "#fb923c" },
   { tag: [t.comment, t.lineComment, t.blockComment], color: "#64748b", fontStyle: "italic" },
-  { tag: [t.function(t.variableName), t.function(t.propertyName)], color: "#a78bfa", fontWeight: "500" },
-  { tag: [t.definitionKeyword, t.typeName, t.className], color: "#38bdf8" },
-  { tag: t.propertyName, color: "#38bdf8" },
-  { tag: [t.operator, t.operatorKeyword], color: "#f472b6" },
-  { tag: [t.bracket, t.paren, t.brace, t.separator], color: "#94a3b8" },
-  { tag: t.variableName, color: "var(--foreground)" },
+  { tag: [t.function(t.variableName), t.function(t.propertyName), t.function(t.definition(t.variableName))], color: "#a78bfa", fontWeight: "500" },
+  { tag: [t.definitionKeyword, t.typeName, t.className, t.namespace, t.typeOperator], color: "#38bdf8" },
+  { tag: [t.propertyName, t.attributeName], color: "#38bdf8" },
+  { tag: [t.tagName, t.angleBracket], color: "#f87171" },
+  { tag: [t.meta, t.annotation, t.special(t.variableName)], color: "#c084fc" },
+  { tag: [t.operator, t.derefOperator], color: "#f472b6" },
+  { tag: [t.bracket, t.paren, t.brace, t.separator, t.punctuation], color: "#94a3b8" },
+  { tag: [t.variableName, t.definition(t.variableName), t.local(t.variableName), t.labelName], color: "var(--foreground)" },
 ])
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace"
@@ -134,6 +170,30 @@ function baseTheme(dark: boolean): Extension {
       },
       ".cm-diagnostic-error": { borderLeft: "3px solid var(--destructive)" },
       ".cm-lintRange-error": { textDecoration: "underline wavy var(--destructive)" },
+      // 折叠三角 gutter
+      ".cm-foldGutter .cm-gutterElement": { padding: "0 2px", cursor: "pointer", color: "var(--muted-foreground)" },
+      ".cm-foldPlaceholder": {
+        backgroundColor: "var(--muted)",
+        color: "var(--muted-foreground)",
+        border: "1px solid var(--border)",
+        borderRadius: "4px",
+        margin: "0 2px",
+        padding: "0 4px",
+      },
+      // 查找/替换面板 + 匹配高亮 + 选中同项高亮
+      ".cm-panels": { backgroundColor: "var(--popover)", color: "var(--popover-foreground)", borderTop: "1px solid var(--border)" },
+      ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--border)", borderTop: "none" },
+      ".cm-panel.cm-search input, .cm-panel.cm-search button, .cm-panel.cm-search label": { fontSize: "11px" },
+      ".cm-panel.cm-search input": {
+        backgroundColor: "var(--background)",
+        color: "var(--foreground)",
+        border: "1px solid var(--border)",
+        borderRadius: "4px",
+        padding: "2px 6px",
+      },
+      ".cm-searchMatch": { backgroundColor: "color-mix(in oklab, var(--primary) 22%, transparent)", borderRadius: "2px" },
+      ".cm-searchMatch.cm-searchMatch-selected": { backgroundColor: "color-mix(in oklab, var(--primary) 45%, transparent)" },
+      ".cm-selectionMatch": { backgroundColor: "color-mix(in oklab, var(--primary) 14%, transparent)" },
     },
     { dark },
   )
@@ -157,11 +217,20 @@ export function codeEditorExtensions(opts: CodeEditorExtOptions): Extension[] {
   const exts: Extension[] = [
     history(),
     drawSelection(),
+    dropCursor(),
     highlightSpecialChars(),
+    highlightActiveLine(),
     bracketMatching(),
     closeBrackets(),
     indentOnInput(),
     indentUnit.of("  "),
+    // IDE 级：折叠 + 查找/替换(Ctrl+F/Ctrl+H) + 选中项高亮 + 多光标(Alt 矩形选、Ctrl+D 选同词)
+    codeFolding(),
+    search({ top: true }),
+    highlightSelectionMatches(),
+    EditorState.allowMultipleSelections.of(true),
+    rectangularSelection(),
+    crosshairCursor(),
     ...languageExtension(opts.language),
     syntaxHighlighting(opts.dark ? darkHighlight : lightHighlight),
     autocompletion(),
@@ -173,12 +242,15 @@ export function codeEditorExtensions(opts: CodeEditorExtOptions): Extension[] {
       ...historyKeymap,
       ...completionKeymap,
       ...lintKeymap,
+      ...searchKeymap,
+      ...foldKeymap,
       indentWithTab,
     ]),
     baseTheme(opts.dark),
   ]
+  // 行号 gutter：连带折叠三角与当前行 gutter 高亮（无行号时保持极简、折叠仍可用键位）
   if (showLineNumbers) {
-    exts.unshift(cmLineNumbers(), highlightActiveLine(), highlightActiveLineGutter())
+    exts.unshift(cmLineNumbers(), foldGutter(), highlightActiveLineGutter())
   }
   if (opts.lineWrap) exts.push(EditorView.lineWrapping)
   if (opts.ariaLabel) exts.push(EditorView.contentAttributes.of({ "aria-label": opts.ariaLabel }))
