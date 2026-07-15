@@ -15,6 +15,7 @@ import org.springframework.util.StringUtils;
  * 纯国外 → "国家 城市"）；任何异常兜底 "未知"。
  */
 @Slf4j
+@com.xingchen.oa.common.script.ScriptApi("IP 归属地解析（ip2region 离线库）：resolve(ip) → 省份城市/内网/未知")
 @Service
 public class RegionService {
 

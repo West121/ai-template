@@ -55,6 +55,7 @@ public class ScriptService {
     private static final String LANG_GROOVY = "groovy";
     private static final String LANG_PYTHON = "python";
     private static final String LANG_JS = "js";
+    private static final String LANG_JAVA = "java";
 
     /** 输入语言别名 → 规范语言。 */
     private static final Map<String, String> LANG_ALIAS = Map.of(
@@ -62,7 +63,8 @@ public class ScriptService {
             "python", LANG_PYTHON,
             "jython", LANG_PYTHON,
             "js", LANG_JS,
-            "javascript", LANG_JS);
+            "javascript", LANG_JS,
+            "java", LANG_JAVA);
 
     private final SpringBeanFacade springFacade;
     private final ScriptLogHelper logHelper;
@@ -137,9 +139,11 @@ public class ScriptService {
         if (code == null || code.isBlank()) {
             throw new BusinessException(400, "脚本体为空");
         }
-        Callable<Object> task = LANG_JS.equals(lang)
-                ? () -> runJs(code, ctx)
-                : () -> runJsr223(lang, code, ctx);
+        Callable<Object> task = switch (lang) {
+            case LANG_JS -> () -> runJs(code, ctx);
+            case LANG_JAVA -> () -> runJava(code, ctx);
+            default -> () -> runJsr223(lang, code, ctx);
+        };
         Future<Object> future = pool.submit(task);
         try {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS);
@@ -200,11 +204,49 @@ public class ScriptService {
         return v.as(Object.class);
     }
 
+    /**
+     * java：真 Java（Liquor，{@code liteflow-script-javax-pro} 底层编译器，运行期 {@code javax.tools} 编译，需 JDK 运行时）。
+     *
+     * <p><b>与 LiteFlow javax-pro 原生脚本格式的差异（刻意为之）</b>：LiteFlow 官方 java 脚本要求写完整类
+     * {@code extends NodeComponent} 并实现 {@code process()}——该模型绑定 chain/DataBus Slot，而本项目
+     * {@code liteflow.enable=false} 不走链路编排（见类注释）。故与 groovy 等同构：直接驱动其底层编译器，
+     * 脚本为<b>方法体</b>（语句 + 显式 {@code return}，无 return 语义的脚本请 {@code return null;}），
+     * 上下文以<b>带类型参数</b>注入：{@code Map vars / Map form / DelegateExecution execution /
+     * SpringBeanFacade spring / ScriptLogHelper log}（与 groovy 同名同义，静态类型直接点方法，无需取绑定）；
+     * 预置 {@code import java.util.*}。编译产物按代码缓存（CodeSpec.cached）。
+     */
+    private Object runJava(String code, ScriptContext ctx) {
+        java.util.List<org.noear.liquor.eval.ParamSpec> params = new java.util.ArrayList<>();
+        Map<String, Object> args = new java.util.LinkedHashMap<>();
+        params.add(new org.noear.liquor.eval.ParamSpec("vars", Map.class));
+        args.put("vars", ctx.vars);
+        params.add(new org.noear.liquor.eval.ParamSpec("form", Map.class));
+        args.put("form", ctx.form);
+        params.add(new org.noear.liquor.eval.ParamSpec("execution", org.flowable.engine.delegate.DelegateExecution.class));
+        args.put("execution", ctx.execution);
+        // @ScriptBean 门面（spring/log…）：按各自真实类型声明参数，脚本内静态类型直接调用
+        ScriptBeanManager.getScriptBeanMap().forEach((name, bean) -> {
+            params.add(new org.noear.liquor.eval.ParamSpec(name, bean.getClass()));
+            args.put(name, bean);
+        });
+        org.noear.liquor.eval.CodeSpec spec = new org.noear.liquor.eval.CodeSpec(code)
+                .imports("java.util.*")
+                .parameters(params.toArray(new org.noear.liquor.eval.ParamSpec[0]))
+                .returnType(Object.class) // 生成方法返回 Object：脚本须显式 return（无返回写 return null;）
+                .cached(true);
+        try {
+            return org.noear.liquor.eval.Scripts.eval(spec, args);
+        } catch (Exception e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            throw new BusinessException(400, "Java 脚本编译/执行失败: " + cause.getMessage());
+        }
+    }
+
     private String resolveLang(String lang) {
         String key = lang == null ? "" : lang.trim().toLowerCase();
         String canonical = LANG_ALIAS.get(key);
         if (canonical == null) {
-            throw new BusinessException(400, "不支持的脚本语言（仅 groovy/js/python）: " + lang);
+            throw new BusinessException(400, "不支持的脚本语言（仅 groovy/js/python/java）: " + lang);
         }
         return canonical;
     }

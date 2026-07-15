@@ -3083,6 +3083,41 @@ async function hlCompleted(token, iid) {
   check("N-B-04 test-run js(GraalJS) 成功", trJ.body?.code === 0 && trJ.body.data?.success === true, JSON.stringify(trJ.body?.data))
   const trDeny = await call(zhangsan.token, "POST", "/api/wf/script/test-run", { lang: "groovy", code: "return 1", sampleVars: {} })
   check("N-B-04 非管理员(zhangsan) test-run→403", trDeny.status === 403, `status=${trDeny.status}`)
+
+  // --- 磐石：java 脚本（liteflow-script-javax-pro/Liquor 真编译）+ 脚本上下文清单端点 ---
+  // java test-run：返回值 / vars 读写 / log / spring 门面（带类型参数，静态类型直接点方法）
+  const JAVACODE = 'vars.put("j", 21 * 2); log.info("java-smoke j=" + vars.get("j")); return spring.has("wfScriptDelegate");'
+  const trJava = await call(admin.token, "POST", "/api/wf/script/test-run", { lang: "java", code: JAVACODE, sampleVars: {} })
+  check("java test-run 成功(返回 spring.has=true + vars 回传 j=42 + log)",
+    trJava.body?.code === 0 && trJava.body.data?.success === true && String(trJava.body.data?.result) === "true" && trJava.body.data?.vars?.j === 42,
+    JSON.stringify(trJava.body?.data))
+  // java 编译错误 → success=false 带错误串（编辑器可展示，不是 HTTP 错）
+  const trJavaBad = await call(admin.token, "POST", "/api/wf/script/test-run", { lang: "java", code: "int x = ;", sampleVars: {} })
+  check("java test-run 编译错误→success=false 带错误信息", trJavaBad.body?.code === 0 && trJavaBad.body.data?.success === false && !!trJavaBad.body.data?.error, JSON.stringify(trJavaBad.body?.data))
+  // java 脚本节点跑通（写 vars→网关路由，与 groovy 流对齐）
+  const keyJ = `graph_script_java_${TS}`
+  const JAVANODE = 'int total = Integer.parseInt(String.valueOf(vars.get("price"))) * Integer.parseInt(String.valueOf(vars.get("qty"))); vars.put("total", total); log.info("java total=" + total); return total;'
+  const modelJ = { ...model, key: keyJ, nodes: model.nodes.map((n) => (n.id === "script" ? { ...n, script: { lang: "java", code: JAVANODE } } : n)) }
+  const depJ = await graphDeploy(keyJ, "Java脚本节点演示", modelJ)
+  check("java 脚本流部署→PUBLISHED", depJ.body?.code === 0 && depJ.body.data?.status === "PUBLISHED", JSON.stringify(depJ.body?.data ?? depJ.body))
+  const iJ = await startInst(keyJ, `Java脚本大额-${TS}`, { price: 300, qty: 10 })
+  const cJ = await hlCompleted(zhangsan.token, iJ.id)
+  check("java 脚本节点执行写 vars→total=3000→走 endBig", cJ.includes("script") && cJ.includes("eBig") && cJ.includes("endBig"), JSON.stringify(cJ))
+  // 脚本上下文清单端点（编辑器提示源）：{vars,langs,beans} 形状 + 示范 bean 方法在列
+  const manifest = await call(admin.token, "GET", "/api/wf/script/context-manifest")
+  const md = manifest.body?.data
+  check("manifest 形状 {vars,langs,beans}", manifest.body?.code === 0 && Array.isArray(md?.vars) && Array.isArray(md?.langs) && Array.isArray(md?.beans), JSON.stringify(Object.keys(md ?? {})))
+  check("manifest vars 含 vars/form/execution/spring/log(带 type/desc)",
+    ["vars", "form", "execution", "spring", "log"].every((n) => (md?.vars ?? []).some((v) => v.name === n && v.type && v.desc)))
+  check("manifest langs 含 java(带 returnSemantics)", (md?.langs ?? []).some((l) => l.lang === "java" && (l.returnSemantics ?? "").includes("return")))
+  const orgBean = (md?.beans ?? []).find((b) => b.name === "scriptOrgApi")
+  check("manifest 示范 bean scriptOrgApi 方法在列(userName/deptUserIds,params 带 name+type)",
+    !!orgBean && orgBean.methods.some((m) => m.name === "userName" && m.returnType === "String" && m.params?.[0]?.type === "Long" && m.params?.[0]?.name === "userId")
+      && orgBean.methods.some((m) => m.name === "deptUserIds"), JSON.stringify(orgBean?.methods?.map((m) => m.name)))
+  check("manifest 含 regionService(ip2region)+wfAudit(notify) 示范",
+    (md?.beans ?? []).some((b) => b.name === "regionService") && (md?.beans ?? []).some((b) => b.name === "wfAudit" && b.methods.some((m) => m.name === "notify")),
+    JSON.stringify((md?.beans ?? []).map((b) => b.name)))
+  check("manifest 非管理员(zhangsan)→403", (await call(zhangsan.token, "GET", "/api/wf/script/context-manifest")).status === 403)
 }
 
 // --- N-B-05：.bpmn 往返（deploy→GET bpmn 非空 XML→POST import 结构还原、warnings 空） ---

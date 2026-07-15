@@ -52,6 +52,12 @@
             <groupId>com.yomahub</groupId>
             <artifactId>liteflow-script-python</artifactId>
         </dependency>
+        <!-- Java 脚本插件（javax-pro，2.15.3 起官方唯一推荐）：底层 Liquor 运行期 javax.tools 编译真 Java。
+             与其余引擎同构：ScriptService 直接驱动底层编译器（liteflow.enable=false，不走链路编排）。 -->
+        <dependency>
+            <groupId>com.yomahub</groupId>
+            <artifactId>liteflow-script-javax-pro</artifactId>
+        </dependency>
         <!-- @PreAuthorize 注解 -->
         <dependency>
             <groupId>org.springframework.security</groupId>

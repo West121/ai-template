@@ -5,10 +5,12 @@ import com.xingchen.oa.common.exception.BusinessException;
 import com.xingchen.oa.workflow.dto.ScriptTestRunRequest;
 import com.xingchen.oa.workflow.dto.ScriptTestRunResult;
 import com.xingchen.oa.workflow.engine.script.ScriptContext;
+import com.xingchen.oa.workflow.engine.script.ScriptManifestService;
 import com.xingchen.oa.workflow.engine.script.ScriptService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -27,6 +29,17 @@ import java.util.Map;
 public class WfScriptController {
 
     private final ScriptService scriptService;
+    private final ScriptManifestService manifestService;
+
+    /**
+     * 脚本上下文清单（编辑器代码提示源）：{@code {vars, langs, beans}}。
+     * 同 {@code wf:script:write} 门槛——编辑器本就只对脚本作者开放，清单披露内部方法签名，同一信任面。
+     */
+    @GetMapping("/context-manifest")
+    @PreAuthorize("hasAuthority('wf:script:write')")
+    public R<Map<String, Object>> contextManifest() {
+        return R.ok(manifestService.manifest());
+    }
 
     /**
      * 测试运行：给脚本编辑器联调。执行成功返回值/回写变量，失败返回错误串（均以 R.ok 承载 + 已审计）。

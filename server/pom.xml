@@ -114,6 +114,12 @@
                 <artifactId>liteflow-script-python</artifactId>
                 <version>${liteflow.version}</version>
             </dependency>
+            <!-- Java 脚本（2.15.3 起官方唯一推荐的 java 脚本插件；运行期 javax.tools 编译真 Java，需 JDK 运行时） -->
+            <dependency>
+                <groupId>com.yomahub</groupId>
+                <artifactId>liteflow-script-javax-pro</artifactId>
+                <version>${liteflow.version}</version>
+            </dependency>
             <!-- jjwt -->
             <dependency>
                 <groupId>io.jsonwebtoken</groupId>

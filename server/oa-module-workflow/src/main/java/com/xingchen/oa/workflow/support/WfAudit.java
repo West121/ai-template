@@ -14,6 +14,7 @@ import java.util.Map;
 /**
  * 工作流动作审计 + 站内通知统一写入口（P2 各操作复用，避免每个 service 重复样板）。
  */
+@com.xingchen.oa.common.script.ScriptApi("工作流审计/站内通知：notify(用户id,类型,标题,内容,流程实例id) 发站内通知；op 记操作留痕")
 @Component
 @RequiredArgsConstructor
 public class WfAudit {
