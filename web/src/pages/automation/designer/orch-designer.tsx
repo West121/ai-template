@@ -61,20 +61,25 @@ function nodeBox(n: InternalNode): { cx: number; cy: number; hw: number; hh: num
 }
 
 /**
- * 中心连线 × 包围盒边界交点 + 所在边朝向：边端点恰落在节点边界（竖排=底出顶入、横排=左右出入），
- * 绝不悬空、绝不穿节点体（与审批流设计器 sequence-flow-edge 同一做法）。
+ * 按目标方向选边（竖排=底出顶入、横排=左右出入），端点**吸附到该边中点**（= 节点四边的出口端点
+ * Handle 圆点位置），使多条出边都从可见出口点出发、再扇出到各目标（标准 Switch 树状）——
+ * 而非落在偏离中点的几何交点上（会看着"没从出口点出来"）。绝不悬空、绝不穿节点体。
  */
 function boundaryPoint(cx: number, cy: number, hw: number, hh: number, towardX: number, towardY: number): { x: number; y: number; pos: Position } {
   const dx = towardX - cx
   const dy = towardY - cy
-  if (dx === 0 && dy === 0) return { x: cx, y: cy, pos: Position.Top }
+  if (dx === 0 && dy === 0) return { x: cx, y: cy - hh, pos: Position.Top }
   const scaleX = dx !== 0 ? hw / Math.abs(dx) : Number.POSITIVE_INFINITY
   const scaleY = dy !== 0 ? hh / Math.abs(dy) : Number.POSITIVE_INFINITY
-  const scale = Math.min(scaleX, scaleY)
-  const x = cx + dx * scale
-  const y = cy + dy * scale
-  const pos = scaleX < scaleY ? (dx > 0 ? Position.Right : Position.Left) : dy > 0 ? Position.Bottom : Position.Top
-  return { x, y, pos }
+  // 选朝向占优的那条边,端点吸附到该边中点(对齐 Handle 圆点)
+  if (scaleX < scaleY) {
+    return dx > 0
+      ? { x: cx + hw, y: cy, pos: Position.Right }
+      : { x: cx - hw, y: cy, pos: Position.Left }
+  }
+  return dy > 0
+    ? { x: cx, y: cy + hh, pos: Position.Bottom }
+    : { x: cx, y: cy - hh, pos: Position.Top }
 }
 
 function OrchEdge({ id, source, target, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, selected, data }: EdgeProps) {
