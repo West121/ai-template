@@ -194,6 +194,7 @@ function JsonEditor({ value, onChange, placeholder, height = "120px" }: { value:
       language="json"
       lint={false}
       lineWrap
+      expandable
       minHeight={height}
       maxHeight="20rem"
       placeholder={placeholder}

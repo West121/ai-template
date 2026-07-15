@@ -182,7 +182,7 @@ export function ScriptEditor({ value, onChange, className }: ScriptEditorProps) 
       {/* return 语义提示（随语言变化） */}
       <p className="text-[11px] text-muted-foreground">{langMeta.returnHint}</p>
 
-      {/* 代码编辑区（统一 CodeEditor：行号 + 语法高亮 + 缩进/括号匹配，语言随 lang 切换） */}
+      {/* 代码编辑区（统一 CodeEditor：行号 + 语法高亮 + 缩进/括号匹配，语言随 lang 切换；右上角可放大到弹窗） */}
       <CodeEditor
         value={value.code}
         onChange={setCode}
@@ -191,6 +191,7 @@ export function ScriptEditor({ value, onChange, className }: ScriptEditorProps) 
         placeholder={langMeta.placeholder}
         minHeight="10rem"
         maxHeight="24rem"
+        expandable
         ariaLabel="脚本代码"
       />
 

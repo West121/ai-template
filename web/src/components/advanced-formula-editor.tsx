@@ -15,9 +15,11 @@
  * functions / validate / evaluate 复用本组件，产出串格式不变。
  */
 import { useMemo, useRef, useState } from "react"
-import { AlertCircle, CheckCircle2, FunctionSquare, Search } from "lucide-react"
+import { AlertCircle, CheckCircle2, FunctionSquare, Maximize2, Search } from "lucide-react"
 import ReactCodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror"
 import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { isDarkMode } from "@/lib/theme"
 import { useAppStore } from "@/stores/app-store"
@@ -52,6 +54,8 @@ export interface AdvancedFormulaEditorProps {
   keywords?: readonly string[]
   placeholder?: string
   className?: string
+  /** 右上角「放大到弹窗」编辑（默认开）；弹窗内的实例传 false 防递归 */
+  expandable?: boolean
 }
 
 function typeLabel(v: unknown): string {
@@ -84,10 +88,12 @@ export function AdvancedFormulaEditor({
   keywords,
   placeholder,
   className,
+  expandable = true,
 }: AdvancedFormulaEditorProps) {
   const cmRef = useRef<ReactCodeMirrorRef>(null)
 
   const [caret, setCaret] = useState(0)
+  const [expanded, setExpanded] = useState(false)
   const [focused, setFocused] = useState(false)
   const [docQuery, setDocQuery] = useState("")
   const [selectedFn, setSelectedFn] = useState<FnDoc | null>(functions[0] ?? null)
@@ -159,6 +165,7 @@ export function AdvancedFormulaEditor({
   }, [docQuery, functions])
 
   return (
+    <>
     <div className={cn("@container flex h-full min-h-0 flex-col gap-2.5", className)}>
       {/* 主区：函数库侧栏 + 编辑器列——弹性铺满可用高度 */}
       <div className="flex min-h-0 flex-1 gap-2">
@@ -215,10 +222,23 @@ export function AdvancedFormulaEditor({
               focused ? "border-ring ring-[3px] ring-ring/50" : "border-input",
             )}
           >
-            {/* 「公式代码区」标识 */}
-            <div className="pointer-events-none absolute right-1.5 top-1.5 z-10 flex select-none items-center gap-1 rounded bg-muted/70 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-              <span className="font-mono italic text-primary">fx</span>
-              公式
+            {/* 右上角：放大按钮 + 「公式代码区」标识 */}
+            <div className="absolute right-1.5 top-1.5 z-20 flex select-none items-center gap-1">
+              {expandable && (
+                <button
+                  type="button"
+                  aria-label="放大编辑"
+                  title="放大编辑"
+                  onClick={() => setExpanded(true)}
+                  className="grid size-6 place-items-center rounded-md border border-border/60 bg-background/70 text-muted-foreground opacity-60 backdrop-blur-sm transition-opacity hover:bg-accent hover:text-foreground hover:opacity-100"
+                >
+                  <Maximize2 className="size-3.5" />
+                </button>
+              )}
+              <span className="pointer-events-none flex items-center gap-1 rounded bg-muted/70 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                <span className="font-mono italic text-primary">fx</span>
+                公式
+              </span>
             </div>
             <ReactCodeMirror
               ref={cmRef}
@@ -356,5 +376,35 @@ export function AdvancedFormulaEditor({
         )}
       </div>
     </div>
+
+    {/* 放大到弹窗：复用同一套 createFormulaExtensions（字段补全/校验不降级）+ 同 value/onChange 实时同步 */}
+    {expandable && (
+      <Dialog open={expanded} onOpenChange={setExpanded}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>编辑公式 · fx</DialogTitle>
+          </DialogHeader>
+          <div className="h-[62vh]">
+            <AdvancedFormulaEditor
+              value={value}
+              onChange={onChange}
+              functions={functions}
+              fields={fields}
+              validate={validate}
+              evaluate={evaluate}
+              sampleContext={sampleContext}
+              keywords={keywords}
+              placeholder={placeholder}
+              className="h-full"
+              expandable={false}
+            />
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setExpanded(false)}>完成</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    )}
+    </>
   )
 }

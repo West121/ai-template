@@ -1322,6 +1322,7 @@ function EventActionPayload<E extends EventActionConfig>({
               lint={false}
               readOnly={trustedReadonly}
               lineWrap
+              expandable
               minHeight="4rem"
               maxHeight="16rem"
               placeholder={'{ "instanceId": "${instanceId}" }'}
