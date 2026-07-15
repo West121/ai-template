@@ -11,6 +11,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useAuthStore } from "@/stores/auth-store"
+import { useAiActionOutcomes } from "@/stores/ai-action-outcomes"
 import type { AiMessagePart } from "../protocol"
 import { ManageFormPart } from "./manage-form-card"
 
@@ -20,6 +21,7 @@ beforeAll(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  useAiActionOutcomes.getState().clear() // 隔离：结果 store 为模块单例，跨用例清空（否则同 partId 卡显示上一测的已提交态）
 })
 vi.spyOn(console, "error").mockImplementation(() => {})
 

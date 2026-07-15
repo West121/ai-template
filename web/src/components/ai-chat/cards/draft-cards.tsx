@@ -12,6 +12,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { createFlowFromDraft } from "../api"
 import { friendlyAiError, resolveFeaturePath, type AiMessagePart } from "../protocol"
+import { getAiActionOutcome, recordAiActionOutcome } from "@/stores/ai-action-outcomes"
 
 /** "草稿·需在设计器确认启用" 徽标 */
 function DraftBadge({ text = "草稿" }: { text?: string }) {
@@ -86,7 +87,10 @@ export function FlowDraftPart({ part }: { part: AiMessagePart }) {
   const name = String(p.name ?? "自动化编排草稿")
   const triggerDesc = typeof p.triggerDesc === "string" ? p.triggerDesc : ""
   const nodes = asChain(p.nodes, "label")
-  const [state, setState] = useState<"idle" | "creating" | "created">("idle")
+  // 重挂不复活：草稿已创建过就渲染「已创建」（避免关面板重开后再点一次、建重复草稿流）
+  const [state, setState] = useState<"idle" | "creating" | "created">(
+    getAiActionOutcome(draftId)?.status === "done" ? "created" : "idle",
+  )
 
   const onCreate = async () => {
     if (!draftId || state !== "idle") return
@@ -96,6 +100,7 @@ export function FlowDraftPart({ part }: { part: AiMessagePart }) {
       const code = res.data.flowCode ?? res.data.flowId
       const path = code ? resolveFeaturePath("AUTOMATION_DESIGNER", { code }) : null
       setState("created")
+      recordAiActionOutcome(draftId, { status: "done" })
       toast.success("已创建草稿编排，正在打开设计器…")
       if (path) navigate(path)
       else toast.message("编排已创建，请在自动化列表中打开")

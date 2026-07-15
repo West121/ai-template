@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { cancelActionV2, confirmActionV2 } from "../api"
 import { friendlyAiError, ulid, type AiMessagePart } from "../protocol"
+import { getAiActionOutcome, recordAiActionOutcome } from "@/stores/ai-action-outcomes"
 import { createDoc, fetchSpaces, saveDocContent } from "@/pages/knowledge/mock"
 import { canEdit } from "@/pages/knowledge/permissions"
 import { htmlToJson } from "@/pages/knowledge/content-codec"
@@ -30,8 +31,12 @@ export function KnowledgeSavePart({ part }: { part: AiMessagePart }) {
   const [title, setTitle] = useState(typeof p.title === "string" && p.title ? p.title : "未命名知识")
   const [spaces, setSpaces] = useState<KbSpace[]>([])
   const [spaceId, setSpaceId] = useState<number | null>(typeof p.defaultSpaceId === "number" ? p.defaultSpaceId : null)
-  const [state, setState] = useState<"idle" | "saving" | "done" | "cancelled" | "error">("idle")
-  const [resultLink, setResultLink] = useState<string | null>(null)
+  // 重挂不复活：mount 先读客户端结果 store（有终态就渲染对应态，不回到可操作表单）
+  const prior = getAiActionOutcome(actionId)
+  const [state, setState] = useState<"idle" | "saving" | "done" | "cancelled" | "error">(
+    prior?.status === "done" ? "done" : prior?.status === "cancelled" ? "cancelled" : "idle",
+  )
+  const [resultLink, setResultLink] = useState<string | null>(prior?.resultLink ?? null)
   const [error, setError] = useState<string | null>(null)
   const idemRef = useRef<string | null>(null)
 
@@ -73,8 +78,10 @@ export function KnowledgeSavePart({ part }: { part: AiMessagePart }) {
           link = `/knowledge/${spaceId}?doc=${doc.data.id}`
         }
       }
-      setResultLink(link ?? `/knowledge/${spaceId}`)
+      const finalLink = link ?? `/knowledge/${spaceId}`
+      setResultLink(finalLink)
       setState("done")
+      recordAiActionOutcome(actionId, { status: "done", resultLink: finalLink })
     } catch (err) {
       const text = friendlyAiError(err, "保存失败")
       toast.error(text)
@@ -85,6 +92,7 @@ export function KnowledgeSavePart({ part }: { part: AiMessagePart }) {
 
   const cancel = () => {
     setState("cancelled")
+    recordAiActionOutcome(actionId, { status: "cancelled" })
     void cancelActionV2(actionId).catch(() => undefined)
   }
 

@@ -14,8 +14,27 @@ import { Button } from "@/components/ui/button"
 import { cancelActionV2, confirmActionV2 } from "../api"
 import { friendlyAiError, ulid } from "../protocol"
 import type { AiConfirmCard } from "../types"
-import { CONFIRM_INITIAL, confirmReducer } from "./confirm-machine"
+import { CONFIRM_INITIAL, confirmReducer, type ConfirmCardState } from "./confirm-machine"
 import { AiSummaryBlock } from "./ai-summary"
+import { getAiActionOutcome, recordAiActionOutcome, type AiActionOutcome } from "@/stores/ai-action-outcomes"
+
+/** 结果 store 的终态 → confirm 状态机初态（重挂不复活：done/cancelled/expired/stale 直接落终态） */
+function initConfirmState(actionId: string): ConfirmCardState {
+  const o: AiActionOutcome | undefined = getAiActionOutcome(actionId)
+  if (!o) return CONFIRM_INITIAL
+  switch (o.status) {
+    case "done":
+      return { state: "done", resultMessage: o.resultMessage, resultLink: o.resultLink }
+    case "cancelled":
+      return { state: "cancelled" }
+    case "expired":
+      return { state: "expired" }
+    case "stale":
+      return { state: "stale", error: o.error }
+    default:
+      return CONFIRM_INITIAL
+  }
+}
 
 /** 批E⑩ 流程预测链：通过后流转 签发(王经理)→用印→归档 */
 function PredictChain({ steps }: { steps: NonNullable<AiConfirmCard["predictChain"]> }) {
@@ -47,7 +66,8 @@ function PredictChain({ steps }: { steps: NonNullable<AiConfirmCard["predictChai
 
 export function ConfirmCard({ card }: { card: AiConfirmCard }) {
   const navigate = useNavigate()
-  const [s, dispatch] = useReducer(confirmReducer, CONFIRM_INITIAL)
+  // 重挂不复活：从客户端结果 store 恢复终态（关面板重开不回到可确认态，避免重复提交）
+  const [s, dispatch] = useReducer(confirmReducer, card.actionId, initConfirmState)
   // 幂等键：同一动作的重试沿用同一 key（服务端幂等去重，§7.3）
   const idemKeyRef = useRef<string | null>(null)
 
@@ -60,8 +80,12 @@ export function ConfirmCard({ card }: { card: AiConfirmCard }) {
       if (r.status === "EXECUTING") dispatch({ type: "EXECUTING" })
       if (r.ok) {
         dispatch({ type: "SUCCESS", message: r.message, resultLink: r.resultLink })
+        recordAiActionOutcome(card.actionId, { status: "done", resultMessage: r.message, resultLink: r.resultLink })
       } else {
         dispatch({ type: "FAILURE", expired: r.expired, stale: r.stale, error: r.message })
+        // 终态才记（idle 可重试态不记，重挂后仍可再试）
+        if (r.expired) recordAiActionOutcome(card.actionId, { status: "expired" })
+        else if (r.stale) recordAiActionOutcome(card.actionId, { status: "stale", error: r.message })
       }
     } catch (err) {
       const text = friendlyAiError(err, "执行失败")
@@ -72,6 +96,7 @@ export function ConfirmCard({ card }: { card: AiConfirmCard }) {
 
   const doCancel = () => {
     dispatch({ type: "CANCEL" })
+    recordAiActionOutcome(card.actionId, { status: "cancelled" })
     // 服务端草稿标记取消（V2；旧后端/离线静默成功）
     void cancelActionV2(card.actionId).catch(() => undefined)
   }

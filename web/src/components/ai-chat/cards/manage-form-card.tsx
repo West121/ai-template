@@ -22,6 +22,7 @@ import type { WfFormData } from "@/types/workflow"
 import type { AiMessagePart } from "../protocol"
 import type { AiConfirmCard, AiFormCard } from "../types"
 import { ConfirmCard } from "./confirm-card"
+import { getAiActionOutcome, recordAiActionOutcome } from "@/stores/ai-action-outcomes"
 
 /** schema 归一（同 form-card 根因防白屏）：widgets 数组 / {widgets} / JSON 串 → 数组；非法 → [] */
 function normalizeSchema(raw: unknown): AiFormCard["schema"] {
@@ -74,9 +75,14 @@ function ManageFormInner({ part }: { part: AiMessagePart }) {
   const title = typeof p.title === "string" && p.title ? p.title : "管理操作"
   const submitPath = typeof p.submitPath === "string" && p.submitPath ? p.submitPath : "/api/ai/manage/submit"
 
+  // 重挂不复活：按本卡稳定 partId 记「已提交(带 confirm 卡快照)/已取消」，关面板重开不回到可再次提交的表单
+  const partKey = part.partId
+  const prior = getAiActionOutcome(partKey)
   const [submitting, setSubmitting] = useState(false)
-  const [confirmCard, setConfirmCard] = useState<AiConfirmCard | null>(null)
-  const [cancelled, setCancelled] = useState(false)
+  const [confirmCard, setConfirmCard] = useState<AiConfirmCard | null>(
+    prior?.status === "submitted" && prior.snapshot ? (prior.snapshot as AiConfirmCard) : null,
+  )
+  const [cancelled, setCancelled] = useState(prior?.status === "cancelled")
 
   const handleSubmit = async (data: WfFormData) => {
     setSubmitting(true)
@@ -84,19 +90,23 @@ function ManageFormInner({ part }: { part: AiMessagePart }) {
       // 后端实况 body：{ actionCode, values, targetId }
       const res = await api<unknown>(submitPath, { method: "POST", body: JSON.stringify({ actionCode, values: data, targetId }) })
       const card = toConfirmCard(res)
-      if (card) setConfirmCard(card)
-      else toast.error("提交未返回可确认的操作，请重试")
+      if (card) {
+        setConfirmCard(card)
+        recordAiActionOutcome(partKey, { status: "submitted", snapshot: card })
+      } else toast.error("提交未返回可确认的操作，请重试")
     } catch (err) {
       if (err instanceof NetworkError) {
         toast.info("后端未连接：已演示提交")
-        setConfirmCard({
+        const demoCard: AiConfirmCard = {
           type: "confirm",
           actionId: `demo_${Date.now()}`,
           title: `确认${title}`,
           summary: "演示：后端未连接，确认为模拟执行（未真实落库）。",
           params: Object.entries(data).map(([k, v]) => ({ label: k, value: maskValue(k, v) })),
           danger: false,
-        })
+        }
+        setConfirmCard(demoCard)
+        recordAiActionOutcome(partKey, { status: "submitted", snapshot: demoCard })
       } else {
         toast.error(err instanceof Error ? err.message : "提交失败")
       }
@@ -140,6 +150,7 @@ function ManageFormInner({ part }: { part: AiMessagePart }) {
             onSubmit={handleSubmit}
             onCancel={() => {
               setCancelled(true)
+              recordAiActionOutcome(partKey, { status: "cancelled" })
               toast.message("已取消")
             }}
           />

@@ -133,6 +133,19 @@ function AttachmentStrip({ items, onRemove }: { items: StripItem[]; onRemove?: (
   )
 }
 
+/**
+ * 修「同一助手回复渲染两遍」：后端把正文既走 message.text.delta（→ message.content）又落一份 text part
+ * （→ message.parts），MessageRow 同时渲染 content 与 parts 便重复。渲染时去掉与 content 同文的纯文本 part
+ * （保留带引用/citations 的文本 part，它不止是正文）。
+ */
+function isDuplicateTextPart(part: AiMessagePart, content: string): boolean {
+  if (part.partType !== "text") return false
+  const payload = (part.payload ?? {}) as { text?: unknown; citations?: unknown }
+  const hasCitations = Array.isArray(payload.citations) && payload.citations.length > 0
+  const text = typeof payload.text === "string" ? payload.text.trim() : ""
+  return !hasCitations && text !== "" && text === content
+}
+
 function MessageRow({ message }: { message: AiMessage }) {
   if (message.role === "USER") {
     return (
@@ -149,7 +162,12 @@ function MessageRow({ message }: { message: AiMessage }) {
     )
   }
   // V2：有 parts 优先按 Part 协议渲染（白名单 + 降级）；否则兼容读旧 cards
-  const parts = message.parts?.length ? ([...message.parts].sort((a, b) => a.sequenceNo - b.sequenceNo) as AiMessagePart[]) : null
+  const contentText = message.content?.trim() ?? ""
+  const parts = message.parts?.length
+    ? ([...message.parts].sort((a, b) => a.sequenceNo - b.sequenceNo) as AiMessagePart[]).filter(
+        (p) => !isDuplicateTextPart(p, contentText),
+      )
+    : null
   return (
     <div className="flex gap-2.5">
       <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
