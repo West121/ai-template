@@ -159,6 +159,10 @@ describe("ScriptEditor 精简布局", () => {
     // vars 带类型 + imports 行
     expect(await screen.findByText("vars: Map<String,Object>")).toBeTruthy()
     expect(screen.getByText(/Java 预置 import/)).toBeTruthy()
+    // 恒单列（窄面板防叠字）：不得再用视口断点 sm:grid-cols-2
+    const varsUl = screen.getByText("可用上下文（后端注入）").parentElement!.querySelector("ul")!
+    expect(varsUl.className).not.toContain("grid-cols-2")
+    expect(varsUl.className).toContain("space-y")
     // 推荐 API 默认展开：方法 + doc 直接可见
     expect(screen.getByText(/推荐 API（1）/)).toBeTruthy()
     expect(screen.getByText(/deptName\(deptId: Long\): String/)).toBeTruthy()

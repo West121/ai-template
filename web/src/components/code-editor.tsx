@@ -102,7 +102,8 @@ export function CodeEditor({
     <>
       <div
         className={cn(
-          "relative overflow-hidden rounded-md border bg-background focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
+          // min-w-0/max-w-full：窄 flex/grid 容器里不被内容撑宽（撑宽会让 .cm-scroller 失去横滚、被祖先裁切）
+          "relative min-w-0 max-w-full overflow-hidden rounded-md border bg-background focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
           readOnly ? "border-dashed opacity-90" : "border-input",
           fill && "h-full [&_.cm-editor]:h-full [&>div]:h-full",
           className,

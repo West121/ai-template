@@ -117,11 +117,12 @@ function MethodList({ methods }: { methods: ScriptCtxMethod[] }) {
   return (
     <ul className="space-y-0.5 pl-4">
       {methods.map((m, i) => (
-        <li key={`${m.name}-${i}`} className="text-[11px]">
-          <code className="font-mono text-foreground">
+        <li key={`${m.name}-${i}`} className="min-w-0 text-[11px]">
+          {/* break-all：窄面板（~300px）里长签名换行而不是撑爆/叠字 */}
+          <code className="break-all font-mono text-foreground">
             {m.name}({m.params.map((pp) => (pp.name ? `${pp.name}: ${pp.type}` : pp.type)).join(", ")}): {m.returnType}
           </code>
-          {m.doc && <span className="ml-1.5 text-muted-foreground">{m.doc}</span>}
+          {m.doc && <span className="ml-1.5 break-words text-muted-foreground">{m.doc}</span>}
         </li>
       ))}
     </ul>
@@ -277,7 +278,7 @@ export function ScriptEditor({ value, onChange, className, expandable = true, la
   }
 
   return (
-    <div className={cn("space-y-3", className)}>
+    <div className={cn("min-w-0 space-y-3", className)}>
       {/* 诚实标注（治理 §3.3「不撒谎」红线）：非沙箱 + 完整权限一行常显，详情可展开——警告必可见，压成一行不占版面 */}
       <Collapsible open={warnOpen} onOpenChange={setWarnOpen}>
         <div className="rounded-md border border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-700 dark:text-amber-400">
@@ -295,8 +296,8 @@ export function ScriptEditor({ value, onChange, className, expandable = true, la
         </div>
       </Collapsible>
 
-      {/* 语言切换 + 放大（整个脚本编辑体验进弹窗：语言 Tab / 编辑器 / 调试全套） */}
-      <div className="flex items-center justify-between gap-2">
+      {/* 语言切换 + 插入示例/放大（flex-wrap：窄面板下按钮整齐换行，不被裁切） */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <Tabs value={value.lang} onValueChange={setLang}>
           <TabsList className="h-8">
             {LANGS.map((l) => (
@@ -371,17 +372,19 @@ export function ScriptEditor({ value, onChange, className, expandable = true, la
           <ChevronDown className={cn("size-3.5 shrink-0 transition-transform", debugOpen && "rotate-180")} />
         </CollapsibleTrigger>
         <CollapsibleContent className="space-y-2 border-t px-2.5 py-2">
-          {/* 可用上下文速查：manifest 驱动（vars 五项 + beans 折叠列表）；拉不到时回退硬编码 */}
+          {/* 可用上下文速查：manifest 驱动；拉不到时回退硬编码。
+              恒单列（面板可窄至 ~300px，视口断点 sm: 会错判成两列导致叠字）：每项两行——
+              第一行 name: 类型（break-all 防长泛型撑爆），第二行 desc（break-words）。 */}
           <div className="space-y-1">
             <div className="text-[11px] font-medium text-muted-foreground">可用上下文（后端注入）</div>
-            <ul className="grid grid-cols-1 gap-x-3 gap-y-0.5 sm:grid-cols-2">
+            <ul className="space-y-1">
               {(manifest?.vars.length
                 ? manifest.vars.map((v) => ({ name: `${v.name}: ${v.type}`, desc: v.desc ?? "" }))
                 : CONTEXT_HINTS
               ).map((h) => (
-                <li key={h.name} className="flex items-baseline gap-1.5 text-[11px]">
-                  <code className="shrink-0 font-mono text-foreground">{h.name}</code>
-                  <span className="text-muted-foreground">{h.desc}</span>
+                <li key={h.name} className="min-w-0 text-[11px]">
+                  <code className="break-all font-mono text-foreground">{h.name}</code>
+                  {h.desc && <div className="break-words text-muted-foreground">{h.desc}</div>}
                 </li>
               ))}
             </ul>
@@ -389,8 +392,8 @@ export function ScriptEditor({ value, onChange, className, expandable = true, la
 
           {/* Java 预置 import（manifest.imports）：包下类可写简名，其余全限定名 */}
           {manifest && manifest.imports.length > 0 && (
-            <p className="text-[11px] text-muted-foreground">
-              Java 预置 import：<code className="font-mono text-foreground">{manifest.imports.join("、")}</code>
+            <p className="break-words text-[11px] text-muted-foreground">
+              Java 预置 import：<code className="break-all font-mono text-foreground">{manifest.imports.join("、")}</code>
               ——这些包下类可直接写简名；commons/hutool 等用全限定名（见工具类列表 className）。
             </p>
           )}
