@@ -45,7 +45,7 @@ public class DataScopeSupport {
      * 要含子树请在前端选择器把子部门勾进显式 id 集）。dept 无覆盖 → 回落 role.dataScope 全局五档。
      */
     public <T> Specification<T> multiDim(String feature, String entity, String deptField, String userField) {
-        DimensionScope deptOverride = dataDimensionService.deptOverride(feature);
+        DataDimensionService.DeptOverride deptOverride = dataDimensionService.deptOverride(feature);
         Specification<T> spec = deptOverride == null
                 ? SecuritySupport.dataScope(deptField, userField)
                 : deptOverrideSpec(deptOverride, deptField, userField);
@@ -66,17 +66,31 @@ public class DataScopeSupport {
         return spec;
     }
 
-    /** dept 覆盖谓词（替换全局五档，语义见 multiDim javadoc）。 */
-    private <T> Specification<T> deptOverrideSpec(DimensionScope s, String deptField, String userField) {
+    /**
+     * dept 覆盖谓词（替换全局五档）。V54.1 五档：kinds 含 ALL=不限；相对档按<b>查询时</b>活动任职部门展开
+     * （DEPT=本部门、DEPT_AND_CHILD=本部门及子树（物化路径 60s 缓存单查）、SELF=仅本人）；
+     * CUSTOM values=精确部门集。多角色并集=各档展开后集合并 ∪ 精确集，OR userField=self（自己的单据恒可见）。
+     */
+    private <T> Specification<T> deptOverrideSpec(DataDimensionService.DeptOverride ov,
+                                                  String deptField, String userField) {
         return (root, query, cb) -> {
-            if (s.all()) {
+            if (ov.kinds().contains("ALL")) {
                 return cb.conjunction();
             }
-            Long uid = CurrentUserHolder.get() != null ? CurrentUserHolder.get().getUserId() : null;
-            if (s.values().isEmpty()) {
-                return cb.equal(root.get(userField), uid); // 空集=仅本人（默认更严）
+            var ctx = CurrentUserHolder.get();
+            Long uid = ctx != null ? ctx.getUserId() : null;
+            Long activeDept = ctx != null ? ctx.getActiveDeptId() : null;
+            java.util.Set<Long> deptIds = new java.util.HashSet<>(ov.values());
+            if (ov.kinds().contains("DEPT") && activeDept != null) {
+                deptIds.add(activeDept);
             }
-            return cb.or(CriteriaScopes.inOrAny(cb, root.get(deptField), s.values()),
+            if (ov.kinds().contains("DEPT_AND_CHILD") && activeDept != null) {
+                deptIds.addAll(dataDimensionService.deptSubtree(activeDept));
+            }
+            if (deptIds.isEmpty()) {
+                return cb.equal(root.get(userField), uid); // SELF/空集=仅本人（默认更严）
+            }
+            return cb.or(CriteriaScopes.inOrAny(cb, root.get(deptField), deptIds),
                     cb.equal(root.get(userField), uid));
         };
     }

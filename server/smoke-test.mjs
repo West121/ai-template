@@ -1064,14 +1064,89 @@ await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [lmainI
   try {
     const rcli = (args) => execFileSync("docker", ["exec", "oa-redis", "redis-cli", ...args]).toString().trim()
     await listApr(admin.token)
-    const exist1 = rcli(["EXISTS", "dp:dims:v2:1"])
+    const exist1 = rcli(["EXISTS", "dp:dims:v3:1"])
     await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [])
-    const exist2 = rcli(["EXISTS", "dp:dims:v2:1"])
-    const legacy = rcli(["EXISTS", "dp:dims:1"])
-    check("P2 缓存 v2 键(查询建/evict 清/旧键清)", exist1 === "1" && exist2 === "0" && legacy === "0", `${exist1}/${exist2}/${legacy}`)
+    const exist2 = rcli(["EXISTS", "dp:dims:v3:1"])
+    const legacyV2 = rcli(["EXISTS", "dp:dims:v2:1"])
+    const legacyV1 = rcli(["EXISTS", "dp:dims:1"])
+    check("P2 缓存 v3 键(查询建/evict 清/旧键清)", exist1 === "1" && exist2 === "0" && legacyV2 === "0" && legacyV1 === "0", `${exist1}/${exist2}/${legacyV2}/${legacyV1}`)
   } catch (e) {
     console.warn("⚠️ redis 抽验跳过:", String(e?.message ?? e).split("\n")[0])
   }
+}
+
+/* ---------- 11d-5. 权限中心 P2.1 · dept 覆盖五档（V54.1：相对档/延迟展开/转岗跟随） ---------- */
+{
+  const listApr5 = async (tok) => (await call(tok, "GET", "/api/office/approvals?pageNum=1&pageSize=500")).body?.data?.list ?? []
+  const dp5 = (l) => l.map((a) => a.title).filter((t) => t.startsWith("DP维度"))
+  const tree5 = (await call(admin.token, "GET", "/api/system/depts/tree")).body?.data ?? []
+  const kids5 = tree5[0]?.children ?? []
+  const techId5 = kids5.find((d) => d.name === "技术部")?.id
+  const otherDept5 = kids5.find((d) => d.name !== "技术部")
+  const mktId5 = otherDept5?.id
+  const roles5 = (await call(admin.token, "GET", "/api/system/roles?pageNum=1&pageSize=100")).body?.data?.list ?? []
+  const mgrRole5 = roles5.find((r) => r.code === "DEPT_MANAGER")?.id
+  const postId5 = (await call(admin.token, "GET", "/api/system/posts?pageNum=1&pageSize=5")).body?.data?.list?.[0]?.id
+  check("P2.1 前置(部门/角色/岗位可得)", !!(techId5 && mktId5 && mgrRole5 && postId5))
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions?feature=WORKFLOW_TASKS", [])
+
+  // 0) 业务维传相对档 400
+  const bizRel = await call(admin.token, "PUT", "/api/system/users/1/data-dimensions?feature=WORKFLOW_TASKS",
+    [{ dimension: "costCenter", scope: "DEPT", values: [] }])
+  check("P2.1 业务维传相对档 400", bizRel.body?.code === 400, JSON.stringify(bizRel.body?.message))
+
+  // 基线：admin 全局 ALL——找一条「技术部他人建」行(区分 SELF/DEPT 用；KEEP 库常有，无则降级跳过)
+  const base5 = await listApr5(admin.token)
+  const techOther = base5.find((a) => a.deptName === "技术部" && a.applicantId !== 1)
+  const prodRow = base5.find((a) => a.deptName === "产品部")
+  check("P2.1 基线(admin 全量,DP 三行+产品部行在)", dp5(base5).length === 3 && !!prodRow, JSON.stringify({ dp: dp5(base5).length, prod: !!prodRow }))
+
+  // 1) SELF：仅本人——DP 行(admin 自建)仍见,产品部他人行消失,技术部他人行消失
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions?feature=WORKFLOW_TASKS",
+    [{ dimension: "dept", scope: "SELF", values: [] }])
+  const selfRows = await listApr5(admin.token)
+  check("P2.1 dept SELF=仅本人(自建 DP 行在/他人行消失)", dp5(selfRows).length === 3
+    && !selfRows.some((a) => a.title === prodRow?.title)
+    && (!techOther || !selfRows.some((a) => a.title === techOther.title)),
+    JSON.stringify({ dp: dp5(selfRows).length, n: selfRows.length }))
+
+  // 2) DEPT：本部门(admin 活动任职=技术部)——技术部他人行回来,产品部行仍无
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions?feature=WORKFLOW_TASKS",
+    [{ dimension: "dept", scope: "DEPT", values: [] }])
+  const deptRows = await listApr5(admin.token)
+  check("P2.1 dept DEPT=本部门(技术部他人行可见/产品部不可见)", dp5(deptRows).length === 3
+    && (!techOther || deptRows.some((a) => a.title === techOther.title))
+    && !deptRows.some((a) => a.title === prodRow?.title),
+    JSON.stringify({ n: deptRows.length, techOther: !!techOther }))
+
+  // 3) DEPT_AND_CHILD：本部门及子树 ⊇ DEPT(子树数据面锚点=转岗测试佐证展开逻辑)
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions?feature=WORKFLOW_TASKS",
+    [{ dimension: "dept", scope: "DEPT_AND_CHILD", values: [] }])
+  const dacRows = await listApr5(admin.token)
+  check("P2.1 dept DEPT_AND_CHILD ⊇ DEPT", dacRows.length >= deptRows.length && dp5(dacRows).length === 3, `${deptRows.length}→${dacRows.length}`)
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions?feature=WORKFLOW_TASKS", [])
+
+  // 4) 转岗跟随：测试用户(技术部,DEPT_MANAGER 角色有 list 权)配 user 级 dept DEPT 覆盖 →
+  //    见技术部 DP 行；transfer 到市场部 → 重登 → DP 行消失(相对档跟随新部门=延迟展开+失效实证)
+  const TS5 = Date.now()
+  const tuName = `p2dept_${TS5}`
+  const tu = await call(admin.token, "POST", "/api/system/users",
+    { username: tuName, name: "P2转岗测试", password: "p2pass123", deptId: techId5, postId: postId5, roleIds: [mgrRole5] })
+  const tuId = tu.body?.data?.id ?? tu.body?.data
+  check("P2.1 建转岗测试用户", tu.body?.code === 0 && !!tuId, JSON.stringify(tu.body?.message))
+  await call(admin.token, "PUT", `/api/system/users/${tuId}/data-dimensions?feature=WORKFLOW_TASKS`,
+    [{ dimension: "dept", scope: "DEPT", values: [] }])
+  let tuTok = (await call(null, "POST", "/api/auth/login", { username: tuName, password: "p2pass123" })).body?.data?.token
+  const tuBefore = dp5(await listApr5(tuTok))
+  check("P2.1 转岗前(技术部)DEPT 覆盖=见 DP 三行", tuBefore.length === 3, JSON.stringify(tuBefore))
+  const tr5 = await call(admin.token, "POST", `/api/system/users/${tuId}/transfer`, { deptId: mktId5, postId: postId5 })
+  check(`P2.1 transfer 到${otherDept5?.name}`, tr5.body?.code === 0, JSON.stringify(tr5.body?.message))
+  tuTok = (await call(null, "POST", "/api/auth/login", { username: tuName, password: "p2pass123" })).body?.data?.token
+  const tuAfter = dp5(await listApr5(tuTok))
+  check("P2.1 转岗后 DEPT 覆盖自动跟随新部门(DP 行消失)", tuAfter.length === 0, JSON.stringify(tuAfter))
+  // 自清
+  await call(admin.token, "PUT", `/api/system/users/${tuId}/data-dimensions?feature=WORKFLOW_TASKS`, [])
+  await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [tuId] })
 }
 
 /* ---------- 11e. 个人中心自助端点（磐石：change-password / profile，仅本人，不动种子密码） ---------- */

@@ -61,11 +61,13 @@ import java.util.regex.Pattern;
 public class DataDimensionService {
 
     /**
-     * V54 缓存结构升级：值从平铺 {dim:scope} 变分层 {"":{dim:scope},"<feature>":{dim:scope}}。
-     * 直接换前缀 v2——旧 dp:dims:{uid} 键不再被读（TTL 30min 自然蒸发；evictUser 顺带删），零迁移代码。
+     * 缓存结构版本化：V54 分层（v2）→ V54.1 增 dept 覆盖段（v3：{"dims":{layer:{dim:scope}},"dept":{layer:{kinds,values}}}）。
+     * 换前缀即升级——旧键不再被读（TTL 30min 自然蒸发；evictUser 顺带删），零迁移代码。
      */
-    private static final String CACHE_PREFIX = "dp:dims:v2:";
-    private static final String LEGACY_CACHE_PREFIX = "dp:dims:";
+    private static final String CACHE_PREFIX = "dp:dims:v3:";
+    private static final String[] LEGACY_CACHE_PREFIXES = {"dp:dims:v2:", "dp:dims:"};
+    /** dept 覆盖相对档（V54.1）：与全局五档同构；查询时按活动任职部门展开（延迟展开，防切换任职后缓存错位）。 */
+    private static final Set<String> DEPT_RELATIVE_SCOPES = Set.of("DEPT_AND_CHILD", "DEPT", "SELF");
     /** 全局默认层键（拍板：存 '' 代 NULL，唯一键干净）。 */
     public static final String FEATURE_GLOBAL = "";
     /** 内建部门维保留键（V54 覆盖层允许 dimension='dept'；维度 CRUD 禁用户占用）。 */
@@ -96,6 +98,24 @@ public class DataDimensionService {
     private final Map<String, BindingCacheEntry> bindingCache = new ConcurrentHashMap<>();
 
     private record BindingCacheEntry(Map<String, String> columns, long cachedAt) {
+    }
+
+    /**
+     * dept 覆盖聚合（V54.1）：kinds=各角色/用户级行的档位并集（ALL/DEPT_AND_CHILD/DEPT/SELF），
+     * values=CUSTOM 精确部门集并集。<b>相对档不烘进缓存</b>——查询侧按「当时」活动任职部门展开
+     * （烘入会在 /api/auth/switch 切换任职后错位：缓存 per-user 不分任职、切换无失效钩子）。
+     */
+    public record DeptOverride(Set<String> kinds, Set<Long> values) {
+    }
+
+    /** 分层缓存载体（v3）：dims=业务维各层；dept=各层 dept 覆盖（仅覆盖层会有）。 */
+    private record CachedLayers(Map<String, Map<String, DimensionScope>> dims, Map<String, DeptOverride> dept) {
+    }
+
+    /** 部门子树缓存（物化路径单查 + 60s TTL，查询侧零递归）。 */
+    private final Map<Long, SubtreeCacheEntry> subtreeCache = new ConcurrentHashMap<>();
+
+    private record SubtreeCacheEntry(Set<Long> ids, long cachedAt) {
     }
 
     // ==================== 注册 / 元数据 / options ====================
@@ -298,8 +318,14 @@ public class DataDimensionService {
                 throw new BusinessException(400, "未注册或未启用的数据维度: " + item.dimension());
             }
             String scope = item.scope();
-            if (!SysDataDimension.SCOPE_ALL.equals(scope) && !SysDataDimension.SCOPE_CUSTOM.equals(scope)) {
-                throw new BusinessException(400, "非法的维度范围(仅 ALL/CUSTOM): " + scope);
+            if (isDept) {
+                // V54.1：dept 覆盖档位与全局五档同构（相对档查询时按活动任职展开）
+                if (!SysDataDimension.SCOPE_ALL.equals(scope) && !SysDataDimension.SCOPE_CUSTOM.equals(scope)
+                        && !DEPT_RELATIVE_SCOPES.contains(scope)) {
+                    throw new BusinessException(400, "dept 维范围须为 ALL/DEPT_AND_CHILD/DEPT/SELF/CUSTOM: " + scope);
+                }
+            } else if (!SysDataDimension.SCOPE_ALL.equals(scope) && !SysDataDimension.SCOPE_CUSTOM.equals(scope)) {
+                throw new BusinessException(400, "非法的维度范围(业务维仅 ALL/CUSTOM，相对档仅 dept 维): " + scope);
             }
             if (SysDataDimension.SCOPE_CUSTOM.equals(scope)) {
                 List<Long> values = item.values() == null ? List.of() : item.values();
@@ -362,10 +388,10 @@ public class DataDimensionService {
         if (ctx == null || ctx.getUserId() == null || codes == null || codes.isEmpty()) {
             return Map.of();
         }
-        Map<String, Map<String, DimensionScope>> layers = cachedScopes(ctx.getUserId());
-        Map<String, DimensionScope> global = layers.getOrDefault(FEATURE_GLOBAL, Map.of());
+        CachedLayers layers = cachedScopes(ctx.getUserId());
+        Map<String, DimensionScope> global = layers.dims().getOrDefault(FEATURE_GLOBAL, Map.of());
         Map<String, DimensionScope> override = StringUtils.hasText(feature)
-                ? layers.getOrDefault(feature.trim(), Map.of()) : Map.of();
+                ? layers.dims().getOrDefault(feature.trim(), Map.of()) : Map.of();
         Map<String, DimensionScope> out = new HashMap<>();
         for (String code : codes) {
             out.put(code, override.containsKey(code) ? override.get(code)
@@ -376,18 +402,44 @@ public class DataDimensionService {
 
     /**
      * V54 dept 覆盖（内建维）：该 feature 覆盖层<b>显式配置了 dept</b> 才返回（替换全局五档），
-     * 否则 null（查询侧回落 role.dataScope 全局五档）。CUSTOM values=精确部门 id 集（不含子树）。
+     * 否则 null（查询侧回落 role.dataScope 全局五档）。V54.1 五档：kinds 含 ALL=不限；
+     * 相对档（DEPT_AND_CHILD/DEPT/SELF）由查询侧按活动任职部门展开（{@link #deptSubtree}）；
+     * CUSTOM values=精确部门 id 集（不含子树）。多角色并集=档位并集+值集并集（各自展开后自然合并）。
      */
-    public DimensionScope deptOverride(String feature) {
+    public DeptOverride deptOverride(String feature) {
         UserContext ctx = CurrentUserHolder.get();
         if (ctx == null || ctx.getUserId() == null || !StringUtils.hasText(feature)) {
             return null;
         }
-        return cachedScopes(ctx.getUserId()).getOrDefault(feature.trim(), Map.of()).get(DIM_DEPT);
+        return cachedScopes(ctx.getUserId()).dept().get(feature.trim());
+    }
+
+    /** 部门子树 id 集（含自身；V46 物化路径前缀单查 + 60s 进程内缓存——查询侧零递归）。 */
+    public Set<Long> deptSubtree(Long deptId) {
+        if (deptId == null) {
+            return Set.of();
+        }
+        SubtreeCacheEntry cached = subtreeCache.get(deptId);
+        long now = System.currentTimeMillis();
+        if (cached != null && now - cached.cachedAt() < BINDING_CACHE_TTL_MS) {
+            return cached.ids();
+        }
+        Set<Long> ids = new HashSet<>();
+        deptRepository.findById(deptId).ifPresent(d -> {
+            if (StringUtils.hasText(d.getPath())) {
+                ids.addAll(deptRepository.findIdsByPathPrefix(d.getPath() + "%"));
+            }
+        });
+        if (ids.isEmpty()) {
+            ids.add(deptId); // 无路径数据兜底=仅本部门
+        }
+        Set<Long> frozen = Set.copyOf(ids);
+        subtreeCache.put(deptId, new SubtreeCacheEntry(frozen, now));
+        return frozen;
     }
 
     /** 取用户分层范围（Redis 命中直取；未命中现算并回填；Redis 故障降级为直算，不影响正确性）。 */
-    private Map<String, Map<String, DimensionScope>> cachedScopes(Long userId) {
+    private CachedLayers cachedScopes(Long userId) {
         String key = CACHE_PREFIX + userId;
         try {
             String json = redis.opsForValue().get(key);
@@ -397,7 +449,7 @@ public class DataDimensionService {
         } catch (Exception e) {
             log.warn("DP 维度缓存读取失败(降级直算) user={}: {}", userId, e.getMessage());
         }
-        Map<String, Map<String, DimensionScope>> computed = computeAllScopes(userId);
+        CachedLayers computed = computeAllScopes(userId);
         try {
             redis.opsForValue().set(key, serialize(computed), CACHE_TTL);
         } catch (Exception e) {
@@ -406,8 +458,8 @@ public class DataDimensionService {
         return computed;
     }
 
-    /** 现算（V54 分层）：角色配置 + 用户配置按 (feature, dimension) 并集（同层任一 ALL → 不限；否则 CUSTOM 值并集）。 */
-    private Map<String, Map<String, DimensionScope>> computeAllScopes(Long userId) {
+    /** 现算（V54 分层）：角色配置 + 用户配置按 (feature, dimension) 并集（同层任一 ALL → 不限；否则 CUSTOM 值并集）；dept 覆盖行单独聚合（档位并集，相对档延迟展开）。 */
+    private CachedLayers computeAllScopes(Long userId) {
         Set<Long> roleIds = new LinkedHashSet<>();
         for (SysUserAssignment a : assignmentRepository.findByUserIdAndEnabledTrueOrderByPrimaryFlagDescIdAsc(userId)) {
             for (SysRole r : a.getRoles()) {
@@ -416,31 +468,52 @@ public class DataDimensionService {
                 }
             }
         }
-        // (feature, 维度) -> {anyAll, unionValues}
+        // (feature, 维度) -> {anyAll, unionValues}；dept 行单独聚合 kinds/values
         Map<String, Map<String, boolean[]>> anyAll = new HashMap<>();
         Map<String, Map<String, Set<Long>>> union = new HashMap<>();
+        Map<String, Set<String>> deptKinds = new HashMap<>();
+        Map<String, Set<Long>> deptValues = new HashMap<>();
         List<SysRoleDataDimension> roleCfgs = roleIds.isEmpty() ? List.of() : roleDimRepository.findByRoleIdIn(roleIds);
         for (SysRoleDataDimension c : roleCfgs) {
-            accumulate(anyAll, union, c.getFeature(), c.getDimension(), c.getScope(), c.getValues());
+            accumulate(anyAll, union, deptKinds, deptValues, c.getFeature(), c.getDimension(), c.getScope(), c.getValues());
         }
         for (SysUserDataDimension c : userDimRepository.findByUserId(userId)) {
-            accumulate(anyAll, union, c.getFeature(), c.getDimension(), c.getScope(), c.getValues());
+            accumulate(anyAll, union, deptKinds, deptValues, c.getFeature(), c.getDimension(), c.getScope(), c.getValues());
         }
-        Map<String, Map<String, DimensionScope>> out = new HashMap<>();
+        Map<String, Map<String, DimensionScope>> dims = new HashMap<>();
         union.forEach((feature, byDim) -> {
             Map<String, DimensionScope> layer = new HashMap<>();
             byDim.forEach((dim, values) -> {
                 boolean[] all = anyAll.get(feature).get(dim);
                 layer.put(dim, (all != null && all[0]) ? DimensionScope.unlimited() : DimensionScope.custom(values));
             });
-            out.put(feature, layer);
+            dims.put(feature, layer);
         });
-        return out;
+        Map<String, DeptOverride> dept = new HashMap<>();
+        for (String feature : deptKinds.keySet()) {
+            dept.put(feature, new DeptOverride(Set.copyOf(deptKinds.get(feature)),
+                    Set.copyOf(deptValues.getOrDefault(feature, Set.of()))));
+        }
+        return new CachedLayers(dims, dept);
     }
 
     private void accumulate(Map<String, Map<String, boolean[]>> anyAll, Map<String, Map<String, Set<Long>>> union,
+                            Map<String, Set<String>> deptKinds, Map<String, Set<Long>> deptValues,
                             String feature, String dim, String scope, Set<Long> values) {
         String layer = feature == null ? FEATURE_GLOBAL : feature;
+        if (DIM_DEPT.equals(dim)) {
+            // dept 覆盖：档位并集 + CUSTOM 值并集（相对档不在此展开——查询时按活动任职展开）
+            deptKinds.computeIfAbsent(layer, k -> new HashSet<>());
+            deptValues.computeIfAbsent(layer, k -> new HashSet<>());
+            if (SysDataDimension.SCOPE_CUSTOM.equals(scope)) {
+                if (values != null) {
+                    deptValues.get(layer).addAll(values);
+                }
+            } else {
+                deptKinds.get(layer).add(scope);
+            }
+            return;
+        }
         anyAll.computeIfAbsent(layer, k -> new HashMap<>()).computeIfAbsent(dim, k -> new boolean[]{false});
         union.computeIfAbsent(layer, k -> new HashMap<>()).computeIfAbsent(dim, k -> new HashSet<>());
         if (SysDataDimension.SCOPE_ALL.equals(scope)) {
@@ -719,7 +792,9 @@ public class DataDimensionService {
         }
         try {
             redis.delete(CACHE_PREFIX + userId);
-            redis.delete(LEGACY_CACHE_PREFIX + userId); // V54 结构升级过渡：旧平铺键顺带清（否则等 TTL 蒸发）
+            for (String legacy : LEGACY_CACHE_PREFIXES) {
+                redis.delete(legacy + userId); // 结构升级过渡：旧版本键顺带清（否则等 TTL 蒸发）
+            }
             redis.delete("dp:fields:" + userId); // V52 dp 家族联动：字段权限缓存同钩失效
         } catch (Exception e) {
             log.warn("DP 维度缓存失效失败 user={}: {}", userId, e.getMessage());
@@ -735,11 +810,12 @@ public class DataDimensionService {
 
     // ==================== Redis 序列化 ====================
 
-    /** V54 分层结构：{"<feature|''>": {"<dim>": {unlimited, values[]}}}。 */
-    private String serialize(Map<String, Map<String, DimensionScope>> layers) {
+    /** v3 结构：{"dims":{"<feature|''>":{"<dim>":{unlimited,values[]}}},"dept":{"<feature>":{kinds[],values[]}}}。 */
+    private String serialize(CachedLayers layers) {
         ObjectNode root = objectMapper.createObjectNode();
-        layers.forEach((feature, scopes) -> {
-            ObjectNode layer = root.putObject(feature);
+        ObjectNode dims = root.putObject("dims");
+        layers.dims().forEach((feature, scopes) -> {
+            ObjectNode layer = dims.putObject(feature);
             scopes.forEach((code, s) -> {
                 ObjectNode node = layer.putObject(code);
                 node.put("unlimited", s.all());
@@ -747,13 +823,22 @@ public class DataDimensionService {
                 s.values().forEach(arr::add);
             });
         });
+        ObjectNode dept = root.putObject("dept");
+        layers.dept().forEach((feature, ov) -> {
+            ObjectNode node = dept.putObject(feature);
+            ArrayNode kinds = node.putArray("kinds");
+            ov.kinds().forEach(kinds::add);
+            ArrayNode vals = node.putArray("values");
+            ov.values().forEach(vals::add);
+        });
         return root.toString();
     }
 
-    private Map<String, Map<String, DimensionScope>> deserialize(String json) {
-        Map<String, Map<String, DimensionScope>> out = new HashMap<>();
+    private CachedLayers deserialize(String json) {
+        Map<String, Map<String, DimensionScope>> dims = new HashMap<>();
+        Map<String, DeptOverride> dept = new HashMap<>();
         JsonNode root = objectMapper.readTree(json);
-        root.properties().forEach(layerEntry -> {
+        root.path("dims").properties().forEach(layerEntry -> {
             Map<String, DimensionScope> layer = new HashMap<>();
             layerEntry.getValue().properties().forEach(e -> {
                 JsonNode n = e.getValue();
@@ -762,9 +847,16 @@ public class DataDimensionService {
                 n.path("values").forEach(v -> values.add(v.asLong()));
                 layer.put(e.getKey(), unlimited ? DimensionScope.unlimited() : DimensionScope.custom(values));
             });
-            out.put(layerEntry.getKey(), layer);
+            dims.put(layerEntry.getKey(), layer);
         });
-        return out;
+        root.path("dept").properties().forEach(e -> {
+            Set<String> kinds = new HashSet<>();
+            e.getValue().path("kinds").forEach(k -> kinds.add(k.asString()));
+            Set<Long> values = new HashSet<>();
+            e.getValue().path("values").forEach(v -> values.add(v.asLong()));
+            dept.put(e.getKey(), new DeptOverride(kinds, values));
+        });
+        return new CachedLayers(dims, dept);
     }
 
     private static List<Long> sorted(Set<Long> values) {
