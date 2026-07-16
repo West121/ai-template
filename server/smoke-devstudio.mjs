@@ -10,6 +10,7 @@
  * 自清：只创建/删除 devsmoke_* 前缀资产（含 Flowable 部署残留），不碰共享表——
  * 与 OA_SMOKE_KEEP=1 的保数据口径兼容，可随时对在用环境跑。
  */
+import http from "node:http"
 import { execFileSync } from "node:child_process"
 
 const BASE = process.env.OA_BASE ?? "http://localhost:8081"
@@ -47,6 +48,25 @@ async function call(token, method, path, body) {
   return { status: res.status, body: json }
 }
 
+async function callH(token, method, path, body, headers = {}) {
+  const res = await fetch(BASE + path, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...headers,
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  let json = null
+  try {
+    json = await res.json()
+  } catch {
+    /* 非 JSON */
+  }
+  return { status: res.status, body: json }
+}
+
 async function login(username, password = "admin123") {
   const { body } = await call(null, "POST", "/api/auth/login", { username, password })
   check(`login ${username}`, body?.code === 0 && body.data?.token, JSON.stringify(body))
@@ -57,6 +77,8 @@ async function login(username, password = "admin123") {
 function cleanup(tag) {
   const sql = [
     "DELETE FROM dev_asset_version WHERE code LIKE 'devsmoke%';",
+    "DELETE FROM ai_action_draft WHERE payload_json LIKE '%devsmoke%';",
+    "DELETE FROM orch_credential WHERE name LIKE 'devsmoke%';",
     "DELETE FROM orch_flow_version WHERE flow_id IN (SELECT id FROM orch_flow WHERE code LIKE 'devsmoke%');",
     "DELETE FROM orch_flow WHERE code LIKE 'devsmoke%';",
     "DELETE FROM wf_process_ext WHERE def_code LIKE 'devsmoke%';",
@@ -253,6 +275,167 @@ let orchFlowId = null
   check("zhangsan PUT 403", p.status === 403 || p.body?.code === 403, `status=${p.status}`)
   const r = await call(zhangsan.token, "POST", "/api/dev-studio/assets/FORM/devsmoke_form/rollback", { version: 1 })
   check("zhangsan rollback 403", r.status === 403 || r.body?.code === 403, `status=${r.status}`)
+}
+
+/* ==================== 批W2：AI 三工具（假 LLM sink 驱动真实工具链） ==================== */
+
+const ORCH_C = orchModel("C")
+const ORCH_D = orchModel("D")
+
+// 假 OpenAI 端点：按最后一条 user 消息关键词脚本化回复（tool_calls / final）；捕获请求供暴露过滤断言
+const aiReqs = []
+const sink = http.createServer((req, res) => {
+  let body = ""
+  req.on("data", (c) => (body += c))
+  req.on("end", () => {
+    if (req.url !== "/ai/v1/chat/completions") {
+      res.writeHead(404)
+      res.end()
+      return
+    }
+    const reqBody = JSON.parse(body || "{}")
+    aiReqs.push(reqBody)
+    const msgs = reqBody.messages ?? []
+    const rawUser = [...msgs].reverse().find((m) => m.role === "user")?.content ?? ""
+    const lastUser = Array.isArray(rawUser)
+      ? rawUser.filter((p) => p.type === "text").map((p) => p.text).join("\n")
+      : rawUser
+    const hasTool = msgs.some((m) => m.role === "tool")
+    const completion = (message, finish = "stop") => JSON.stringify({
+      id: "chatcmpl-devsmoke", object: "chat.completion", created: 1720000000, model: reqBody.model ?? "fake-dev",
+      choices: [{ index: 0, message, finish_reason: finish, logprobs: null }],
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    })
+    res.writeHead(200, { "Content-Type": "application/json" })
+    if (JSON.stringify(reqBody).includes("结构化JSON摘要")) {
+      res.end(completion({ role: "assistant", content: '{"userGoal":"改资产","activeEntities":{},"resolvedReferences":{}}' }))
+      return
+    }
+    if (lastUser.includes("生成执行计划")) {
+      res.end(completion({ role: "assistant", content: '{"steps":[]}' }))
+      return
+    }
+    if (!hasTool) {
+      let tool = null
+      if (lastUser.includes("盘点资产")) tool = { name: "dev_list_assets", arguments: '{"keyword":"devsmoke"}' }
+      else if (lastUser.includes("读取编排")) tool = { name: "dev_read_asset", arguments: '{"assetType":"ORCH","code":"devsmoke_orch"}' }
+      else if (lastUser.includes("坏提案")) tool = { name: "dev_propose_change", arguments: JSON.stringify({ assetType: "ORCH", code: "devsmoke_orch", newContent: '{"broken', summary: "坏内容" }) }
+      else if (lastUser.includes("改通知标题")) tool = { name: "dev_propose_change", arguments: JSON.stringify({ assetType: "ORCH", code: "devsmoke_orch", newContent: ORCH_C, summary: "通知标题改为C", publish: false }) }
+      if (tool) {
+        res.end(completion({ role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: tool }] }, "tool_calls"))
+        return
+      }
+      res.end(completion({ role: "assistant", content: "你好，我是开发工作台助手。" }))
+    } else {
+      res.end(completion({ role: "assistant", content: "已处理，见下方卡片。" }))
+    }
+  })
+})
+await new Promise((r) => sink.listen(0, "127.0.0.1", r))
+sink.unref()
+const SINK = `http://127.0.0.1:${sink.address().port}`
+
+const toolNames = (reqBody) => (reqBody?.tools ?? []).map((t) => t?.function?.name).filter(Boolean)
+const cardsOf = (chatRes) => chatRes.body?.data?.messages?.[0]?.cards ?? []
+
+let credId = null
+let adminSession = null
+let zsSession = null
+
+/* ---------- 11. list / read 工具（经假 LLM 出卡 + 暴露过滤） ---------- */
+{
+  const cred = await call(A, "POST", "/api/orch/credentials", {
+    name: "devsmoke LLM", type: "LLM", baseUrl: `${SINK}/ai/v1`, apiKey: "sk-devsmoke", model: "fake-dev",
+  })
+  credId = cred.body?.data?.id
+  check("ai 建 devsmoke LLM 凭据", cred.body?.code === 0 && !!credId, JSON.stringify(cred.body))
+
+  const before = aiReqs.length
+  const c1 = await call(A, "POST", "/api/ai/chat", { message: "帮我盘点资产", credentialId: credId })
+  adminSession = c1.body?.data?.sessionId
+  const listCard = cardsOf(c1).find((c) => c.type === "list")
+  check("ai dev_list_assets → list 卡", c1.body?.code === 0 && !!listCard, JSON.stringify(cardsOf(c1).map((c) => c.type)))
+  check("list 卡含 devsmoke_orch 行(keyword 过滤)", (listCard?.rows ?? []).some((r) => r.code === "devsmoke_orch" && r.type === "ORCH")
+    && (listCard?.rows ?? []).every((r) => String(r.code).includes("devsmoke")), JSON.stringify(listCard?.rows?.length))
+  const exposed = toolNames(aiReqs[before])
+  check("admin 暴露三个 dev_* 工具", ["dev_list_assets", "dev_read_asset", "dev_propose_change"].every((n) => exposed.includes(n)), JSON.stringify(exposed.filter((n) => n.startsWith("dev_"))))
+
+  const before2 = aiReqs.length
+  const c2 = await call(A, "POST", "/api/ai/chat", { sessionId: adminSession, message: "读取编排 devsmoke_orch", credentialId: credId })
+  check("ai dev_read_asset 对话完成", c2.body?.code === 0 && (c2.body?.data?.messages?.[0]?.content ?? "").length > 0)
+  const toolFrame = aiReqs.slice(before2).flatMap((r) => r.messages ?? []).find((m) => m.role === "tool")
+  check("dev_read_asset 数据帧含 code+version=3", !!toolFrame && String(toolFrame.content).includes("devsmoke_orch") && String(toolFrame.content).includes('"version":3'), String(toolFrame?.content).slice(0, 120))
+}
+
+/* ---------- 12. propose → devDiff 卡 → stale 409 → 重提 → confirm 落 actor=AI ---------- */
+{
+  // propose #1：oldContent=当前(ORCH_A，快照 v3)
+  const p1 = await call(A, "POST", "/api/ai/chat", { sessionId: adminSession, message: "帮我改通知标题", credentialId: credId })
+  const diff1 = cardsOf(p1).find((c) => c.type === "devDiff")
+  check("devDiff 卡形状(actionId/old/new/baseVersion/publish/summary)", !!diff1 && !!diff1.actionId
+    && diff1.assetType === "ORCH" && diff1.code === "devsmoke_orch"
+    && diff1.oldContent === ORCH_A && diff1.newContent === ORCH_C
+    && diff1.baseVersion === 3 && diff1.publish === false && diff1.danger === false
+    && !!diff1.summary && !!diff1.effectNote, JSON.stringify(Object.keys(diff1 ?? {})))
+
+  // stale：confirm 前经门面 PUT 改一版（v3 → v4）→ confirm 必败且 message 明确
+  const bump = await call(A, "PUT", "/api/dev-studio/assets/ORCH/devsmoke_orch", { content: ORCH_D, baseVersion: 3 })
+  check("stale 铺垫：门面 PUT → v4", bump.body?.code === 0 && bump.body.data?.version === 4)
+  const staleConfirm = await callH(A, "POST", `/api/ai/actions/${diff1?.actionId}/confirm`, {}, { "Idempotency-Key": "devsmoke-stale-1" })
+  check("stale confirm → 409 + 明确提示", staleConfirm.body?.code === 409 && String(staleConfirm.body?.message ?? "").includes("已被修改"), JSON.stringify(staleConfirm.body))
+
+  // propose #2：基于最新（v4，oldContent=ORCH_D）→ confirm 成功
+  const p2 = await call(A, "POST", "/api/ai/chat", { sessionId: adminSession, message: "再帮我改通知标题", credentialId: credId })
+  const diff2 = cardsOf(p2).find((c) => c.type === "devDiff")
+  check("重提 devDiff 基线跟进(v4/oldContent=新草稿)", !!diff2 && diff2.baseVersion === 4 && diff2.oldContent === ORCH_D && diff2.newContent === ORCH_C)
+  const okConfirm = await callH(A, "POST", `/api/ai/actions/${diff2?.actionId}/confirm`, {}, { "Idempotency-Key": "devsmoke-ok-1" })
+  check("confirm 执行成功 → 快照 v5", okConfirm.body?.code === 0 && okConfirm.body?.data?.success === true && okConfirm.body?.data?.data?.version === 5, JSON.stringify(okConfirm.body))
+  const after = await call(A, "GET", "/api/dev-studio/assets/ORCH/devsmoke_orch")
+  check("AI 变更已落库(content=C, 快照 v5)", after.body?.data?.content === ORCH_C && after.body?.data?.version === 5)
+  const vers = await call(A, "GET", "/api/dev-studio/assets/ORCH/devsmoke_orch/versions")
+  const top = (vers.body?.data ?? [])[0]
+  check("快照 actor=AI + summary=提案摘要", top?.versionNo === 5 && top?.actor === "AI" && top?.summary === "通知标题改为C", JSON.stringify(top))
+}
+
+/* ---------- 13. 坏提案 → err 卡不产草稿；暴露过滤；pageContext 注入 ---------- */
+{
+  const bad = await call(A, "POST", "/api/ai/chat", { sessionId: adminSession, message: "给我个坏提案", credentialId: credId })
+  const errCard = cardsOf(bad).find((c) => c.type === "error")
+  const diffCard = cardsOf(bad).find((c) => c.type === "devDiff")
+  check("坏 JSON 提案 → error 卡且无 devDiff", !!errCard && !diffCard, JSON.stringify(cardsOf(bad).map((c) => c.type)))
+  const versStill = await call(A, "GET", "/api/dev-studio/assets/ORCH/devsmoke_orch/versions")
+  check("坏提案不落快照(仍 5 条)", (versStill.body?.data ?? []).length === 5, `len=${(versStill.body?.data ?? []).length}`)
+
+  // 暴露过滤：zhangsan（无 dev:studio:*）的模型请求里不含 dev_* 工具
+  const beforeZs = aiReqs.length
+  const zs = await call(zhangsan.token, "POST", "/api/ai/chat", { message: "你好", credentialId: credId })
+  zsSession = zs.body?.data?.sessionId
+  const zsExposed = toolNames(aiReqs[beforeZs])
+  check("zhangsan 暴露列表无 dev_* 工具", zs.body?.code === 0 && zsExposed.length > 0 && zsExposed.every((n) => !n.startsWith("dev_")), JSON.stringify(zsExposed.filter((n) => n.startsWith("dev_"))))
+
+  // pageContext 资产上下文：admin 注入；zhangsan（无 view）不注入
+  const beforePc = aiReqs.length
+  const pc = await call(A, "POST", "/api/ai/chat", {
+    sessionId: adminSession, message: "这个资产是干嘛的", credentialId: credId,
+    pageContext: { entityType: "ORCH", entityId: "devsmoke_orch" },
+  })
+  const sysMsg = (aiReqs[beforePc]?.messages ?? []).find((m) => m.role === "system")
+  check("pageContext 注入资产上下文(system 提示)", pc.body?.code === 0 && String(sysMsg?.content ?? "").includes("开发者工作台查看资产 ORCH/devsmoke_orch"), String(sysMsg?.content ?? "").slice(-160))
+  const beforePc2 = aiReqs.length
+  await call(zhangsan.token, "POST", "/api/ai/chat", {
+    sessionId: zsSession, message: "这个资产是干嘛的", credentialId: credId,
+    pageContext: { entityType: "ORCH", entityId: "devsmoke_orch" },
+  })
+  const zsSys = (aiReqs[beforePc2]?.messages ?? []).find((m) => m.role === "system")
+  check("zhangsan 无 view → 不注入资产上下文", !String(zsSys?.content ?? "").includes("开发者工作台查看资产"))
+}
+
+/* ---------- AI 收尾：会话/凭据自清 ---------- */
+{
+  if (adminSession) await call(A, "DELETE", `/api/ai/sessions/${adminSession}`)
+  if (zsSession) await call(zhangsan.token, "DELETE", `/api/ai/sessions/${zsSession}`)
+  if (credId) await call(A, "DELETE", `/api/orch/credentials/${credId}`)
+  sink.close()
 }
 
 cleanup("收尾")

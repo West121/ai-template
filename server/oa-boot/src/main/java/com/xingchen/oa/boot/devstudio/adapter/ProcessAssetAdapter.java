@@ -88,6 +88,16 @@ public class ProcessAssetAdapter implements DevAssetAdapter {
         WfProcessExt e = find(code);
         boolean bpmn = WfProcessExt.TYPE_BPMN.equals(e.getDesignerType());
         dryRunConvert(e, content); // 硬线：草稿也干跑（启动器会部署全部 DRAFT）
+        return doSave(e, bpmn, content, publish);
+    }
+
+    @Override
+    public void validate(String code, String content) {
+        dryRunConvert(find(code), content);
+    }
+
+    private Map<String, Object> doSave(WfProcessExt e, boolean bpmn, String content, boolean publish) {
+        String code = e.getDefCode();
         // 以现值回填全部字段，仅替换本次编辑的内容列（ProcessDefService.apply 对 name 等无条件覆盖）
         ProcessDefRequest req = new ProcessDefRequest(
                 e.getDefCode(), e.getName(), e.getCategory(), e.getIcon(),

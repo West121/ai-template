@@ -70,10 +70,15 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class AiChatService {
 
+    /** Dev Studio 资产类型枚举（批W2 pageContext 资产上下文注入的服务端白名单）。 */
+    private static final java.util.Set<String> DEV_ASSET_TYPES =
+            java.util.Set.of("ORCH", "PROCESS", "FORM", "BIZDOC_TPL");
+
     private final AiChatSessionRepository sessionRepository;
     private final AiChatMessageRepository messageRepository;
     private final AiChatMessagePartRepository partRepository;
     private final OrchCredentialRepository credentialRepository;
+    private final com.xingchen.oa.boot.devstudio.service.DevStudioService devStudioService;
     private final AiModelService modelService;
     private final AiChatClientFactory chatClientFactory;
     private final AuthorizedToolResolver toolResolver;
@@ -890,6 +895,30 @@ public class AiChatService {
                             .append(" #").append(pageContext.entityId());
                 }
                 sb.append("，回答可结合该页面上下文。");
+            }
+        }
+        // 批W2 Dev Studio 资产上下文（dev-studio.md §1.5）：entityType 是四类资产枚举时，服务端强校验
+        //（枚举白名单 + dev:studio:view + 资产真实存在）后注入「当前正在查看的资产」——用户说「把这个/当前资产…」时模型知道改哪个。
+        if (pageContext != null && StringUtils.hasText(pageContext.entityType())
+                && StringUtils.hasText(pageContext.entityId())) {
+            String assetType = pageContext.entityType().trim().toUpperCase();
+            List<String> perms = user.getPermissions();
+            boolean canView = perms == null || perms.contains("dev:studio:view");
+            if (DEV_ASSET_TYPES.contains(assetType) && canView) {
+                try {
+                    var asset = devStudioService.read(assetType, pageContext.entityId());
+                    Object assetName = asset.meta() != null ? asset.meta().get("name") : null;
+                    sb.append("\n用户当前正在开发者工作台查看资产 ").append(assetType).append("/")
+                            .append(pageContext.entityId());
+                    if (assetName != null) {
+                        sb.append("（").append(assetName).append("）");
+                    }
+                    sb.append("。用户要求修改/优化『这个/当前』资产时即指它：先调 dev_read_asset 获取最新内容，")
+                            .append("再调 dev_propose_change 提交修改后的完整内容（完整 JSON，非补丁）产出 diff 提案卡，")
+                            .append("等用户确认；绝不能声称已直接修改。");
+                } catch (Exception ignored) {
+                    // 资产不存在/无权读取 → 不注入（防以 pageContext 注入任意文本）
+                }
             }
         }
         // §13.3 结构化滚动摘要（userGoal/activeEntities/resolvedReferences）注入

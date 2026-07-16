@@ -37,4 +37,10 @@ public interface DevAssetAdapter {
      * @return meta（nativeVersion / status / FORM latestPointerChanged 等，回给前端）
      */
     Map<String, Object> save(String code, String content, boolean publish);
+
+    /**
+     * 内容干跑校验（不落库不部署）：JSON 解析 / PROCESS 转换干跑。失败抛 400。
+     * 供 save 前置与 AI dev_propose_change 的 propose 阶段预检（坏内容不出确认卡）复用。
+     */
+    void validate(String code, String content);
 }

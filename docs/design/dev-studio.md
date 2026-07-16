@@ -194,32 +194,34 @@
 
 | 工具 | risk | authorities | 说明 |
 |---|---|---|---|
-| `dev_list_assets` | `READ_ONLY` | `dev:studio:view` | 列可编辑热资产(类型/编码/名/版本/状态),供模型定位 |
-| `dev_read_asset` | `READ_ONLY` | `dev:studio:view` | 读某资产当前内容(designer_json/schema_json/content)+ 版本 + `contentHash` |
-| `dev_propose_change` | `CONFIRM_REQUIRED` | 该资产写码(`orch:flow:write`/`wf:def:edit`/`bizdoc:def:write`) | 产「变更提案」:入参 `{assetType, assetId, newContent 或 patch, publish:boolean, reason}`;`stage()` 一条 `ai_action_draft`,`payloadJson=新内容`、`targetType=assetType`、`targetId`、`targetVersion=读时版本`、`payloadHash`;吐 devDiff 卡 |
+| `dev_list_assets` | `READ_ONLY` | `dev:studio:view` | 列可编辑热资产(名/编码/类型/状态/版本,list 卡);入参 `type?`/`keyword?`,最多 50 行 |
+| `dev_read_asset` | `READ_ONLY` | `dev:studio:view` | 读某资产当前内容+快照版本+nativeVersion;入参 `assetType`+`code`;content>6k 截断标 `contentTruncated`(完整基线由 propose 服务端自取,不依赖模型回传) |
+| `dev_propose_change` | `CONFIRM_REQUIRED` | `dev:studio:edit`(暴露门;资产写码在 propose 预检 + confirm 复验) | 产「变更提案」:入参 `{assetType, code, newContent(完整内容,非 patch), summary, publish?}`;**服务端**读当前内容作 `oldContent`、当前快照版本作 `baseVersion`(TOCTOU 基线);**propose 先干跑校验 newContent**(PROCESS 转换/各类 JSON parse)+ 资产写码预检,坏内容/无权 → error 卡不产草稿;通过才 `stage()` 一条 `ai_action_draft`(targetType=devAsset, targetVersion=baseVersion),吐 devDiff 卡 |
 
-- **执行器**(`registerExecutor("dev_propose_change", fn)`):`confirm()` 通过后,在确认者 `UserContext` 下**调该资产既有 Service 的 save/publish 方法**(过 `@PreAuthorize`/数据权限/事务/校验),`publish=false` 只存草稿、`true` 存并发布。**AI 绝不绕过资产原生写路径**——复用 `AiManagedGateway` 反射调法或直接注入各 Service。
-- **TOCTOU**:草稿存 `targetVersion + payloadHash`;确认时资产版本已变 → `AI_ACTION_STALE`「该资产已被改动,请重新读取后再改」(终态,不静默覆盖)。这天然解决「AI 读到旧版本→改→期间人已改」的竞态。
-- 审计:`dev_propose_change` 落 `ai_tool_call`;确认执行落 `ai_action_draft`(谁/何资产/前后 hash/是否发布)——满足 §4 全程审计。
+- **执行器**(`registerExecutor("dev_propose_change", fn)`,批W2 已落地):`confirm()` 通过后,在确认者 `UserContext` 下调**统一门面** `DevStudioService.save(type, code, {content, baseVersion, publish, summary}, actor=AI)`——权限双门(dev 门+资产原生写码)/PROCESS 干跑/乐观锁/快照(actor=AI)全复用,不另辟写路径。`publish=false` 只存草稿、`true` 存并按该资产语义生效。
+- **TOCTOU(实现口径)**:staleness 由统一门面的 `baseVersion` 乐观锁承担——确认时资产快照版本已前进 → 执行器转 409「资产已被修改(当前版本比提案基线新),本提案作废;请重新读取资产后再发起改写」(草稿置 FAILED,不静默覆盖)。
+- 审计:`dev_propose_change` 落 `ai_tool_call`;确认执行落 `ai_action_draft`;写入落 `dev_asset_version`(actor=AI, summary=提案摘要)——满足 §4 全程审计。
 
 ### 2.2 前端:devDiff 卡组件
 
 - 白名单:`protocol.ts` `PART_TYPES` 加 `"devDiff"` + `PART_SCHEMA_SUPPORT.devDiff=1`;`part-router.tsx` 加一支渲染 `DevDiffCard`(不经 `partToCard`,专渲)。
 - 组件 `cards/dev-diff-card.tsx`:**复用 `confirm-machine`(idle/submitting/executing/done/cancelled/expired/stale)+ `ai-action-outcomes`(重挂不复活)+ `buildLineDiff`(从 `knowledge/diff-util.ts` 提升为共享 `lib/diff.ts`)。**
 
-payload 形状(服务端组装):
+payload 形状(服务端组装,**批W2 终稿**——扁平 old/new,diff 由前端 `buildLineDiff` 计算,不再分段 hunks):
 ```ts
 interface AiDevDiffCard {
   type: "devDiff"
-  actionId: string                 // ai_action_draft id(二段式)
-  assetLabel: string               // "请假流程 leave_approval"
-  assetType: "orch" | "wf" | "form" | "printTpl"
+  actionId: string                 // ai_action_draft id(二段式,确认走 POST /api/ai/actions/{id}/confirm)
+  assetType: "ORCH" | "PROCESS" | "FORM" | "BIZDOC_TPL"   // 与门面 type 枚举一致
+  code: string                     // 资产编码
+  name: string                     // 资产名(如"请假审批")
+  oldContent: string               // 服务端读取的当前完整内容(diff 基线)
+  newContent: string               // AI 提案的完整新内容
   summary: string                  // 变更摘要:"审批天数阈值 3 → 5"
-  hunks: { path: string; before: string; after: string }[]  // 按字段/块分段(见下)
+  baseVersion: number              // 提案基线快照版本(=TOCTOU 基准;确认时已前进 → 409 stale)
   publish: boolean                 // 确认后是否直接发布
-  danger: boolean                  // publish=true → true(将立即生效)
-  effectNote: string               // "确认后重新编译并对新触发立即生效;运行中实例不变"
-  expiresAt?: string
+  danger: boolean                  // = publish(将立即生效 → 红语义)
+  effectNote: string               // 生效面文案(随资产类型/是否发布)
 }
 ```
 

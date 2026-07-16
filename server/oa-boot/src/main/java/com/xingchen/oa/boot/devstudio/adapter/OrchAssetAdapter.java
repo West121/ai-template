@@ -74,6 +74,12 @@ public class OrchAssetAdapter implements DevAssetAdapter {
     }
 
     @Override
+    public void validate(String code, String content) {
+        find(code); // 资产须存在
+        requireJsonObject(content, "编排 designerJson");
+    }
+
+    @Override
     public Map<String, Object> save(String code, String content, boolean publish) {
         OrchFlow f = find(code);
         requireJsonObject(content, "编排 designerJson");

@@ -86,6 +86,12 @@ public class BizdocTplAssetAdapter implements DevAssetAdapter {
         return meta;
     }
 
+    @Override
+    public void validate(String code, String content) {
+        find(code);
+        parseObject(content);
+    }
+
     private BizDocPrintTpl find(String code) {
         return repository.findByCode(code)
                 .orElseThrow(() -> new BusinessException(404, "打印模板不存在: " + code));

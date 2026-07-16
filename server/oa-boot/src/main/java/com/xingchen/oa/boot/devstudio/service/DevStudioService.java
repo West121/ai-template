@@ -162,6 +162,21 @@ public class DevStudioService {
         return new SaveResponse(next, meta);
     }
 
+    // ==================== 供 AI 工具复用（批W2） ====================
+
+    /** 内容干跑校验（不落库）：JSON 解析 / PROCESS 转换干跑；失败抛 400。propose 阶段预检用。 */
+    public void validateContent(String type, String code, String content) {
+        if (!StringUtils.hasText(content)) {
+            throw new BusinessException(400, "content 必填");
+        }
+        resolve(type).validate(code, content);
+    }
+
+    /** 该资产原生受信写码（AI 工具 propose 阶段预检第二道门用）。 */
+    public String writeAuthority(String type) {
+        return resolve(type).writeAuthority();
+    }
+
     // ==================== 内部 ====================
 
     private DevAssetAdapter resolve(String type) {

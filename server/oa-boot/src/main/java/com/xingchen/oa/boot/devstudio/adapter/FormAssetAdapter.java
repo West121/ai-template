@@ -79,6 +79,16 @@ public class FormAssetAdapter implements DevAssetAdapter {
     public Map<String, Object> save(String code, String content, boolean publish) {
         WfFormDef latest = find(code);
         requireJsonContainer(content);
+        return doSave(code, latest, content, publish);
+    }
+
+    @Override
+    public void validate(String code, String content) {
+        find(code);
+        requireJsonContainer(content);
+    }
+
+    private Map<String, Object> doSave(String code, WfFormDef latest, String content, boolean publish) {
         boolean latestPointerChanged = false;
         Long targetId;
         if (WfFormDef.STATUS_DRAFT.equals(latest.getStatus())) {
