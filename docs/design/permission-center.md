@@ -322,3 +322,9 @@ PUT  /api/system/roles/{id}/field-perms?feature={featureCode}
 - **磐石风险预拍**:①维度值类型 **P1 保持 Long**(DICT 源用字典项 id);②脱敏**不做全局 Jackson**,走「登记出口逐个接入」+P3 先出**出口盘点清单**(wf 详情/BizDoc/打印 render-data/AI 数据帧/导出,漏接=泄露要如实标注);③V52 上线清 `dp:dims:*`(或结构带版本);④editable **后端强制**丢弃非法回传(smoke 覆盖);⑤原串透传的 formDataJson 出口 P3 改「解析-过滤-重序列化」或点名豁免。
 - **权限码**:`system:dim:manage`(V51 授 ADMIN);角色/用户配置沿用 system:role:edit / system:user:edit。
 - **分批**:P1(V51)维度自定义+选项表+绑定真消费+角色 Sheet 抽屉壳 → P2(V52)功能级覆盖+多实体接入 multiDim → P3(V53)字段权限+脱敏成对+出口盘点 → P4 JSON 扩展列(深水区)。向后兼容红线:未配=现行为完全不变。
+
+## 附2:P3 字段清单真源拍板(2026-07-16,用户讨论后)
+
+- **表单字段(动态 Map 数据):读登记,不造 DTO**——CODE 表单数据在后端是 formDataJson(Map),无强类型 DTO 对应物;真源=登记 manifest/ONLINE schema 派生(FormManifestService 现状),脱敏在 Map 出口按登记 key 删,前端(useForm 字段名)后端(Map key)同键零转换。
+- **实体固定列(DTO record 字段):`@FieldPerm(label)` 注解标在 DTO 字段上 + 启动反射生成"可控列目录"**(替换原"手工常量目录"提案)——清单与 DTO 同文件防漂移(与前端 manifest 同文件同哲学);只有标注解的列才进配置矩阵(天然白名单,不假装能控);模式与 @ScriptApi/@AiManaged 一致(启动扫描+缓存,运行期零反射)。
+- 红线:清单与脱敏同源同键;前端可选加固——manifest key ⊆ useForm defaultValues key 的守护测试。
