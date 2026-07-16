@@ -5,9 +5,11 @@
  * × 范围（全部数据/指定）× 值选择器（dept→OrgPicker 部门树多选 chips；业务维→选项多选）× 删除。
  * 同功能可多行（不同维度，维度间 AND）；已覆盖功能行头提示「该功能已脱离全局配置」（覆盖=替换）。
  *
- * 保存（Tab 内独立按钮，照 P3 字段权限 Tab 先例）：PUT 整体全量替换——保存前现拉最新
- * 全局层行随包下发（本组件只管覆盖层，避免把全局授权冲掉）；dirty 经 onDirtyChange 并入
- * Tab 未保存拦截，resetSignal 回滚快照。角色/用户同构（principalType 参数化）。
+ * 保存（Tab 内独立按钮，照 P3 字段权限 Tab 先例）：**按层替换**（V54 终稿）——按 feature
+ * 分组逐层 PUT ?feature=X（body 不带 feature）；快照里有、现列表没有的层 → PUT [] 清空
+ * （该功能回落全局）。回显走 GET ?all=1（全局行过滤不入列表）。dirty 经 onDirtyChange
+ * 并入 Tab 未保存拦截，resetSignal 回滚快照。角色/用户同构（principalType 参数化）。
+ * 部门维值选择支持「连同子部门」辅助勾选（勾选时展开成显式 deptId 集，精确集语义不变）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
@@ -20,9 +22,11 @@ import { RecordPicker, RecordPickerField, type RecordPickerColumn } from "@/comp
 import { OrgPicker } from "@/components/org-picker"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { fetchAiFeatures, type AiFeatureItem } from "@/lib/field-perms"
+import { api } from "@/lib/api"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   DEPT_DIMENSION,
-  fetchAuthz,
+  fetchAuthzAll,
   fetchDimensionOptions,
   fetchDimensions,
   isGlobalRow,
@@ -43,6 +47,28 @@ interface OverrideRow {
 }
 
 const optionColumns: RecordPickerColumn<DimOption>[] = [{ key: "label", title: "名称" }]
+
+/** 部门树节点（/api/system/depts/tree） */
+interface DeptNode {
+  id: number
+  name: string
+  children?: DeptNode[]
+}
+
+/** 扁平化：每个部门 → 其全部后代（含名称，供「连同子部门」展开为显式 id 集） */
+function buildDescendantsMap(tree: DeptNode[]): Map<number, { id: number; name: string }[]> {
+  const map = new Map<number, { id: number; name: string }[]>()
+  const collect = (node: DeptNode): { id: number; name: string }[] => {
+    const own: { id: number; name: string }[] = []
+    for (const c of node.children ?? []) {
+      own.push({ id: c.id, name: c.name }, ...collect(c))
+    }
+    map.set(node.id, own)
+    return own
+  }
+  for (const root of tree) collect(root)
+  return map
+}
 
 let uidSeq = 1
 
@@ -94,6 +120,17 @@ export function DataDimensionOverrides({
   const [demo, setDemo] = useState(false)
   const [pickerFor, setPickerFor] = useState<number | null>(null) // 业务维 RecordPicker（row uid）
   const [deptPickerFor, setDeptPickerFor] = useState<number | null>(null) // 部门 OrgPicker（row uid）
+  // 「连同子部门」辅助勾选（可选增强）：确认部门选择时把每个所选部门展开为其子树显式 id 集（精确集语义不变）
+  const [withChildren, setWithChildren] = useState(false)
+  const descendantsRef = useRef<Map<number, { id: number; name: string }[]> | null>(null)
+  const ensureDeptTree = useCallback(() => {
+    if (descendantsRef.current) return
+    void api<DeptNode[]>("/api/system/depts/tree")
+      .then((tree) => {
+        descendantsRef.current = buildDescendantsMap(Array.isArray(tree) ? tree : [])
+      })
+      .catch(() => undefined) // 树拉不到 → 勾选不展开（仍是精确所选集），不阻断
+  }, [])
 
   /** 维度下拉目录：内建「组织(部门)」置顶 + 启用的业务维度（P1 目录动态来，含用户自建） */
   const dimCatalog = useMemo<DataDimension[]>(
@@ -130,7 +167,7 @@ export function DataDimensionOverrides({
 
   const load = useCallback(() => {
     setLoading(true)
-    Promise.all([fetchAiFeatures(), fetchDimensions(), fetchAuthz(principalType, id)])
+    Promise.all([fetchAiFeatures(), fetchDimensions(), fetchAuthzAll(principalType, id)])
       .then(([featRes, dimsRes, authzRes]) => {
         setFeatures(Array.isArray(featRes.data) ? featRes.data : [])
         setDims(Array.isArray(dimsRes.data) ? dimsRes.data : [])
@@ -194,19 +231,23 @@ export function DataDimensionOverrides({
     }
     setSaving(true)
     try {
-      // PUT 整体全量替换：现拉最新全局层行随包保全（本组件只管覆盖层）
-      const latest = await fetchAuthz(principalType, id)
-      const globalRows = (Array.isArray(latest.data) ? latest.data : []).filter(isGlobalRow)
-      const overrideRows: DimAuthz[] = rows.map((r) => ({
-        feature: r.feature,
-        dimension: r.dimension,
-        scope: r.scope,
-        values: r.scope === "CUSTOM" ? r.values : [],
-      }))
-      await saveAuthz(principalType, id, [...globalRows, ...overrideRows])
+      // 按层替换（V54 终稿）：按 feature 分组逐层 PUT（body 不带 feature，以 query 为准）
+      const byFeature = new Map<string, DimAuthz[]>()
+      for (const r of rows) {
+        const list = byFeature.get(r.feature) ?? []
+        list.push({ dimension: r.dimension, scope: r.scope, values: r.scope === "CUSTOM" ? r.values : [] })
+        byFeature.set(r.feature, list)
+      }
+      // 快照里有、现列表没有的层 → PUT [] 清空（该功能回落全局）
+      for (const f of new Set(snapshotRowsRef.current.map((r) => r.feature))) {
+        if (f && !byFeature.has(f)) byFeature.set(f, [])
+      }
+      for (const [feature, list] of byFeature) {
+        await saveAuthz(principalType, id, list, feature)
+      }
       snapshotRowsRef.current = rows
       setSnapshot(serializeRows(rows))
-      toast.success(`已保存按功能覆盖（${rows.length} 行）`)
+      toast.success(`已保存按功能覆盖（${rows.length} 行，${byFeature.size} 个功能层）`)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "保存失败")
     } finally {
@@ -322,13 +363,14 @@ export function DataDimensionOverrides({
 
                 {/* 指定 → 值选择器按维度出：dept=部门树多选；业务维=选项多选 */}
                 {row.scope === "CUSTOM" && row.dimension && (
-                  <div className="mt-2">
+                  <div className="mt-2 space-y-1.5">
                     <RecordPickerField
                       labels={row.values.map((v) => ({ id: String(v), label: valueName(row.dimension, v) }))}
                       placeholder={row.dimension === DEPT_DIMENSION ? "选择部门（多选，值为部门 id 精确集）" : "选择可见范围（多选）"}
                       multiple
                       onOpen={() => {
                         if (row.dimension === DEPT_DIMENSION) {
+                          ensureDeptTree()
                           setDeptPickerFor(row.uid)
                         } else {
                           ensureOptions(row.dimension)
@@ -337,6 +379,12 @@ export function DataDimensionOverrides({
                       }}
                       onRemove={(vid) => patchRow(row.uid, { values: row.values.filter((x) => String(x) !== vid) })}
                     />
+                    {row.dimension === DEPT_DIMENSION && (
+                      <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                        <Checkbox checked={withChildren} onCheckedChange={(v) => setWithChildren(v === true)} aria-label="连同子部门" disabled={!canEdit} />
+                        连同子部门（确认选择时展开为子部门显式 id 集）
+                      </label>
+                    )}
                   </div>
                 )}
 
@@ -406,10 +454,17 @@ export function DataDimensionOverrides({
           onConfirm={(refs) => {
             if (!deptRow) return
             setDeptPickerFor(null)
-            patchRow(deptRow.uid, { values: refs.map((r) => r.id) })
+            // 「连同子部门」：把每个所选部门展开为其子树显式 id 集（去重；树缺失则原样）
+            const expanded = new Map<number, string>(refs.map((r) => [r.id, r.name]))
+            if (withChildren && descendantsRef.current) {
+              for (const r of refs) {
+                for (const d of descendantsRef.current.get(r.id) ?? []) expanded.set(d.id, d.name)
+              }
+            }
+            patchRow(deptRow.uid, { values: [...expanded.keys()] })
             setNameMap((m) => {
               const next = { ...m }
-              refs.forEach((r) => (next[`${DEPT_DIMENSION}:${r.id}`] = r.name))
+              expanded.forEach((name, did) => (next[`${DEPT_DIMENSION}:${did}`] = name))
               return next
             })
           }}

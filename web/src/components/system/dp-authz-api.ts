@@ -6,12 +6,14 @@
  * ── 契约（前后端共用，字段名钉死）───────────────────────────────────────────────
  *  GET  /api/system/data-dimensions                 → [{code,label,entity?,enabled}]  已注册可配业务维度（不含内建 dept/self）
  *  GET  /api/system/data-dimensions/{code}/options  → [{id,label}]                    该维 CUSTOM 可选值（泛化，别硬编码各维 URL）
- *  GET  /api/system/roles/{id}/data-dimensions      → [{dimension,scope:"ALL"|"CUSTOM",values:number[],feature?}]
- *  PUT  /api/system/roles/{id}/data-dimensions      body 同上（整体全量替换：全局行 + 覆盖行一起下发）
+ *  GET  /api/system/roles/{id}/data-dimensions          → 全局层 [{dimension,scope,values}]
+ *  GET  /api/system/roles/{id}/data-dimensions?all=1    → 全部层（行带 feature，''/缺省=全局行）
+ *  PUT  /api/system/roles/{id}/data-dimensions?feature=X body=[{dimension,scope,values}]
+ *       —— **按层替换**（V54 终稿）：只动该层，其它层天然不受影响；缺省/''=全局层；
+ *          PUT [] = 清空该层（该功能回落全局）。**body 不带 feature**（以 query 为准；GET 回带容忍）。
  *  GET/PUT /api/system/users/{id}/data-dimensions   同结构
- *  P2 additive：item 加 feature?（''/缺省=全局层；非空=该功能的覆盖层，featureCode opaque string）。
- *  dimension 可为业务维度 code 或内建 'dept'（组织/部门维，scope ALL|CUSTOM values=deptIds——
- *  先按「精确部门集」语义做，子树语义待磐石终稿，一行可调）。
+ *  dimension 可为业务维度 code 或内建 'dept'（组织/部门维，values=deptIds，**精确部门集**语义已确认；
+ *  全局层不接受 dept——UI 不提供该路径，后端 400 兜底）。
  *  解析顺序：功能覆盖 > 全局 > 不限；**覆盖=替换**（只看覆盖层，不与全局并集）。
  * ─────────────────────────────────────────────────────────────────────────────
  */
@@ -109,18 +111,36 @@ export function fetchDimensionOptions(code: string): Promise<DpResult<DimOption[
   )
 }
 
+/** 全局层（不带 ?all）——DataDimensionAuthz 用；GET 若回带 feature 行由调用方过滤容忍 */
 export function fetchAuthz(principalType: DpPrincipal, id: number): Promise<DpResult<DimAuthz[]>> {
   return withMock(
     () => api<DimAuthz[]>(authzPath(principalType, id)).then(normList<DimAuthz>),
+    () => (MOCK_AUTHZ[authzKey(principalType, id)] ?? MOCK_AUTHZ_DEFAULT).filter(isGlobalRow),
+  )
+}
+
+/** 全部层（?all=1，行带 feature；''/缺省=全局行）——按功能覆盖列表用 */
+export function fetchAuthzAll(principalType: DpPrincipal, id: number): Promise<DpResult<DimAuthz[]>> {
+  return withMock(
+    () => api<DimAuthz[]>(`${authzPath(principalType, id)}?all=1`).then(normList<DimAuthz>),
     () => MOCK_AUTHZ[authzKey(principalType, id)] ?? MOCK_AUTHZ_DEFAULT,
   )
 }
 
-export function saveAuthz(principalType: DpPrincipal, id: number, list: DimAuthz[]): Promise<DpResult<boolean>> {
+/**
+ * 按层替换（V54 终稿）：PUT ?feature=X 只替换该层；feature 缺省/''=全局层；list=[] 清空该层。
+ * body 条目不带 feature（以 query 为准）。
+ */
+export function saveAuthz(principalType: DpPrincipal, id: number, list: DimAuthz[], feature = ""): Promise<DpResult<boolean>> {
+  const body = list.map((a) => ({ dimension: a.dimension, scope: a.scope, values: a.values }))
+  const qs = feature ? `?feature=${encodeURIComponent(feature)}` : ""
   return withMock(
-    () => api<void>(authzPath(principalType, id), { method: "PUT", body: JSON.stringify(list) }).then(() => true),
+    () => api<void>(`${authzPath(principalType, id)}${qs}`, { method: "PUT", body: JSON.stringify(body) }).then(() => true),
     () => {
-      MOCK_AUTHZ[authzKey(principalType, id)] = list
+      const key = authzKey(principalType, id)
+      const cur = MOCK_AUTHZ[key] ?? [...MOCK_AUTHZ_DEFAULT]
+      const others = cur.filter((a) => (a.feature ?? "") !== feature)
+      MOCK_AUTHZ[key] = [...others, ...body.map((a) => (feature ? { ...a, feature } : { ...a }))]
       return true
     },
   )

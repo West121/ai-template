@@ -29,6 +29,7 @@ const AUTHZ = [
 
 let authzData: unknown = AUTHZ
 let puts: { url: string; body: unknown }[] = []
+let gets: string[] = []
 
 beforeAll(() => {
   useAuthStore.setState({ offline: false, token: "t", permissions: null, userId: 1 })
@@ -45,11 +46,13 @@ beforeAll(() => {
 
 beforeEach(() => {
   puts = []
+  gets = []
   authzData = AUTHZ
   resetFieldPermsMock()
   vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
     const p = String(url)
     let data: unknown = []
+    if (!init?.method || init.method === "GET") gets.push(p)
     if (init?.method === "PUT" && p.includes("/data-dimensions")) {
       puts.push({ url: p, body: JSON.parse(String(init.body)) })
       data = null
@@ -72,9 +75,10 @@ const renderOverrides = () =>
   )
 
 describe("按功能覆盖列表（P2）", () => {
-  it("回显：覆盖行入列表 + 脱离全局提示 + 值 chip 解析；全局行不出现在列表", async () => {
+  it("回显：GET ?all=1 → 覆盖行入列表 + 脱离全局提示 + 值 chip 解析；全局行不出现在列表", async () => {
     renderOverrides()
     expect(await screen.findByText(/「请假管理」已脱离全局配置/)).toBeTruthy()
+    expect(gets.some((u) => u.includes("/roles/7/data-dimensions?all=1"))).toBe(true)
     // 覆盖行的值 chip（costCenter id=2 → 市场部）
     expect(await screen.findByText("市场部")).toBeTruthy()
     // 全局行（feature 空）不在覆盖列表：只有 1 行 → 只有 1 组功能下拉
@@ -109,7 +113,7 @@ describe("按功能覆盖列表（P2）", () => {
     expect(screen.getByText("选择可见范围（多选）")).toBeTruthy()
   })
 
-  it("保存 → PUT 整体全量：全局行保全（无 feature）+ 覆盖行带 feature；缺功能/维度先拦截", async () => {
+  it("保存 → 按层替换：每个 feature 一次 PUT ?feature=X，body 不带 feature；不触碰全局层；缺功能/维度先拦截", async () => {
     renderOverrides()
     const user = userEvent.setup()
     await screen.findByText(/已脱离全局配置/)
@@ -126,15 +130,26 @@ describe("按功能覆盖列表（P2）", () => {
     await user.click(await screen.findByRole("option", { name: "项目" }))
     await user.click(screen.getByRole("button", { name: /保存按功能覆盖/ }))
 
+    await waitFor(() => expect(puts).toHaveLength(2)) // 两个功能层各一次 PUT；全局层不触碰
+    const leave = puts.find((p) => p.url.includes("feature=ATTENDANCE_LEAVE"))!
+    const tasks = puts.find((p) => p.url.includes("feature=WORKFLOW_TASKS"))!
+    expect(leave.url).toContain("/api/system/roles/7/data-dimensions?feature=")
+    // body 不带 feature（以 query 为准）
+    expect(leave.body).toEqual([{ dimension: "costCenter", scope: "CUSTOM", values: [2] }])
+    expect(tasks.body).toEqual([{ dimension: "project", scope: "ALL", values: [] }])
+    expect(puts.some((p) => !p.url.includes("feature="))).toBe(false)
+  })
+
+  it("删光某功能的行 → 保存对该层 PUT []（清空回落全局）", async () => {
+    renderOverrides()
+    const user = userEvent.setup()
+    await screen.findByText(/已脱离全局配置/)
+    await user.click(screen.getByRole("button", { name: "删除覆盖行" }))
+    expect(screen.queryByText(/已脱离全局配置/)).toBeNull()
+    await user.click(screen.getByRole("button", { name: /保存按功能覆盖/ }))
     await waitFor(() => expect(puts).toHaveLength(1))
-    expect(puts[0].url).toContain("/api/system/roles/7/data-dimensions")
-    const body = puts[0].body as { feature?: string; dimension: string; scope: string; values: number[] }[]
-    // 全局行保全在最前（无 feature 键）
-    expect(body[0]).toEqual({ dimension: "costCenter", scope: "CUSTOM", values: [1] })
-    // 覆盖行带 feature
-    expect(body).toContainEqual({ feature: "ATTENDANCE_LEAVE", dimension: "costCenter", scope: "CUSTOM", values: [2] })
-    expect(body).toContainEqual({ feature: "WORKFLOW_TASKS", dimension: "project", scope: "ALL", values: [] })
-    expect(body).toHaveLength(3)
+    expect(puts[0].url).toContain("?feature=ATTENDANCE_LEAVE")
+    expect(puts[0].body).toEqual([])
   })
 
   it("目录/授权空态 → 空态引导渲染不崩（防白屏）", async () => {

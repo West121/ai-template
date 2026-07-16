@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useState } from "react"
 // P2：本组件只管**全局层**（feature 空）；功能覆盖层由 DataDimensionOverrides 管理。
-// PUT 是整体全量替换 → 保存前现拉一次覆盖层行随包下发，避免把功能覆盖冲掉。
+// V54 终稿=按层替换：PUT 缺省(?feature 无)即全局层，只动本层——无需保全其它层。
 import { toast } from "sonner"
 import { CloudOff, Loader2, Save } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -87,12 +87,9 @@ export function DataDimensionAuthz({ principalType, id, canEdit }: { principalTy
     }
     setSaving(true)
     try {
-      // 全局层全量替换：仅下发 CUSTOM 维度（ALL=不限=不下发，等同未配）。
-      // PUT 是整体替换 → 现拉最新覆盖层行随包保全（避免把功能覆盖冲掉）。
+      // 全局层按层替换：仅下发 CUSTOM 维度（ALL=不限=不下发，等同未配）；PUT 缺省=全局层只动本层
       const list: DimAuthz[] = dims.filter((d) => state[d.code]?.scope === "CUSTOM").map((d) => ({ dimension: d.code, scope: "CUSTOM", values: state[d.code].values }))
-      const latest = await fetchAuthz(principalType, id)
-      const overrideRows = (Array.isArray(latest.data) ? latest.data : []).filter((a) => !isGlobalRow(a))
-      await saveAuthz(principalType, id, [...list, ...overrideRows])
+      await saveAuthz(principalType, id, list)
       toast.success("数据维度授权已保存")
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "保存失败")
