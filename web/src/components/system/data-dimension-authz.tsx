@@ -5,13 +5,15 @@
  * mock 先行 + 三处响应归一 + 空态；调用方再包 ErrorBoundary（防白屏）。
  */
 import { useCallback, useEffect, useState } from "react"
+// P2：本组件只管**全局层**（feature 空）；功能覆盖层由 DataDimensionOverrides 管理。
+// PUT 是整体全量替换 → 保存前现拉一次覆盖层行随包下发，避免把功能覆盖冲掉。
 import { toast } from "sonner"
 import { CloudOff, Loader2, Save } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { RecordPicker, RecordPickerField, type RecordPickerColumn } from "@/components/record-picker"
-import { fetchAuthz, fetchDimensionOptions, fetchDimensions, saveAuthz, type DataDimension, type DimAuthz, type DimOption, type DimScope, type DpPrincipal } from "./dp-authz-api"
+import { fetchAuthz, fetchDimensionOptions, fetchDimensions, isGlobalRow, saveAuthz, type DataDimension, type DimAuthz, type DimOption, type DimScope, type DpPrincipal } from "./dp-authz-api"
 
 interface RowState {
   scope: DimScope
@@ -53,7 +55,8 @@ export function DataDimensionAuthz({ principalType, id, canEdit }: { principalTy
     Promise.all([fetchDimensions(), fetchAuthz(principalType, id)])
       .then(([dimsRes, authzRes]) => {
         const ds = Array.isArray(dimsRes.data) ? dimsRes.data : []
-        const authz = Array.isArray(authzRes.data) ? authzRes.data : []
+        // 只回显全局层；覆盖层行（feature 非空）由「按功能覆盖」列表管理
+        const authz = (Array.isArray(authzRes.data) ? authzRes.data : []).filter(isGlobalRow)
         const st: Record<string, RowState> = {}
         for (const d of ds) {
           const a = authz.find((x) => x.dimension === d.code)
@@ -84,9 +87,12 @@ export function DataDimensionAuthz({ principalType, id, canEdit }: { principalTy
     }
     setSaving(true)
     try {
-      // 全量替换：仅下发 CUSTOM 维度（ALL=不限=不下发，等同未配）
+      // 全局层全量替换：仅下发 CUSTOM 维度（ALL=不限=不下发，等同未配）。
+      // PUT 是整体替换 → 现拉最新覆盖层行随包保全（避免把功能覆盖冲掉）。
       const list: DimAuthz[] = dims.filter((d) => state[d.code]?.scope === "CUSTOM").map((d) => ({ dimension: d.code, scope: "CUSTOM", values: state[d.code].values }))
-      await saveAuthz(principalType, id, list)
+      const latest = await fetchAuthz(principalType, id)
+      const overrideRows = (Array.isArray(latest.data) ? latest.data : []).filter((a) => !isGlobalRow(a))
+      await saveAuthz(principalType, id, [...list, ...overrideRows])
       toast.success("数据维度授权已保存")
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "保存失败")

@@ -7,6 +7,7 @@ import { PermissionBanner } from "@/components/permission-banner"
 import { OrgPicker } from "@/components/org-picker"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { DataDimensionAuthz } from "@/components/system/data-dimension-authz"
+import { DataDimensionOverrides } from "@/components/system/data-dimension-overrides"
 import { DataTable, indexColumn } from "@/components/data-table/data-table"
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header"
 import { api, NetworkError, type PageResult } from "@/lib/api"
@@ -193,6 +194,9 @@ export default function RolePage() {
   // 字段权限 Tab（P3）：dirty 由子组件汇报；resetSignal 触发其回滚
   const [fieldsDirty, setFieldsDirty] = useState(false)
   const [fieldsResetSignal, setFieldsResetSignal] = useState(0)
+  // P2 按功能覆盖列表（数据权限 Tab 段②）：dirty 并入 dataDirty 拦截，丢弃时回滚
+  const [overridesDirty, setOverridesDirty] = useState(false)
+  const [overridesResetSignal, setOverridesResetSignal] = useState(0)
 
   const [deleteTarget, setDeleteTarget] = useState<RoleRow | null>(null)
   const [batchDel, setBatchDel] = useState<{ rows: RoleRow[]; clear: () => void } | null>(null)
@@ -343,7 +347,8 @@ export default function RolePage() {
   const dataDirty =
     form.dataScope !== formSnapshot.dataScope ||
     form.customDeptIds.length !== formSnapshot.customDeptIds.length ||
-    form.customDeptIds.some((id, i) => id !== formSnapshot.customDeptIds[i])
+    form.customDeptIds.some((id, i) => id !== formSnapshot.customDeptIds[i]) ||
+    overridesDirty
   const permsDirty = checkedIds.size !== permSnapshot.size || Array.from(checkedIds).some((id) => !permSnapshot.has(id))
   const tabDirty = (tab: RoleTab) =>
     tab === "basic" ? basicDirty : tab === "data" ? dataDirty : tab === "perms" ? permsDirty : fieldsDirty
@@ -365,6 +370,7 @@ export default function RolePage() {
     setForm(formSnapshot)
     setCheckedIds(new Set(permSnapshot))
     setFieldsResetSignal((n) => n + 1) // 字段权限 Tab 回滚到快照
+    setOverridesResetSignal((n) => n + 1) // 按功能覆盖列表回滚到快照
   }
 
   const confirmDelete = async () => {
@@ -709,10 +715,15 @@ export default function RolePage() {
               </ErrorBoundary>
             </TabsContent>
 
-            {/* 数据权限（原语义零变：部门 5 档 + CUSTOM 自定义部门 + DP1 维度授权） */}
+            {/* 数据权限（P2 两段式）：段① 默认权限(全局)=原语义零变；段② 按功能覆盖（附3 参考图形态） */}
             <TabsContent value="data" forceMount className="min-h-0 flex-1 overflow-y-auto p-4 data-[state=inactive]:hidden">
               <ErrorBoundary label="role-tab-data">
                 <div className="grid gap-4">
+                  {/* ───── 段①：默认权限（全局）——未被功能覆盖时的兜底配置 ───── */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold">默认权限（全局）</span>
+                    <span className="text-[11px] text-muted-foreground">未按功能覆盖时生效</span>
+                  </div>
                   <div className="space-y-1.5">
                     <Label>数据权限范围</Label>
                     <Select
@@ -773,6 +784,25 @@ export default function RolePage() {
                       <p className="text-[11px] text-muted-foreground">与上方「部门数据权限（5 档）」并行——在成本中心 / 项目等业务维度上限定该角色可见范围。</p>
                       <ErrorBoundary label="dp-authz-role">
                         <DataDimensionAuthz principalType="role" id={editing.id} canEdit={canEdit} />
+                      </ErrorBoundary>
+                    </div>
+                  )}
+
+                  {/* ───── 段②：数据权限配置 · 按功能覆盖（P2，附3 行式列表；覆盖=替换） ───── */}
+                  {editing && (
+                    <div className="space-y-1.5 border-t pt-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold">数据权限配置（按功能覆盖）</span>
+                        <span className="text-[11px] text-muted-foreground">为单个功能单独设定范围，覆盖上方全局配置</span>
+                      </div>
+                      <ErrorBoundary label="dp-overrides-role">
+                        <DataDimensionOverrides
+                          principalType="role"
+                          id={editing.id}
+                          canEdit={canEdit}
+                          onDirtyChange={setOverridesDirty}
+                          resetSignal={overridesResetSignal}
+                        />
                       </ErrorBoundary>
                     </div>
                   )}

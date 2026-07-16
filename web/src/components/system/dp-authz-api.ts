@@ -1,18 +1,21 @@
 /**
- * 多维数据权限授权 · API 层（DP1，docs/design/data-permission-advanced.md §一/§四；契约钉死）。
- * mock 先行：后端未上线（offline / 404 未实现 / NetworkError）→ 演示两个维度 + 演示授权，banner 降级；
- * 真实业务错（403 无权等）照抛。响应三处归一（非数组→[]，防白屏）。
+ * 多维数据权限授权 · API 层（DP1 + P2 功能级覆盖，permission-center.md 附3；契约钉死，磐石 V54 并行）。
+ * 降级口径（收紧）：仅 offline / NetworkError → 演示数据 + banner；信封错误（含 404）照抛。
+ * 响应三处归一（非数组→[]，防白屏）。
  *
  * ── 契约（前后端共用，字段名钉死）───────────────────────────────────────────────
  *  GET  /api/system/data-dimensions                 → [{code,label,entity?,enabled}]  已注册可配业务维度（不含内建 dept/self）
  *  GET  /api/system/data-dimensions/{code}/options  → [{id,label}]                    该维 CUSTOM 可选值（泛化，别硬编码各维 URL）
- *  GET  /api/system/roles/{id}/data-dimensions      → [{dimension,scope:"ALL"|"CUSTOM",values:number[]}]
- *  PUT  /api/system/roles/{id}/data-dimensions      body 同上（全量替换）
+ *  GET  /api/system/roles/{id}/data-dimensions      → [{dimension,scope:"ALL"|"CUSTOM",values:number[],feature?}]
+ *  PUT  /api/system/roles/{id}/data-dimensions      body 同上（整体全量替换：全局行 + 覆盖行一起下发）
  *  GET/PUT /api/system/users/{id}/data-dimensions   同结构
- *  语义：未配的维度=不限该维；scope=ALL 该维不限；CUSTOM=仅 values 集内可见。
+ *  P2 additive：item 加 feature?（''/缺省=全局层；非空=该功能的覆盖层，featureCode opaque string）。
+ *  dimension 可为业务维度 code 或内建 'dept'（组织/部门维，scope ALL|CUSTOM values=deptIds——
+ *  先按「精确部门集」语义做，子树语义待磐石终稿，一行可调）。
+ *  解析顺序：功能覆盖 > 全局 > 不限；**覆盖=替换**（只看覆盖层，不与全局并集）。
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { api, ApiError, NetworkError } from "@/lib/api"
+import { api, NetworkError } from "@/lib/api"
 import { useAuthStore } from "@/stores/auth-store"
 
 export interface DataDimension {
@@ -31,6 +34,16 @@ export interface DimAuthz {
   dimension: string
   scope: DimScope
   values: number[]
+  /** P2：''/缺省=全局层；非空=功能覆盖层（覆盖=替换，该功能脱离全局） */
+  feature?: string
+}
+
+/** 内建「组织(部门)」维度键（覆盖层允许 dimension='dept'，values=deptIds） */
+export const DEPT_DIMENSION = "dept"
+
+/** 是否全局层行（feature 空/缺省） */
+export function isGlobalRow(a: DimAuthz): boolean {
+  return !a.feature
 }
 export type DpPrincipal = "role" | "user"
 export interface DpResult<T> {
@@ -56,6 +69,11 @@ const MOCK_OPTIONS: Record<string, DimOption[]> = {
   ],
 }
 const MOCK_AUTHZ: Record<string, DimAuthz[]> = {}
+/** 演示默认授权：全局 costCenter=CUSTOM[1] + 一条功能覆盖示例（请假 · 部门维收窄） */
+const MOCK_AUTHZ_DEFAULT: DimAuthz[] = [
+  { dimension: "costCenter", scope: "CUSTOM", values: [1] },
+  { feature: "ATTENDANCE_LEAVE", dimension: DEPT_DIMENSION, scope: "CUSTOM", values: [1] },
+]
 const authzKey = (p: DpPrincipal, id: number) => `${p}:${id}`
 
 function normList<T>(raw: unknown): T[] {
@@ -69,9 +87,8 @@ async function withMock<T>(fn: () => Promise<T>, mock: () => T): Promise<DpResul
   try {
     return { data: await fn(), demo: false }
   } catch (err) {
-    // 端点未实现(404) / 网络不通 → 演示降级；真实业务错(403 等) 照抛
+    // 收紧口径（P2）：仅网络不通降级演示；信封错误（含 404）照抛，避免掩盖真实故障
     if (err instanceof NetworkError) return { data: mock(), demo: true }
-    if (err instanceof ApiError && err.code === 404) return { data: mock(), demo: true }
     throw err
   }
 }
@@ -95,7 +112,7 @@ export function fetchDimensionOptions(code: string): Promise<DpResult<DimOption[
 export function fetchAuthz(principalType: DpPrincipal, id: number): Promise<DpResult<DimAuthz[]>> {
   return withMock(
     () => api<DimAuthz[]>(authzPath(principalType, id)).then(normList<DimAuthz>),
-    () => MOCK_AUTHZ[authzKey(principalType, id)] ?? [{ dimension: "costCenter", scope: "CUSTOM", values: [1] }],
+    () => MOCK_AUTHZ[authzKey(principalType, id)] ?? MOCK_AUTHZ_DEFAULT,
   )
 }
 

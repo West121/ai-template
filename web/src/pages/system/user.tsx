@@ -36,6 +36,7 @@ import { Modal } from "@/components/modal"
 import { Drawer } from "@/components/drawer"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { DataDimensionAuthz } from "@/components/system/data-dimension-authz"
+import { DataDimensionOverrides } from "@/components/system/data-dimension-overrides"
 import { ResignWizard } from "@/components/system/resign-wizard"
 import { TransferDialog } from "@/components/system/transfer-dialog"
 import { DataTable, indexColumn } from "@/components/data-table/data-table"
@@ -1521,6 +1522,16 @@ export default function UserPage() {
                 <p className="text-[11px] text-muted-foreground">在成本中心 / 项目等业务维度上限定该用户可见范围（用户级与角色维度授权取并集，未配=不限）。</p>
                 <ErrorBoundary label="dp-authz-user">
                   <DataDimensionAuthz principalType="user" id={editing.id} canEdit={canEdit} />
+                </ErrorBoundary>
+              </div>
+            )}
+            {/* P2 按功能覆盖（用户级，与角色抽屉同一组件 principalType 参数化；独立保存） */}
+            {editing && (
+              <div className="space-y-1.5 border-t pt-3 @md:col-span-2">
+                <FormLabel>数据权限配置（按功能覆盖）</FormLabel>
+                <p className="text-[11px] text-muted-foreground">为单个功能单独设定该用户的数据范围（覆盖=替换：该功能只看覆盖层，不与全局并集）。</p>
+                <ErrorBoundary label="dp-overrides-user">
+                  <DataDimensionOverrides principalType="user" id={editing.id} canEdit={canEdit} />
                 </ErrorBoundary>
               </div>
             )}
