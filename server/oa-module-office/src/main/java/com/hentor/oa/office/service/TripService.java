@@ -8,6 +8,7 @@ import com.hentor.oa.office.dto.TripResponse;
 import com.hentor.oa.office.entity.Trip;
 import com.hentor.oa.office.repository.TripRepository;
 import com.hentor.oa.office.support.DeptNameResolver;
+import com.hentor.oa.office.support.DataScopeSupport;
 import com.hentor.oa.office.support.SecuritySupport;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -26,13 +27,14 @@ public class TripService {
 
     private final TripRepository tripRepository;
     private final DeptNameResolver deptNameResolver;
+    private final DataScopeSupport dataScopeSupport;
 
     /**
      * 出差列表【DS】。
      */
     public PageResult<TripResponse> page(int pageNum, int pageSize) {
         Page<Trip> page = tripRepository.findAll(
-                SecuritySupport.dataScope("deptId", "userId"),
+                dataScopeSupport.multiDim("ATTENDANCE_TRIP", "Trip", "deptId", "userId"), // V54 功能级(dept 覆盖)接入
                 PageRequest.of(Math.max(pageNum - 1, 0), pageSize, Sort.by(Sort.Direction.DESC, "createdAt")));
         Map<Long, String> deptNames = deptNameResolver.nameMap();
         List<TripResponse> list = page.getContent().stream()

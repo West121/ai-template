@@ -25,7 +25,7 @@ import java.util.Set;
 @Setter
 @Entity
 @Table(name = "sys_role_data_dimension",
-        uniqueConstraints = @UniqueConstraint(name = "uk_role_data_dim", columnNames = {"role_id", "dimension"}))
+        uniqueConstraints = @UniqueConstraint(name = "uk_role_data_dim", columnNames = {"role_id", "dimension", "feature"}))
 public class SysRoleDataDimension {
 
     @Id
@@ -37,6 +37,10 @@ public class SysRoleDataDimension {
 
     @Column(nullable = false, length = 64)
     private String dimension;
+
+    /** V54 功能覆盖层：''=全局默认；非空=按功能覆盖（feature_code opaque 字符串，覆盖=替换全局）。 */
+    @Column(nullable = false, length = 64)
+    private String feature = "";
 
     @Column(nullable = false, length = 16)
     private String scope;

@@ -8,6 +8,7 @@ import com.hentor.oa.office.dto.DocumentResponse;
 import com.hentor.oa.office.entity.Document;
 import com.hentor.oa.office.repository.DocumentRepository;
 import com.hentor.oa.office.support.DeptNameResolver;
+import com.hentor.oa.office.support.DataScopeSupport;
 import com.hentor.oa.office.support.SecuritySupport;
 import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +31,7 @@ public class DocumentService {
 
     private final DocumentRepository documentRepository;
     private final DeptNameResolver deptNameResolver;
+    private final DataScopeSupport dataScopeSupport;
 
     public PageResult<DocumentResponse> page(String direction, String status, String keyword, int pageNum, int pageSize) {
         Specification<Document> condition = (root, query, cb) -> {
@@ -47,7 +49,7 @@ public class DocumentService {
             return cb.and(predicates.toArray(new Predicate[0]));
         };
         Page<Document> page = documentRepository.findAll(
-                condition.and(SecuritySupport.dataScope("deptId", "creatorId")),
+                condition.and(dataScopeSupport.multiDim(documentFeature(direction), "Document", "deptId", "creatorId")), // V54 功能级接入
                 PageRequest.of(Math.max(pageNum - 1, 0), pageSize, Sort.by(Sort.Direction.DESC, "createdAt")));
         Map<Long, String> deptNames = deptNameResolver.nameMap();
         List<DocumentResponse> list = page.getContent().stream()
@@ -135,6 +137,17 @@ public class DocumentService {
             document.setSigner(signer);
         }
         return toResponse(documentRepository.save(document), deptNameResolver.nameMap());
+    }
+
+    /** V54 功能键：公文页按方向分键（发文/收文），无方向=台账视图。 */
+    private String documentFeature(String direction) {
+        if (Document.DIRECTION_SEND.equals(direction)) {
+            return "DOCUMENT_SEND";
+        }
+        if (Document.DIRECTION_RECEIVE.equals(direction)) {
+            return "DOCUMENT_RECEIVE";
+        }
+        return "DOCUMENT_LEDGER";
     }
 
     private DocumentResponse toResponse(Document d, Map<Long, String> deptNames) {

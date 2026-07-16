@@ -990,6 +990,90 @@ await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [lmainI
   check("P3 清配置后 mine 空(向后兼容复原)", Object.keys(mineClear.body?.data?.fields ?? { x: 1 }).length === 0)
 }
 
+/* ---------- 11d-4. 权限中心 P2 · 功能级数据权限覆盖（V54：覆盖=替换/dept 覆盖/回落/多实体/缓存 v2） ---------- */
+{
+  const listApr = async (tok) => (await call(tok, "GET", "/api/office/approvals?pageNum=1&pageSize=500")).body?.data?.list ?? []
+  const dpTitles = (l) => l.map((a) => a.title).filter((t) => t.startsWith("DP维度"))
+  const rolesP2 = (await call(admin.token, "GET", "/api/system/roles?pageNum=1&pageSize=100")).body?.data?.list ?? []
+  const mgrRoleP2 = rolesP2.find((r) => r.code === "DEPT_MANAGER")?.id
+  const deptTreeP2 = (await call(admin.token, "GET", "/api/system/depts/tree")).body?.data ?? []
+  const techDeptId = (deptTreeP2[0]?.children ?? []).find((d) => d.name === "技术部")?.id
+  check("P2 前置(角色/部门可得)", !!(mgrRoleP2 && techDeptId), JSON.stringify({ mgrRoleP2, techDeptId }))
+  // 预清理（防残留）
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [])
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions?feature=WORKFLOW_TASKS", [])
+  await call(admin.token, "PUT", `/api/system/roles/${mgrRoleP2}/data-dimensions?feature=WORKFLOW_TASKS`, [])
+
+  // 0) 保留键 + 全局层 dept 拒绝
+  const dimDept = await call(admin.token, "POST", "/api/system/data-dimensions", { code: "dept", label: "占位", valueSource: "OPTION" })
+  check("P2 维度 CRUD 禁 dept 保留键 400", dimDept.body?.code === 400)
+  const globalDept = await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [{ dimension: "dept", scope: "ALL", values: [] }])
+  check("P2 全局层配 dept 400(唯一真源=五档)", globalDept.body?.code === 400, JSON.stringify(globalDept.body?.message))
+
+  // 1) 业务维覆盖=替换：全局 CUSTOM[1] 收窄 → 功能覆盖 ALL 放开 → 删除覆盖回落 → GET 分层
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [{ dimension: "costCenter", scope: "CUSTOM", values: [1] }])
+  const g1 = dpTitles(await listApr(admin.token))
+  check("P2 全局 CUSTOM[1] 老行为零回归(只见研发)", g1.includes("DP维度-研发A采购") && !g1.includes("DP维度-市场C用章"), JSON.stringify(g1))
+  const putOv = await call(admin.token, "PUT", "/api/system/users/1/data-dimensions?feature=WORKFLOW_TASKS",
+    [{ dimension: "costCenter", scope: "ALL", values: [] }])
+  check("P2 保存功能覆盖(costCenter ALL)", putOv.body?.code === 0, JSON.stringify(putOv.body))
+  const o1 = dpTitles(await listApr(admin.token))
+  check("P2 覆盖=替换：该功能不限(三行全见)", o1.includes("DP维度-市场C用章") && o1.includes("DP维度-研发A采购") && o1.includes("DP维度-研发B报销"), JSON.stringify(o1))
+  const gDef = (await call(admin.token, "GET", "/api/system/users/1/data-dimensions")).body?.data ?? []
+  const gOv = (await call(admin.token, "GET", "/api/system/users/1/data-dimensions?feature=WORKFLOW_TASKS")).body?.data ?? []
+  const gAll = (await call(admin.token, "GET", "/api/system/users/1/data-dimensions?all=1")).body?.data ?? []
+  check("P2 GET 分层(缺省=全局/feature=层/all=全部)", gDef.length === 1 && gDef[0].feature === "" && gDef[0].dimension === "costCenter"
+    && gOv.length === 1 && gOv[0].feature === "WORKFLOW_TASKS" && gAll.length === 2, JSON.stringify({ d: gDef, o: gOv.length, a: gAll.length }))
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions?feature=WORKFLOW_TASKS", [])
+  const back1 = dpTitles(await listApr(admin.token))
+  check("P2 删除覆盖回落全局(重新收窄)", !back1.includes("DP维度-市场C用章") && back1.includes("DP维度-研发A采购"), JSON.stringify(back1))
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [])
+
+  // 2) dept 覆盖(role 层,manager)：替换全局五档；隔离=其它主体不受影响
+  const mgrBase = await listApr(manager.token)
+  // 断言锚定 DP 种子行(admin 建于技术部,对 manager 非 self)——KEEP 库有 manager 自建单(OR self 恒可见),deptName 断言会误伤
+  check("P2 manager 基线(不见技术部 DP 种子行)", dpTitles(mgrBase).length === 0, JSON.stringify(dpTitles(mgrBase)))
+  const putDept = await call(admin.token, "PUT", `/api/system/roles/${mgrRoleP2}/data-dimensions?feature=WORKFLOW_TASKS`,
+    [{ dimension: "dept", scope: "CUSTOM", values: [techDeptId] }])
+  check("P2 保存 dept 覆盖(CUSTOM=[技术部],精确集不含子树)", putDept.body?.code === 0, JSON.stringify(putDept.body))
+  const mgrOv = await listApr(manager.token)
+  check("P2 dept 覆盖替换五档(DP 种子三行可见=技术部生效)", dpTitles(mgrOv).length === 3, JSON.stringify(dpTitles(mgrOv)))
+  const adminDuring = dpTitles(await listApr(admin.token))
+  check("P2 覆盖只影响持有角色者(admin 三行全见)", adminDuring.length === 3, JSON.stringify(adminDuring))
+  const badDept = await call(admin.token, "PUT", `/api/system/roles/${mgrRoleP2}/data-dimensions?feature=WORKFLOW_TASKS`,
+    [{ dimension: "dept", scope: "CUSTOM", values: [999999] }])
+  check("P2 dept 覆盖值域校验(部门不存在 400)", badDept.body?.code === 400)
+  await call(admin.token, "PUT", `/api/system/roles/${mgrRoleP2}/data-dimensions?feature=WORKFLOW_TASKS`, [])
+  const mgrBack = await listApr(manager.token)
+  check("P2 删除 dept 覆盖恢复五档口径(DP 种子行重新不可见)", dpTitles(mgrBack).length === 0 && mgrBack.length === mgrBase.length, `→`)
+
+  // 3) 多实体接入(Leave/Trip/Document)：功能级路径可逆烟测(数据面强验已由 Approval 覆盖,同一 multiDim 代码路径)
+  for (const [feat, path, name] of [["ATTENDANCE_LEAVE", "/api/office/leaves", "请假"],
+    ["ATTENDANCE_TRIP", "/api/office/trips", "出差"], ["DOCUMENT_LEDGER", "/api/office/documents", "公文台账"]]) {
+    const base = ((await call(admin.token, "GET", `${path}?pageNum=1&pageSize=500`)).body?.data?.list ?? []).length
+    await call(admin.token, "PUT", `/api/system/users/1/data-dimensions?feature=${feat}`,
+      [{ dimension: "dept", scope: "CUSTOM", values: [techDeptId] }])
+    const duringResp = await call(admin.token, "GET", `${path}?pageNum=1&pageSize=500`)
+    const during = (duringResp.body?.data?.list ?? []).length
+    await call(admin.token, "PUT", `/api/system/users/1/data-dimensions?feature=${feat}`, [])
+    const restore = ((await call(admin.token, "GET", `${path}?pageNum=1&pageSize=500`)).body?.data?.list ?? []).length
+    check(`P2 ${name} 功能级接入(覆盖生效可逆)`, duringResp.body?.code === 0 && during <= base && restore === base, `${base}→${during}→${restore}`)
+  }
+
+  // 4) 缓存 v2 键抽验(best-effort)：查询建键/evict 清/旧结构键顺带清
+  try {
+    const rcli = (args) => execFileSync("docker", ["exec", "oa-redis", "redis-cli", ...args]).toString().trim()
+    await listApr(admin.token)
+    const exist1 = rcli(["EXISTS", "dp:dims:v2:1"])
+    await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [])
+    const exist2 = rcli(["EXISTS", "dp:dims:v2:1"])
+    const legacy = rcli(["EXISTS", "dp:dims:1"])
+    check("P2 缓存 v2 键(查询建/evict 清/旧键清)", exist1 === "1" && exist2 === "0" && legacy === "0", `${exist1}/${exist2}/${legacy}`)
+  } catch (e) {
+    console.warn("⚠️ redis 抽验跳过:", String(e?.message ?? e).split("\n")[0])
+  }
+}
+
 /* ---------- 11e. 个人中心自助端点（磐石：change-password / profile，仅本人，不动种子密码） ---------- */
 {
   const PTS = Date.now()

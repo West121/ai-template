@@ -10,6 +10,7 @@ import com.hentor.oa.office.entity.Leave;
 import com.hentor.oa.office.repository.LeaveQuotaRepository;
 import com.hentor.oa.office.repository.LeaveRepository;
 import com.hentor.oa.office.support.DeptNameResolver;
+import com.hentor.oa.office.support.DataScopeSupport;
 import com.hentor.oa.office.support.SecuritySupport;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -29,13 +30,14 @@ public class LeaveService {
     private final LeaveRepository leaveRepository;
     private final LeaveQuotaRepository quotaRepository;
     private final DeptNameResolver deptNameResolver;
+    private final DataScopeSupport dataScopeSupport;
 
     /**
      * 请假列表【DS】。
      */
     public PageResult<LeaveResponse> page(int pageNum, int pageSize) {
         Page<Leave> page = leaveRepository.findAll(
-                SecuritySupport.dataScope("deptId", "userId"),
+                dataScopeSupport.multiDim("ATTENDANCE_LEAVE", "Leave", "deptId", "userId"), // V54 功能级(dept 覆盖)接入
                 PageRequest.of(Math.max(pageNum - 1, 0), pageSize, Sort.by(Sort.Direction.DESC, "createdAt")));
         Map<Long, String> deptNames = deptNameResolver.nameMap();
         List<LeaveResponse> list = page.getContent().stream()

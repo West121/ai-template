@@ -60,7 +60,16 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class DataDimensionService {
 
-    private static final String CACHE_PREFIX = "dp:dims:";
+    /**
+     * V54 缓存结构升级：值从平铺 {dim:scope} 变分层 {"":{dim:scope},"<feature>":{dim:scope}}。
+     * 直接换前缀 v2——旧 dp:dims:{uid} 键不再被读（TTL 30min 自然蒸发；evictUser 顺带删），零迁移代码。
+     */
+    private static final String CACHE_PREFIX = "dp:dims:v2:";
+    private static final String LEGACY_CACHE_PREFIX = "dp:dims:";
+    /** 全局默认层键（拍板：存 '' 代 NULL，唯一键干净）。 */
+    public static final String FEATURE_GLOBAL = "";
+    /** 内建部门维保留键（V54 覆盖层允许 dimension='dept'；维度 CRUD 禁用户占用）。 */
+    public static final String DIM_DEPT = "dept";
     private static final Duration CACHE_TTL = Duration.ofMinutes(30);
     /** 维度编码（V51 CRUD）：字母开头，字母数字下划线，≤64。 */
     private static final Pattern DIM_CODE_PATTERN = Pattern.compile("[a-zA-Z][a-zA-Z0-9_]{1,63}");
@@ -181,27 +190,44 @@ public class DataDimensionService {
         return providers.stream().filter(p -> p.code().equals(code)).findFirst().orElse(null);
     }
 
-    // ==================== 角色 / 用户 维度授权读写 ====================
+    // ==================== 角色 / 用户 维度授权读写（V54 分层：''=全局，非空=功能覆盖） ====================
 
+    /** 兼容旧签名：全局层。 */
     @Transactional(readOnly = true)
     public List<DimensionConfigItem> roleConfig(Long roleId) {
-        return roleDimRepository.findByRoleId(roleId).stream()
-                .map(c -> new DimensionConfigItem(c.getDimension(), c.getScope(), sorted(c.getValues())))
+        return roleConfig(roleId, FEATURE_GLOBAL, false);
+    }
+
+    /** feature=层过滤（''=全局）；all=true 返回全部层（item 带 feature）。 */
+    @Transactional(readOnly = true)
+    public List<DimensionConfigItem> roleConfig(Long roleId, String feature, boolean all) {
+        List<SysRoleDataDimension> rows = all
+                ? roleDimRepository.findByRoleId(roleId)
+                : roleDimRepository.findByRoleIdAndFeature(roleId, normFeature(feature));
+        return rows.stream()
+                .map(c -> new DimensionConfigItem(c.getDimension(), c.getScope(), sorted(c.getValues()), c.getFeature()))
                 .toList();
     }
 
-    /** 全量替换角色维度授权。校验维度白名单 + scope + CUSTOM 取值合法。失效该角色全部持有者缓存。 */
+    /** 兼容旧签名：全局层全量替换（老 payload 缺 feature=原行为不变，功能覆盖层不受影响）。 */
     @Transactional
     public void saveRoleConfig(Long roleId, List<DimensionConfigItem> items) {
-        validateItems(items);
-        // 全量替换：先删已有并 flush（否则 Hibernate 同事务「先 INSERT 后 DELETE」与 uk_role_data_dim 冲突），
-        // deleteAll 走实体删除以级联清理 @ElementCollection 值表。
-        roleDimRepository.deleteAll(roleDimRepository.findByRoleId(roleId));
+        saveRoleConfig(roleId, FEATURE_GLOBAL, items);
+    }
+
+    /** 按层全量替换角色维度授权（V54）：只动指定 feature 层的行；item.feature 忽略以入参为准。 */
+    @Transactional
+    public void saveRoleConfig(Long roleId, String feature, List<DimensionConfigItem> items) {
+        String layer = normFeature(feature);
+        validateItems(layer, items);
+        // 按层全量替换：先删该层已有并 flush（避免同事务 INSERT/DELETE 撞 uk_role_data_dim；级联清值表）
+        roleDimRepository.deleteAll(roleDimRepository.findByRoleIdAndFeature(roleId, layer));
         roleDimRepository.flush();
         for (DimensionConfigItem item : normalize(items)) {
             SysRoleDataDimension c = new SysRoleDataDimension();
             c.setRoleId(roleId);
             c.setDimension(item.dimension());
+            c.setFeature(layer);
             c.setScope(item.scope());
             c.setValues(new HashSet<>(item.values()));
             roleDimRepository.save(c);
@@ -209,24 +235,40 @@ public class DataDimensionService {
         evictRole(roleId);
     }
 
+    /** 兼容旧签名：全局层。 */
     @Transactional(readOnly = true)
     public List<DimensionConfigItem> userConfig(Long userId) {
-        return userDimRepository.findByUserId(userId).stream()
-                .map(c -> new DimensionConfigItem(c.getDimension(), c.getScope(), sorted(c.getValues())))
+        return userConfig(userId, FEATURE_GLOBAL, false);
+    }
+
+    @Transactional(readOnly = true)
+    public List<DimensionConfigItem> userConfig(Long userId, String feature, boolean all) {
+        List<SysUserDataDimension> rows = all
+                ? userDimRepository.findByUserId(userId)
+                : userDimRepository.findByUserIdAndFeature(userId, normFeature(feature));
+        return rows.stream()
+                .map(c -> new DimensionConfigItem(c.getDimension(), c.getScope(), sorted(c.getValues()), c.getFeature()))
                 .toList();
     }
 
-    /** 全量替换用户维度授权。失效该用户缓存。 */
+    /** 兼容旧签名：全局层全量替换。 */
     @Transactional
     public void saveUserConfig(Long userId, List<DimensionConfigItem> items) {
-        validateItems(items);
-        // 全量替换：先删已有并 flush（同 saveRoleConfig，避免 uk_user_data_dim 冲突 + 级联清 @ElementCollection 值表）
-        userDimRepository.deleteAll(userDimRepository.findByUserId(userId));
+        saveUserConfig(userId, FEATURE_GLOBAL, items);
+    }
+
+    /** 按层全量替换用户维度授权（V54）。 */
+    @Transactional
+    public void saveUserConfig(Long userId, String feature, List<DimensionConfigItem> items) {
+        String layer = normFeature(feature);
+        validateItems(layer, items);
+        userDimRepository.deleteAll(userDimRepository.findByUserIdAndFeature(userId, layer));
         userDimRepository.flush();
         for (DimensionConfigItem item : normalize(items)) {
             SysUserDataDimension c = new SysUserDataDimension();
             c.setUserId(userId);
             c.setDimension(item.dimension());
+            c.setFeature(layer);
             c.setScope(item.scope());
             c.setValues(new HashSet<>(item.values()));
             userDimRepository.save(c);
@@ -234,14 +276,25 @@ public class DataDimensionService {
         evictUser(userId);
     }
 
-    /** 校验：维度须注册启用（白名单）；scope∈{ALL,CUSTOM}；CUSTOM 取值须为该维 provider 合法 id（范围校验）。 */
-    private void validateItems(List<DimensionConfigItem> items) {
+    private String normFeature(String feature) {
+        return StringUtils.hasText(feature) ? feature.trim() : FEATURE_GLOBAL;
+    }
+
+    /**
+     * 校验：业务维须注册启用 + CUSTOM 值域=optionsFor；内建 dept 维（V54）仅允许覆盖层
+     * （全局部门权限唯一真源=role.dataScope 五档，不造第二真源），CUSTOM 值域=存在的部门 id（精确集，不含子树）。
+     */
+    private void validateItems(String layer, List<DimensionConfigItem> items) {
         if (items == null) {
             return;
         }
         Set<String> registered = registeredCodes();
         for (DimensionConfigItem item : items) {
-            if (item.dimension() == null || !registered.contains(item.dimension())) {
+            boolean isDept = DIM_DEPT.equals(item.dimension());
+            if (isDept && FEATURE_GLOBAL.equals(layer)) {
+                throw new BusinessException(400, "内建部门维(dept)仅可用于功能覆盖层（全局部门权限走角色数据范围五档）");
+            }
+            if (!isDept && (item.dimension() == null || !registered.contains(item.dimension()))) {
                 throw new BusinessException(400, "未注册或未启用的数据维度: " + item.dimension());
             }
             String scope = item.scope();
@@ -250,6 +303,17 @@ public class DataDimensionService {
             }
             if (SysDataDimension.SCOPE_CUSTOM.equals(scope)) {
                 List<Long> values = item.values() == null ? List.of() : item.values();
+                if (isDept) {
+                    Set<Long> valid = new HashSet<>();
+                    deptRepository.findAllById(values.stream().filter(java.util.Objects::nonNull).toList())
+                            .forEach(dep -> valid.add(dep.getId()));
+                    for (Long v : values) {
+                        if (v == null || !valid.contains(v)) {
+                            throw new BusinessException(400, "部门维存在非法取值(部门不存在): " + v);
+                        }
+                    }
+                    continue;
+                }
                 // V51：值域校验统一走 optionsFor（专用 bean 与 OPTION/DICT/DEPT 通用源同样生效）
                 List<DimensionOption> options = dimensionRepository.findById(item.dimension())
                         .map(this::optionsFor).orElse(List.of());
@@ -273,7 +337,7 @@ public class DataDimensionService {
             List<Long> values = SysDataDimension.SCOPE_CUSTOM.equals(item.scope())
                     ? (item.values() == null ? List.of() : item.values().stream().filter(java.util.Objects::nonNull).distinct().toList())
                     : List.of();
-            byDim.put(item.dimension(), new DimensionConfigItem(item.dimension(), item.scope(), values));
+            byDim.put(item.dimension(), new DimensionConfigItem(item.dimension(), item.scope(), values, null));
         }
         return new ArrayList<>(byDim.values());
     }
@@ -281,24 +345,49 @@ public class DataDimensionService {
     // ==================== 当前用户各维可见范围解析（查询侧调用） ====================
 
     /**
-     * 解析当前用户在给定维度集合上的可见范围（供多维 Specification 拼谓词）。
+     * 解析当前用户在给定维度集合上的可见范围（全局层，兼容旧签名）。
      * 未配置维度返回 {@link DimensionScope#unlimited()}（不限）。走 Redis 预计算缓存。
      */
     public Map<String, DimensionScope> resolveForCurrentUser(Set<String> codes) {
+        return resolveForCurrentUser(null, codes);
+    }
+
+    /**
+     * V54 功能级解析：某维度上 <b>功能覆盖 &gt; 全局 &gt; 不限</b>——覆盖层存在该维配置即<b>替换</b>全局
+     * （拍板 C：只看覆盖层，不与全局并集，否则无法收紧）；同层内多角色/用户级仍并集放宽（RBAC 加法）。
+     * feature 空 = 纯全局层。
+     */
+    public Map<String, DimensionScope> resolveForCurrentUser(String feature, Set<String> codes) {
         UserContext ctx = CurrentUserHolder.get();
         if (ctx == null || ctx.getUserId() == null || codes == null || codes.isEmpty()) {
             return Map.of();
         }
-        Map<String, DimensionScope> all = cachedScopes(ctx.getUserId());
+        Map<String, Map<String, DimensionScope>> layers = cachedScopes(ctx.getUserId());
+        Map<String, DimensionScope> global = layers.getOrDefault(FEATURE_GLOBAL, Map.of());
+        Map<String, DimensionScope> override = StringUtils.hasText(feature)
+                ? layers.getOrDefault(feature.trim(), Map.of()) : Map.of();
         Map<String, DimensionScope> out = new HashMap<>();
         for (String code : codes) {
-            out.put(code, all.getOrDefault(code, DimensionScope.unlimited()));
+            out.put(code, override.containsKey(code) ? override.get(code)
+                    : global.getOrDefault(code, DimensionScope.unlimited()));
         }
         return out;
     }
 
-    /** 取用户各维范围（Redis 命中直取；未命中现算并回填；Redis 故障降级为直算，不影响正确性）。 */
-    private Map<String, DimensionScope> cachedScopes(Long userId) {
+    /**
+     * V54 dept 覆盖（内建维）：该 feature 覆盖层<b>显式配置了 dept</b> 才返回（替换全局五档），
+     * 否则 null（查询侧回落 role.dataScope 全局五档）。CUSTOM values=精确部门 id 集（不含子树）。
+     */
+    public DimensionScope deptOverride(String feature) {
+        UserContext ctx = CurrentUserHolder.get();
+        if (ctx == null || ctx.getUserId() == null || !StringUtils.hasText(feature)) {
+            return null;
+        }
+        return cachedScopes(ctx.getUserId()).getOrDefault(feature.trim(), Map.of()).get(DIM_DEPT);
+    }
+
+    /** 取用户分层范围（Redis 命中直取；未命中现算并回填；Redis 故障降级为直算，不影响正确性）。 */
+    private Map<String, Map<String, DimensionScope>> cachedScopes(Long userId) {
         String key = CACHE_PREFIX + userId;
         try {
             String json = redis.opsForValue().get(key);
@@ -308,7 +397,7 @@ public class DataDimensionService {
         } catch (Exception e) {
             log.warn("DP 维度缓存读取失败(降级直算) user={}: {}", userId, e.getMessage());
         }
-        Map<String, DimensionScope> computed = computeAllScopes(userId);
+        Map<String, Map<String, DimensionScope>> computed = computeAllScopes(userId);
         try {
             redis.opsForValue().set(key, serialize(computed), CACHE_TTL);
         } catch (Exception e) {
@@ -317,8 +406,8 @@ public class DataDimensionService {
         return computed;
     }
 
-    /** 现算：角色配置 + 用户配置按维度并集（任一 ALL → 不限；否则 CUSTOM 值并集）。 */
-    private Map<String, DimensionScope> computeAllScopes(Long userId) {
+    /** 现算（V54 分层）：角色配置 + 用户配置按 (feature, dimension) 并集（同层任一 ALL → 不限；否则 CUSTOM 值并集）。 */
+    private Map<String, Map<String, DimensionScope>> computeAllScopes(Long userId) {
         Set<Long> roleIds = new LinkedHashSet<>();
         for (SysUserAssignment a : assignmentRepository.findByUserIdAndEnabledTrueOrderByPrimaryFlagDescIdAsc(userId)) {
             for (SysRole r : a.getRoles()) {
@@ -327,32 +416,37 @@ public class DataDimensionService {
                 }
             }
         }
-        // 维度 -> {anyAll, unionValues}
-        Map<String, boolean[]> anyAll = new HashMap<>();
-        Map<String, Set<Long>> union = new HashMap<>();
+        // (feature, 维度) -> {anyAll, unionValues}
+        Map<String, Map<String, boolean[]>> anyAll = new HashMap<>();
+        Map<String, Map<String, Set<Long>>> union = new HashMap<>();
         List<SysRoleDataDimension> roleCfgs = roleIds.isEmpty() ? List.of() : roleDimRepository.findByRoleIdIn(roleIds);
         for (SysRoleDataDimension c : roleCfgs) {
-            accumulate(anyAll, union, c.getDimension(), c.getScope(), c.getValues());
+            accumulate(anyAll, union, c.getFeature(), c.getDimension(), c.getScope(), c.getValues());
         }
         for (SysUserDataDimension c : userDimRepository.findByUserId(userId)) {
-            accumulate(anyAll, union, c.getDimension(), c.getScope(), c.getValues());
+            accumulate(anyAll, union, c.getFeature(), c.getDimension(), c.getScope(), c.getValues());
         }
-        Map<String, DimensionScope> out = new HashMap<>();
-        for (String dim : union.keySet()) {
-            boolean[] all = anyAll.get(dim);
-            out.put(dim, (all != null && all[0]) ? DimensionScope.unlimited() : DimensionScope.custom(union.get(dim)));
-        }
+        Map<String, Map<String, DimensionScope>> out = new HashMap<>();
+        union.forEach((feature, byDim) -> {
+            Map<String, DimensionScope> layer = new HashMap<>();
+            byDim.forEach((dim, values) -> {
+                boolean[] all = anyAll.get(feature).get(dim);
+                layer.put(dim, (all != null && all[0]) ? DimensionScope.unlimited() : DimensionScope.custom(values));
+            });
+            out.put(feature, layer);
+        });
         return out;
     }
 
-    private void accumulate(Map<String, boolean[]> anyAll, Map<String, Set<Long>> union,
-                            String dim, String scope, Set<Long> values) {
-        anyAll.computeIfAbsent(dim, k -> new boolean[]{false});
-        union.computeIfAbsent(dim, k -> new HashSet<>());
+    private void accumulate(Map<String, Map<String, boolean[]>> anyAll, Map<String, Map<String, Set<Long>>> union,
+                            String feature, String dim, String scope, Set<Long> values) {
+        String layer = feature == null ? FEATURE_GLOBAL : feature;
+        anyAll.computeIfAbsent(layer, k -> new HashMap<>()).computeIfAbsent(dim, k -> new boolean[]{false});
+        union.computeIfAbsent(layer, k -> new HashMap<>()).computeIfAbsent(dim, k -> new HashSet<>());
         if (SysDataDimension.SCOPE_ALL.equals(scope)) {
-            anyAll.get(dim)[0] = true;
+            anyAll.get(layer).get(dim)[0] = true;
         } else if (values != null) {
-            union.get(dim).addAll(values);
+            union.get(layer).get(dim).addAll(values);
         }
     }
 
@@ -363,6 +457,9 @@ public class DataDimensionService {
     public DimensionInfo createDimension(DimensionUpsertRequest req) {
         if (req == null || !StringUtils.hasText(req.code()) || !DIM_CODE_PATTERN.matcher(req.code()).matches()) {
             throw new BusinessException(400, "维度编码非法（字母开头，字母数字下划线，≤64）");
+        }
+        if (DIM_DEPT.equalsIgnoreCase(req.code()) || "self".equalsIgnoreCase(req.code())) {
+            throw new BusinessException(400, "维度编码 dept/self 为内建保留键，不可占用");
         }
         if (dimensionRepository.findById(req.code()).isPresent()) {
             throw new BusinessException(400, "维度编码已存在（含已停用）: " + req.code());
@@ -622,6 +719,7 @@ public class DataDimensionService {
         }
         try {
             redis.delete(CACHE_PREFIX + userId);
+            redis.delete(LEGACY_CACHE_PREFIX + userId); // V54 结构升级过渡：旧平铺键顺带清（否则等 TTL 蒸发）
             redis.delete("dp:fields:" + userId); // V52 dp 家族联动：字段权限缓存同钩失效
         } catch (Exception e) {
             log.warn("DP 维度缓存失效失败 user={}: {}", userId, e.getMessage());
@@ -637,26 +735,34 @@ public class DataDimensionService {
 
     // ==================== Redis 序列化 ====================
 
-    private String serialize(Map<String, DimensionScope> scopes) {
+    /** V54 分层结构：{"<feature|''>": {"<dim>": {unlimited, values[]}}}。 */
+    private String serialize(Map<String, Map<String, DimensionScope>> layers) {
         ObjectNode root = objectMapper.createObjectNode();
-        scopes.forEach((code, s) -> {
-            ObjectNode node = root.putObject(code);
-            node.put("unlimited", s.all());
-            ArrayNode arr = node.putArray("values");
-            s.values().forEach(arr::add);
+        layers.forEach((feature, scopes) -> {
+            ObjectNode layer = root.putObject(feature);
+            scopes.forEach((code, s) -> {
+                ObjectNode node = layer.putObject(code);
+                node.put("unlimited", s.all());
+                ArrayNode arr = node.putArray("values");
+                s.values().forEach(arr::add);
+            });
         });
         return root.toString();
     }
 
-    private Map<String, DimensionScope> deserialize(String json) {
-        Map<String, DimensionScope> out = new HashMap<>();
+    private Map<String, Map<String, DimensionScope>> deserialize(String json) {
+        Map<String, Map<String, DimensionScope>> out = new HashMap<>();
         JsonNode root = objectMapper.readTree(json);
-        root.properties().forEach(e -> {
-            JsonNode n = e.getValue();
-            boolean unlimited = n.path("unlimited").asBoolean(true);
-            Set<Long> values = new HashSet<>();
-            n.path("values").forEach(v -> values.add(v.asLong()));
-            out.put(e.getKey(), unlimited ? DimensionScope.unlimited() : DimensionScope.custom(values));
+        root.properties().forEach(layerEntry -> {
+            Map<String, DimensionScope> layer = new HashMap<>();
+            layerEntry.getValue().properties().forEach(e -> {
+                JsonNode n = e.getValue();
+                boolean unlimited = n.path("unlimited").asBoolean(true);
+                Set<Long> values = new HashSet<>();
+                n.path("values").forEach(v -> values.add(v.asLong()));
+                layer.put(e.getKey(), unlimited ? DimensionScope.unlimited() : DimensionScope.custom(values));
+            });
+            out.put(layerEntry.getKey(), layer);
         });
         return out;
     }

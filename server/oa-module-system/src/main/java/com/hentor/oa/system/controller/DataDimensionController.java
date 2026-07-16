@@ -116,29 +116,34 @@ public class DataDimensionController {
         return R.ok();
     }
 
+    /** V54 分层：缺省=全局层（兼容）；?feature=X=该覆盖层；?all=1=全部层（item 带 feature）。 */
     @GetMapping("/roles/{id}/data-dimensions")
-    public R<List<DimensionConfigItem>> roleDimensions(@PathVariable Long id) {
-        return R.ok(service.roleConfig(id));
+    public R<List<DimensionConfigItem>> roleDimensions(@PathVariable Long id,
+            @RequestParam(required = false) String feature, @RequestParam(required = false) Boolean all) {
+        return R.ok(service.roleConfig(id, feature, Boolean.TRUE.equals(all)));
     }
 
     @PutMapping("/roles/{id}/data-dimensions")
     @PreAuthorize("hasAuthority('system:role:edit')")
     @OperLog(module = "角色", action = "配置数据维度")
-    public R<Void> saveRoleDimensions(@PathVariable Long id, @RequestBody List<DimensionConfigItem> items) {
-        service.saveRoleConfig(id, items);
+    public R<Void> saveRoleDimensions(@PathVariable Long id, @RequestParam(required = false) String feature,
+                                       @RequestBody List<DimensionConfigItem> items) {
+        service.saveRoleConfig(id, feature, items); // V54 按层全量替换（缺省=全局层，兼容）
         return R.ok();
     }
 
     @GetMapping("/users/{id}/data-dimensions")
-    public R<List<DimensionConfigItem>> userDimensions(@PathVariable Long id) {
-        return R.ok(service.userConfig(id));
+    public R<List<DimensionConfigItem>> userDimensions(@PathVariable Long id,
+            @RequestParam(required = false) String feature, @RequestParam(required = false) Boolean all) {
+        return R.ok(service.userConfig(id, feature, Boolean.TRUE.equals(all)));
     }
 
     @PutMapping("/users/{id}/data-dimensions")
     @PreAuthorize("hasAuthority('system:user:edit')")
     @OperLog(module = "用户", action = "配置数据维度")
-    public R<Void> saveUserDimensions(@PathVariable Long id, @RequestBody List<DimensionConfigItem> items) {
-        service.saveUserConfig(id, items);
+    public R<Void> saveUserDimensions(@PathVariable Long id, @RequestParam(required = false) String feature,
+                                       @RequestBody List<DimensionConfigItem> items) {
+        service.saveUserConfig(id, feature, items); // V54 按层全量替换
         return R.ok();
     }
 }

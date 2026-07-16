@@ -61,7 +61,7 @@ public class ApprovalService {
      */
     public PageResult<ApprovalResponse> page(String status, int pageNum, int pageSize) {
         Page<Approval> page = approvalRepository.findAll(
-                statusSpec(status).and(dataScopeSupport.multiDim("Approval", "deptId", "applicantId")),
+                statusSpec(status).and(dataScopeSupport.multiDim("WORKFLOW_TASKS", "Approval", "deptId", "applicantId")),
                 pageable(pageNum, pageSize));
         return toPageResult(page);
     }
@@ -71,7 +71,7 @@ public class ApprovalService {
      */
     public long pendingCount() {
         return approvalRepository.count(
-                statusSpec(Approval.STATUS_PENDING).and(dataScopeSupport.multiDim("Approval", "deptId", "applicantId")));
+                statusSpec(Approval.STATUS_PENDING).and(dataScopeSupport.multiDim("WORKFLOW_TASKS", "Approval", "deptId", "applicantId")));
     }
 
     /**

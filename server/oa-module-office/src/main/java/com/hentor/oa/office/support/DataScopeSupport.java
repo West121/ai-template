@@ -1,5 +1,6 @@
 package com.hentor.oa.office.support;
 
+import com.hentor.oa.common.security.CurrentUserHolder;
 import com.hentor.oa.system.datadim.CriteriaScopes;
 import com.hentor.oa.system.datadim.DataDimensionService;
 import com.hentor.oa.system.datadim.DimensionScope;
@@ -35,6 +36,49 @@ public class DataScopeSupport {
      */
     public <T> Specification<T> multiDim(String entity, String deptField, String userField) {
         return multiDim(deptField, userField, dataDimensionService.bindingsForEntity(entity));
+    }
+
+    /**
+     * V54 功能级：各维度 <b>功能覆盖 &gt; 全局 &gt; 不限</b>（覆盖=替换，拍板 C）。
+     * 内建 dept 覆盖存在时<b>替换</b>全局五档——ALL=不限；CUSTOM=(deptField IN 精确部门集) OR userField=self
+     * （与全局档同构：自己的单据恒可见；<b>不含子树</b>——值链路与业务维一致、部门结构变更零失效面，
+     * 要含子树请在前端选择器把子部门勾进显式 id 集）。dept 无覆盖 → 回落 role.dataScope 全局五档。
+     */
+    public <T> Specification<T> multiDim(String feature, String entity, String deptField, String userField) {
+        DimensionScope deptOverride = dataDimensionService.deptOverride(feature);
+        Specification<T> spec = deptOverride == null
+                ? SecuritySupport.dataScope(deptField, userField)
+                : deptOverrideSpec(deptOverride, deptField, userField);
+        Map<String, String> dimColumns = dataDimensionService.bindingsForEntity(entity);
+        if (dimColumns.isEmpty()) {
+            return spec;
+        }
+        Map<String, DimensionScope> scopes = dataDimensionService.resolveForCurrentUser(feature, dimColumns.keySet());
+        for (Map.Entry<String, String> binding : dimColumns.entrySet()) {
+            DimensionScope scope = scopes.get(binding.getKey());
+            if (scope == null || scope.all()) {
+                continue; // 未配/ALL → 该维不限
+            }
+            String column = binding.getValue();
+            Set<Long> values = scope.values();
+            spec = spec.and((root, query, cb) -> CriteriaScopes.inOrAny(cb, root.get(column), values));
+        }
+        return spec;
+    }
+
+    /** dept 覆盖谓词（替换全局五档，语义见 multiDim javadoc）。 */
+    private <T> Specification<T> deptOverrideSpec(DimensionScope s, String deptField, String userField) {
+        return (root, query, cb) -> {
+            if (s.all()) {
+                return cb.conjunction();
+            }
+            Long uid = CurrentUserHolder.get() != null ? CurrentUserHolder.get().getUserId() : null;
+            if (s.values().isEmpty()) {
+                return cb.equal(root.get(userField), uid); // 空集=仅本人（默认更严）
+            }
+            return cb.or(CriteriaScopes.inOrAny(cb, root.get(deptField), s.values()),
+                    cb.equal(root.get(userField), uid));
+        };
     }
 
     /**

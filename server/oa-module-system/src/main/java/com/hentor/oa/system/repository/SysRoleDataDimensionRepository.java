@@ -10,6 +10,8 @@ public interface SysRoleDataDimensionRepository extends JpaRepository<SysRoleDat
 
     List<SysRoleDataDimension> findByRoleId(Long roleId);
 
+    List<SysRoleDataDimension> findByRoleIdAndFeature(Long roleId, String feature);
+
     List<SysRoleDataDimension> findByRoleIdIn(Collection<Long> roleIds);
 
     boolean existsByDimension(String dimension);
