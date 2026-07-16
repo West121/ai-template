@@ -488,3 +488,24 @@ NotifyItem = {id,type,title,content,procInstId,readFlag,createdAt}
   - GET `/{id}/fields`【read】→ `{bindType, bindCode, fields:[{key,label}](绑定来源统一清单：FLOW=流程绑定表单/FORM=表单/BIZDOC=定义清单), groups:[{key:"_approvals",label:"审批记录",fields:[nodeName/assigneeName/opinion/time]}]（FLOW 及绑流程 BIZDOC 时）}`——编辑器字段树。
   - GET `/{id}/render-data?instanceId=`【登录即可=实例可见性口径，同 GET /api/wf/instances/{id}】→ `{tpl, data, fields}`（PrintData 同构，渲染器同源）：data=wf 实例 formData（选人类字段解析同 docs/{id}/print；引擎直起实例无 form_data_json → 历史流程变量兜底）+ `_approvals` + 系统字段 title/creatorName/deptName/status(bizStatus)/createdAt（**docNo=null 单号无**）。instanceId 纯数字=wf_instance_ext.id 否则=procInstId。实例 defCode/formCode 与模板绑定不匹配 → 400；BIZDOC 绑定模板 → 400（沿用 docs/{id}/print）。
   - GET `/for-instance/{instanceId}`【登录】→ 已发布且匹配实例（FLOW=defCode / FORM=formCode）的模板列表——「打印单据」入口。
+
+## 开发者工作台 Dev Studio（oa-boot devstudio 域，V49，前缀 `/api/dev-studio`）
+> 契约 `docs/design/dev-studio.md`（附录=主控拍板）。四类热资产统一读写门面：**薄适配委派各资产既有 Service，原校验/编译/部署照走，不绕原生写路径**。type ∈ `ORCH`（orch_flow.designer_json）| `PROCESS`（wf_process_ext.designer_json；designerType=BPMN 时 content=bpmn_xml）| `FORM`（wf_form_def.schema_json，行即版本取 latest）| `BIZDOC_TPL`（oa_bizdoc_print_tpl.content=BdTemplateV2 元素树）。
+>
+> **两套版本空间（勿混）**：树节点 `version`=资产**原生**版本（展示）；内容/PUT/`baseVersion` 的 `version`=**Dev Studio 快照**版本（`dev_asset_version.version_no`，乐观锁基准，未经工作台改过=0）。原生版本恒在 `meta.nativeVersion`。
+>
+> **权限双门**：端点第一道 `dev:studio:view`（读）/`dev:studio:edit`（写，V49 均仅授 ADMIN）；落写第二道在门面内显式复验该资产原生受信写码（ORCH→`orch:flow:write`、PROCESS/FORM→`wf:def:edit`、BIZDOC_TPL→`bizdoc:def:write`），缺 → 403。
+
+- GET ``【P:dev:studio:view】资产树 → `[{type,code,name,status(DRAFT|PUBLISHED|DISABLED|ENABLED),version(原生),updatedAt}]`（FORM 按 code 聚合取最高版本行；PROCESS version=Flowable 部署版本，未部署 null；ORCH 启用中=ENABLED > 已发布=PUBLISHED > DRAFT）。
+- GET `/{type}/{code}`【view】→ `{type,code,content(JSON 串或 BPMN XML),version(快照),meta{nativeVersion,status,name,...类型旁路字段：ORCH enabled/triggerType；PROCESS **designerType**(GRAPH 可 raw 编/DINGTALK·BPMN 前端只读分流靠它)/formCode/formType/processDefinitionId；FORM formType；BIZDOC_TPL bindType/bindCode/paper/landscape/**tplId**(直达 /bizdoc/tpl/t/:tplId 设计器)}}`。
+- PUT `/{type}/{code}`【edit+资产写码】body `{content*, baseVersion?, publish?, summary?}` → `{version(新快照), meta}`。
+  - **保存/发布两段**：`publish=false`（默认）只存草稿不生效；`true` 按该资产语义生效——ORCH=原生 publish（编译 LiteFlow EL+version+1+原生快照+cron 刷新）；PROCESS=原生 publish（转 BPMN 引擎重部署，新发起走新版本，运行中实例不变）；FORM=publish 该版本（PUBLISHED 冻结）；BIZDOC_TPL=publish（PUBLISHED+version+1，渲染即用）。
+  - **内容校验硬线**：各类先做 JSON 解析校验；**PROCESS 保存与发布一律先干跑转换**（GRAPH→GraphToBpmnConverter / DINGTALK→JsonToBpmnConverter / BPMN→BpmnXMLConverter 解析），失败 400「干跑校验失败（未保存）」坏内容不落库（WorkflowInitializer 启动部署全部 DRAFT，坏 designerJson 会阻塞整个应用启动——历史教训）。
+  - **乐观锁**：`baseVersion` 与当前快照版本不一致 → 409「版本冲突」；并发同号写由唯一索引兜底转 409。缺省 baseVersion 跳过比对（不推荐）。
+  - **FORM latest 陷阱**：latest 行为 PUBLISHED 时保存=建下一版本 DRAFT 且**立即成为 latest（影响流程发起取数）**，响应 `meta.latestPointerChanged:true` 供前端明示；latest 为 DRAFT 时就地改（false）。
+- GET `/{type}/{code}/versions`【view】→ `[{versionNo,actor(USER|AI),actorId,actorName?,summary,createdAt}]`（四类统一读 dev_asset_version 快照表；每次经门面 保存/发布/回滚 落一行；ORCH 原生 orch_flow_version 照旧并存；actorName 由 actorId 现解析）。
+- GET `/{type}/{code}/versions/{versionNo}`【view】→ `{versionNo,content,actor,actorId,actorName?,summary,createdAt}`（查看/对比用）。
+- POST `/{type}/{code}/rollback`【edit+资产写码】body `{versionNo*}`（兼容旧字段 `version`）→ 以该快照内容**覆盖当前并重走发布链**（ORCH update+publish；FORM 旧 schema 建新版并发布；PROCESS 干跑+重部署；BIZDOC_TPL 覆盖+version+1），产生新快照（summary=`回滚自 vN`，历史不改写）→ `{version(新快照),meta}`。
+- 错误口径：未知 type 400；资产不存在 404；快照不存在 404；乐观锁/并发 409；干跑/JSON 校验 400；无 dev:studio:* HTTP 403；有 edit 缺资产写码 403（body.code=403）。
+- 表：`dev_asset_version`（V49：asset_type/code/version_no 唯一、content、actor USER|AI、actor_id、summary、created_at）。审计（谁/何时/人还是 AI/改了什么）由此表 + 后续批W2 ai_tool_call/ai_action_draft 满足。
+- 专项冒烟：`node server/smoke-devstudio.mjs`（自建自清 devsmoke_* 资产，不碰共享数据，可对在用环境跑）。
