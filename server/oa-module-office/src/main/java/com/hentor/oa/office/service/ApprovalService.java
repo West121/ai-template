@@ -53,8 +53,8 @@ public class ApprovalService {
     private final DataScopeSupport dataScopeSupport;
     private final FieldPermService fieldPermService;
 
-    /** P3 字段权限功能键（opaque，拍板 A；@FieldPermEntity(ApprovalResponse) 同键）。 */
-    private static final String FIELD_PERM_FEATURE = "OFFICE_APPROVALS";
+    /** P3 字段权限功能键：与「我的审批」(WORKFLOW_TASKS) 同键（审批中心页已并入 /workflow/tasks；配置/目录/执行三处同键）。 */
+    private static final String FIELD_PERM_FEATURE = "WORKFLOW_TASKS";
 
     /**
      * 分页查询：status 条件 + 当前用户<b>多维</b>数据权限过滤（部门维 AND 成本中心/项目维）。

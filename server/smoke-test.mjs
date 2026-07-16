@@ -903,7 +903,6 @@ await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [lmainI
   // 预清理（防残留）
   for (const rid of [empRole, mgrRole, finRole]) {
     await call(admin.token, "PUT", `/api/system/roles/${rid}/field-perms?feature=WORKFLOW_TASKS`, [])
-    await call(admin.token, "PUT", `/api/system/roles/${rid}/field-perms?feature=OFFICE_APPROVALS`, [])
   }
 
   // 0) 一致性守护：leave 表单清单键钉死（前端 registry 双钉，漂移即红）
@@ -915,9 +914,10 @@ await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [lmainI
   const cat1 = await call(admin.token, "GET", "/api/system/field-perms/catalog?feature=WORKFLOW_TASKS")
   check("P3 catalog(WORKFLOW_TASKS)=leave 表单字段合流", cat1.body?.code === 0 && (cat1.body.data?.formFields ?? []).length === 5
     && cat1.body.data.formFields.some((f) => f.key === "reason"), JSON.stringify((cat1.body?.data?.formFields ?? []).map((f) => f.key)))
-  const cat2 = await call(admin.token, "GET", "/api/system/field-perms/catalog?feature=OFFICE_APPROVALS")
-  check("P3 catalog(OFFICE_APPROVALS)=@FieldPerm 注解固定列", cat2.body?.code === 0 && (cat2.body.data?.fixedColumns ?? []).length === 3
-    && cat2.body.data.fixedColumns.some((c) => c.field === "reason" && c.label === "事由"), JSON.stringify(cat2.body?.data?.fixedColumns))
+  check("P3 catalog(WORKFLOW_TASKS) fixedColumns=@FieldPerm 注解列(非空,双源同 feature)", (cat1.body?.data?.fixedColumns ?? []).length === 3
+    && cat1.body.data.fixedColumns.some((c) => c.field === "reason" && c.label === "事由"), JSON.stringify(cat1.body?.data?.fixedColumns))
+  const featList = (await call(admin.token, "GET", "/api/ai/features")).body?.data ?? []
+  check("P3 功能选择器可达(features 目录含 WORKFLOW_TASKS)", featList.some((ft) => ft.featureCode === "WORKFLOW_TASKS"), `n=${featList.length}`)
   const catPerm = await call(zhangsan.token, "GET", "/api/system/field-perms/catalog?feature=WORKFLOW_TASKS")
   check("P3 catalog 无 system:role:edit 403", catPerm.status === 403 || catPerm.body?.code === 403, `status=${catPerm.status}`)
 
@@ -972,13 +972,13 @@ await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [lmainI
   const mineM = await call(manager.token, "GET", "/api/system/field-perms/mine?feature=WORKFLOW_TASKS")
   check("P3 多角色并集放宽(manager 可见)", mineM.body?.data?.fields?.reason?.visible === true && mineM.body.data.fields.reason.editable === true, JSON.stringify(mineM.body?.data))
 
-  // 9) Approval DTO 固定列脱敏：manager 双角色配 OFFICE_APPROVALS reason 不可见 → 列表 reason 全 null → 清配置恢复
-  await call(admin.token, "PUT", `/api/system/roles/${mgrRole}/field-perms?feature=OFFICE_APPROVALS`, [{ field: "reason", visible: false, editable: false }])
-  await call(admin.token, "PUT", `/api/system/roles/${finRole}/field-perms?feature=OFFICE_APPROVALS`, [{ field: "reason", visible: false, editable: false }])
+  // 9) Approval DTO 固定列脱敏：manager 双角色配 WORKFLOW_TASKS reason 不可见(同键,覆盖第8步配置) → 列表 reason 全 null → 清配置恢复
+  await call(admin.token, "PUT", `/api/system/roles/${mgrRole}/field-perms?feature=WORKFLOW_TASKS`, [{ field: "reason", visible: false, editable: false }])
+  await call(admin.token, "PUT", `/api/system/roles/${finRole}/field-perms?feature=WORKFLOW_TASKS`, [{ field: "reason", visible: false, editable: false }])
   const mList = (await call(manager.token, "GET", "/api/office/approvals?pageNum=1&pageSize=50")).body?.data?.list ?? []
   check("P3 Approval DTO 列脱敏(reason 全 null)", mList.length > 0 && mList.every((a) => a.reason == null), `n=${mList.length}`)
-  await call(admin.token, "PUT", `/api/system/roles/${mgrRole}/field-perms?feature=OFFICE_APPROVALS`, [])
-  await call(admin.token, "PUT", `/api/system/roles/${finRole}/field-perms?feature=OFFICE_APPROVALS`, [])
+  await call(admin.token, "PUT", `/api/system/roles/${mgrRole}/field-perms?feature=WORKFLOW_TASKS`, [])
+  await call(admin.token, "PUT", `/api/system/roles/${finRole}/field-perms?feature=WORKFLOW_TASKS`, [])
   const mList2 = (await call(manager.token, "GET", "/api/office/approvals?pageNum=1&pageSize=50")).body?.data?.list ?? []
   check("P3 清配置后 reason 恢复(缓存失效生效)", mList2.some((a) => a.reason != null), `n=${mList2.length}`)
 
