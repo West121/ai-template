@@ -57,6 +57,15 @@ public class ScriptService {
     private static final String LANG_JS = "js";
     private static final String LANG_JAVA = "java";
 
+    /**
+     * Java 脚本预置 import（与 {@code manifest.imports} 对齐——这些包下的类脚本里直接写简名，
+     * 如 {@code StringUtils.hasText(x)}/{@code LocalDate.now()}/{@code new BigDecimal("1")}）。
+     * <b>勿加</b> {@code org.apache.commons.lang3.*}/hutool 通配——与 spring 的 StringUtils/CollectionUtils
+     * 简名歧义会编译失败；commons/hutool 用全限定名（statics 清单里有 className）。
+     */
+    public static final java.util.List<String> JAVA_PRELUDE_IMPORTS = java.util.List.of(
+            "java.util.*", "java.time.*", "java.math.*", "org.springframework.util.*");
+
     /** 输入语言别名 → 规范语言。 */
     private static final Map<String, String> LANG_ALIAS = Map.of(
             "groovy", LANG_GROOVY,
@@ -213,7 +222,7 @@ public class ScriptService {
      * 脚本为<b>方法体</b>（语句 + 显式 {@code return}，无 return 语义的脚本请 {@code return null;}），
      * 上下文以<b>带类型参数</b>注入：{@code Map vars / Map form / DelegateExecution execution /
      * SpringBeanFacade spring / ScriptLogHelper log}（与 groovy 同名同义，静态类型直接点方法，无需取绑定）；
-     * 预置 {@code import java.util.*}。编译产物按代码缓存（CodeSpec.cached）。
+     * 预置 import 见 {@link #JAVA_PRELUDE_IMPORTS}。编译产物按代码缓存（CodeSpec.cached）。
      */
     private Object runJava(String code, ScriptContext ctx) {
         java.util.List<org.noear.liquor.eval.ParamSpec> params = new java.util.ArrayList<>();
@@ -230,7 +239,7 @@ public class ScriptService {
             args.put(name, bean);
         });
         org.noear.liquor.eval.CodeSpec spec = new org.noear.liquor.eval.CodeSpec(code)
-                .imports("java.util.*")
+                .imports(JAVA_PRELUDE_IMPORTS.toArray(new String[0])) // 预置 import（与 manifest.imports 对齐）
                 .parameters(params.toArray(new org.noear.liquor.eval.ParamSpec[0]))
                 .returnType(Object.class) // 生成方法返回 Object：脚本须显式 return（无返回写 return null;）
                 .cached(true);

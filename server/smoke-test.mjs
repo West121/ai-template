@@ -3117,6 +3117,29 @@ async function hlCompleted(token, iid) {
   check("manifest 含 regionService(ip2region)+wfAudit(notify) 示范",
     (md?.beans ?? []).some((b) => b.name === "regionService") && (md?.beans ?? []).some((b) => b.name === "wfAudit" && b.methods.some((m) => m.name === "notify")),
     JSON.stringify((md?.beans ?? []).map((b) => b.name)))
+  // 双层 tier：api 精选(3 示范 tier=api) + service 自动扫描(真实业务 Service 在列、方法带参名)
+  check("manifest beans 双层：3 示范均 tier=api",
+    ["scriptOrgApi", "regionService", "wfAudit"].every((n) => (md?.beans ?? []).some((b) => b.name === n && b.tier === "api")))
+  const svcTier = (md?.beans ?? []).filter((b) => b.tier === "service")
+  check("manifest service 层非空(自动扫描业务 Service)", svcTier.length > 10, `count=${svcTier.length}`)
+  const realSvc = svcTier.find((b) => b.name === "sysUserService")
+  check("manifest 真实业务 Service(sysUserService)在 service 层且方法带参数名",
+    !!realSvc && realSvc.className.endsWith("SysUserService")
+      && realSvc.methods.some((m) => (m.params ?? []).some((p) => !!p.name)), JSON.stringify(realSvc?.methods?.slice(0, 2)))
+  check("manifest service 层不重复收 @ScriptApi bean(scriptOrgApi 只在 api 层)", !svcTier.some((b) => b.name === "scriptOrgApi"))
+  // statics 精选静态工具类 + imports 预置列表
+  const springStr = (md?.statics ?? []).find((s) => s.className === "org.springframework.util.StringUtils")
+  check("manifest statics 含 StringUtils(hasText 方法带参名)",
+    !!springStr && springStr.methods.some((m) => m.name === "hasText" && (m.params ?? []).some((p) => !!p.name)),
+    JSON.stringify(springStr?.methods?.filter((m) => m.name === "hasText")))
+  check("manifest statics 含 JDK/时间/数值工具(Objects/LocalDate/BigDecimal)",
+    ["Objects", "LocalDate", "BigDecimal"].every((n) => (md?.statics ?? []).some((s) => s.simpleName === n)))
+  check("manifest imports 非空且含 java.util.*/org.springframework.util.*",
+    Array.isArray(md?.imports) && md.imports.includes("java.util.*") && md.imports.includes("org.springframework.util.*"), JSON.stringify(md?.imports))
+  // java 预置 import 生效：StringUtils 简名直用编译通过
+  const trJavaImp = await call(admin.token, "POST", "/api/wf/script/test-run", { lang: "java", code: 'return StringUtils.hasText("a");', sampleVars: {} })
+  check("java test-run 预置 import 生效(StringUtils.hasText 简名→true)",
+    trJavaImp.body?.code === 0 && trJavaImp.body.data?.success === true && String(trJavaImp.body.data?.result) === "true", JSON.stringify(trJavaImp.body?.data))
   check("manifest 非管理员(zhangsan)→403", (await call(zhangsan.token, "GET", "/api/wf/script/context-manifest")).status === 403)
 }
 
