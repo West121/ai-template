@@ -328,3 +328,9 @@ PUT  /api/system/roles/{id}/field-perms?feature={featureCode}
 - **表单字段(动态 Map 数据):读登记,不造 DTO**——CODE 表单数据在后端是 formDataJson(Map),无强类型 DTO 对应物;真源=登记 manifest/ONLINE schema 派生(FormManifestService 现状),脱敏在 Map 出口按登记 key 删,前端(useForm 字段名)后端(Map key)同键零转换。
 - **实体固定列(DTO record 字段):`@FieldPerm(label)` 注解标在 DTO 字段上 + 启动反射生成"可控列目录"**(替换原"手工常量目录"提案)——清单与 DTO 同文件防漂移(与前端 manifest 同文件同哲学);只有标注解的列才进配置矩阵(天然白名单,不假装能控);模式与 @ScriptApi/@AiManaged 一致(启动扫描+缓存,运行期零反射)。
 - 红线:清单与脱敏同源同键;前端可选加固——manifest key ⊆ useForm defaultValues key 的守护测试。
+
+## 附3:P2 UI 形态拍板(2026-07-16,用户参考图定稿)
+
+- **「数据权限」Tab 两段式**:①默认权限(全局)=现有部门 5 档+维度授权原样;②**按功能覆盖列表**(用户参考形态):[+添加资源]→每行 功能(资源)下拉 × 维度下拉 × 范围(全部/指定+对应选择器) × 删除;同功能可多行(维度间 AND);覆盖行提示「该功能已脱离全局」。
+- **维度下拉动态来自维度目录**:内建「组织(部门)」+ 全部启用的业务维度(含 P1 UI 自建维度,PROVIDER/OPTION/DICT/DEPT 四源);范围选择器按维度 valueSource 出(部门树/选项多选/字典多选)。
+- **部门维纳入覆盖层**(比原提案多一条):sys_role_data_dimension 覆盖层允许 dimension='dept'(内建键),scope ALL|CUSTOM values=deptIds——某功能可单独收窄部门范围;无覆盖走全局 5 档;解析顺序不变(功能覆盖>全局>不限,覆盖=替换)。用户级同构。
