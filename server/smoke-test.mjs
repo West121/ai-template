@@ -3463,6 +3463,14 @@ async function hlCompleted(token, iid) {
         })
         res.writeHead(200, { "Content-Type": "application/json" })
         // 批D §13.3：结构化滚动摘要（summarizer system 含标记）→ 返回结构化 JSON 摘要
+        // i18n AI 翻译（V53）：识别翻译 system 提示 → 回显 JSON 数组（同序同条数，前缀 T: 供断言）
+        if (JSON.stringify(reqBody).includes("界面文案的专业翻译")) {
+          const uTxt = String(lastUser)
+          let arr = []
+          try { arr = JSON.parse(uTxt.slice(uTxt.indexOf("["))) } catch { /* 保底空数组 */ }
+          res.end(completion({ role: "assistant", content: JSON.stringify(arr.map((t) => "T:" + t)) }))
+          return
+        }
         if (JSON.stringify(reqBody).includes("结构化JSON摘要")) {
           res.end(completion({ role: "assistant", content: '{"userGoal":"分析待办与审批安排","activeEntities":{"scope":"本月"},"resolvedReferences":{}}' }))
           return
@@ -4128,6 +4136,25 @@ async function hlCompleted(token, iid) {
     name: "冒烟助手LLM", type: "LLM", baseUrl: `${SINK}/ai/v1`, apiKey: "sk-ai", model: "fake-ai",
   })
   check("ai 助手 LLM 凭据创建", aiCred.body?.code === 0 && !!aiCred.body?.data?.id)
+  // ---- i18n AI 批量翻译（V53，拍板④）：显式 credentialId 指到假端点（FAST 档可能配真凭据，保确定性） ----
+  const trCred = aiCred.body?.data?.id
+  const tr1 = await call(admin.token, "POST", "/api/ai/translate",
+    { texts: ["提交", "请假类型"], targetLocales: ["en", "th"], context: "OA 表单字段标签", credentialId: trCred })
+  check("i18n 翻译 2条×2语 同序非空", tr1.body?.code === 0
+    && tr1.body.data?.translations?.en?.length === 2 && tr1.body.data?.translations?.th?.length === 2
+    && tr1.body.data.translations.en[0] === "T:提交" && tr1.body.data.translations.th[1] === "T:请假类型",
+    JSON.stringify(tr1.body))
+  const tr51 = await call(admin.token, "POST", "/api/ai/translate",
+    { texts: Array.from({ length: 51 }, (_, i) => `t${i}`), targetLocales: ["en"], credentialId: trCred })
+  check("i18n >50 条 400", tr51.body?.code === 400, JSON.stringify(tr51.body?.message))
+  const trBadLoc = await call(admin.token, "POST", "/api/ai/translate",
+    { texts: ["x"], targetLocales: ["fr"], credentialId: trCred })
+  check("i18n 非白名单 locale 400", trBadLoc.body?.code === 400)
+  const trEmpty = await call(admin.token, "POST", "/api/ai/translate", { texts: [], targetLocales: ["en"], credentialId: trCred })
+  check("i18n texts 空 400", trEmpty.body?.code === 400)
+  const trNoPerm = await call(zhangsan.token, "POST", "/api/ai/translate", { texts: ["x"], targetLocales: ["en"] })
+  check("i18n 无 system:i18n:translate 403", trNoPerm.status === 403 || trNoPerm.body?.code === 403, `status=${trNoPerm.status}`)
+
 
   // 基础问答（无工具）
   const chat1 = await call(admin.token, "POST", "/api/ai/chat", { message: "你好" })
