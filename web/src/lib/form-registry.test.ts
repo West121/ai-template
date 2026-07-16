@@ -109,3 +109,41 @@ describe("formRegistry", () => {
     await expect(getFormManifest("__ghost__")).rejects.toThrow(/未找到表单/)
   })
 })
+
+/**
+ * 守护：`leave` 唯一真源 = 后端 ONLINE 请假表单（5 键，两侧各自钉死同一份，间接一致性）。
+ * 历史漂移：前端曾把 CODE 示范表单登记为 "leave"，registry 优先命中抢走了 ONLINE 的
+ * 字段清单（节点字段权限编辑器拿到错的 4 键）。CODE 示范已改 key=demo_leave。
+ */
+describe("守护：leave = 后端 ONLINE 表单（勿被 CODE registry 抢占）", () => {
+  /** 与后端 GET /api/wf/forms/leave/fields 实际键逐一钉死（磐石侧 smoke 同样钉这份） */
+  const ONLINE_LEAVE_KEYS = ["leaveType", "startDate", "endDate", "days", "reason"]
+
+  it('CODE 示范表单登记 key=demo_leave，"leave" 不得出现在 registry', async () => {
+    await import("@/pages/workflow/forms") // 触发全部 registerForm 副作用
+    expect(isCodeForm("demo_leave")).toBe(true)
+    expect(isCodeForm("leave")).toBe(false)
+    expect(registeredFormKeys()).not.toContain("leave")
+  })
+
+  it('getFormManifest("leave") 走后端 ONLINE 端点并得 5 键清单', async () => {
+    await import("@/pages/workflow/forms")
+    const online: FormFieldManifest = {
+      formKey: "leave",
+      formType: "ONLINE",
+      fields: ONLINE_LEAVE_KEYS.map((key) => ({ key, label: key, type: "input" })),
+    }
+    const fetchSpy = vi.fn(async (_url?: unknown) =>
+      new Response(JSON.stringify({ code: 0, message: "ok", data: online }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    vi.stubGlobal("fetch", fetchSpy)
+    const m = await getFormManifest("leave")
+    // 关键：registry 未命中 → 发了后端请求（未被 CODE 示范抢占）
+    expect(String(fetchSpy.mock.calls[0]?.[0] ?? "")).toContain("/api/wf/forms/leave/fields")
+    expect(m.formType).toBe("ONLINE")
+    expect(m.fields.map((f) => f.key)).toEqual(ONLINE_LEAVE_KEYS)
+  })
+})

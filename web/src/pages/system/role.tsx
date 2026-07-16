@@ -46,6 +46,7 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuthStore, useHasPerm } from "@/stores/auth-store"
+import { RoleFieldPermsTab } from "./role-field-perms"
 
 interface RoleRow {
   id: number
@@ -189,6 +190,9 @@ export default function RolePage() {
   const [permSaving, setPermSaving] = useState(false)
   const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set())
   const [permSnapshot, setPermSnapshot] = useState<Set<number>>(new Set())
+  // 字段权限 Tab（P3）：dirty 由子组件汇报；resetSignal 触发其回滚
+  const [fieldsDirty, setFieldsDirty] = useState(false)
+  const [fieldsResetSignal, setFieldsResetSignal] = useState(0)
 
   const [deleteTarget, setDeleteTarget] = useState<RoleRow | null>(null)
   const [batchDel, setBatchDel] = useState<{ rows: RoleRow[]; clear: () => void } | null>(null)
@@ -341,7 +345,8 @@ export default function RolePage() {
     form.customDeptIds.length !== formSnapshot.customDeptIds.length ||
     form.customDeptIds.some((id, i) => id !== formSnapshot.customDeptIds[i])
   const permsDirty = checkedIds.size !== permSnapshot.size || Array.from(checkedIds).some((id) => !permSnapshot.has(id))
-  const tabDirty = (tab: RoleTab) => (tab === "basic" ? basicDirty : tab === "data" ? dataDirty : tab === "perms" ? permsDirty : false)
+  const tabDirty = (tab: RoleTab) =>
+    tab === "basic" ? basicDirty : tab === "data" ? dataDirty : tab === "perms" ? permsDirty : fieldsDirty
 
   const requestTab = (tab: RoleTab) => {
     if (tab === activeTab) return
@@ -351,7 +356,7 @@ export default function RolePage() {
 
   const requestClose = (open: boolean) => {
     if (open) return
-    if (basicDirty || dataDirty || permsDirty) setCloseConfirm(true)
+    if (basicDirty || dataDirty || permsDirty || fieldsDirty) setCloseConfirm(true)
     else setFormOpen(false)
   }
 
@@ -359,6 +364,7 @@ export default function RolePage() {
   const discardDirty = () => {
     setForm(formSnapshot)
     setCheckedIds(new Set(permSnapshot))
+    setFieldsResetSignal((n) => n + 1) // 字段权限 Tab 回滚到快照
   }
 
   const confirmDelete = async () => {
@@ -774,14 +780,14 @@ export default function RolePage() {
               </ErrorBoundary>
             </TabsContent>
 
-            {/* 字段权限（P3 占位） */}
+            {/* 字段权限（P3）：功能选择 → 字段矩阵，Tab 内独立保存（照维度授权模式） */}
             <TabsContent value="fields" forceMount className="min-h-0 flex-1 overflow-y-auto p-4 data-[state=inactive]:hidden">
               <ErrorBoundary label="role-tab-fields">
-                <div className="flex flex-col items-center gap-2 rounded-md border border-dashed px-3 py-10 text-center">
-                  <ShieldCheck className="size-6 text-muted-foreground/50" />
-                  <p className="text-sm font-medium">字段权限即将上线</p>
-                  <p className="max-w-sm text-xs text-muted-foreground">按「角色 × 功能」配置字段可见/可编辑（P3 批次），与流程节点级字段权限叠加取更严。</p>
-                </div>
+                {editing ? (
+                  <RoleFieldPermsTab roleId={editing.id} canEdit={canEdit} onDirtyChange={setFieldsDirty} resetSignal={fieldsResetSignal} />
+                ) : (
+                  <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">保存角色后可配置字段权限</p>
+                )}
               </ErrorBoundary>
             </TabsContent>
           </Tabs>
@@ -795,9 +801,7 @@ export default function RolePage() {
               <Button disabled={!editing || permLoading || permSaving} onClick={() => void savePerm()}>
                 {permSaving ? "保存中…" : "保存权限配置"}
               </Button>
-            ) : activeTab === "fields" ? (
-              <Button disabled>即将上线</Button>
-            ) : (
+            ) : activeTab === "fields" ? null : (
               <Button disabled={submitting} onClick={() => void submitForm()}>
                 {submitting ? "保存中…" : editing ? "保存" : "创建"}
               </Button>

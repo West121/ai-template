@@ -6,6 +6,7 @@ import { useAuthStore } from "@/stores/auth-store"
 import { api, NetworkError } from "@/lib/api"
 import { FormRenderer } from "@/components/form-renderer"
 import { HostedForm } from "@/components/hosted-form"
+import { fetchMineFieldPerms, intersectFieldPolicy, type MineFieldPerms } from "@/lib/field-perms"
 import { buildFieldPolicyMap } from "@/components/field-perms-editor"
 import { getForm, isCodeForm } from "@/lib/form-registry"
 import { normalizeFormType } from "@/pages/workflow/designer/types"
@@ -181,6 +182,18 @@ export default function WorkflowInstanceDetailPage() {
     detail != null &&
     (!!detail.predictable || ["APPROVED", "REJECTED", "TERMINATED", "CANCELED", "CANCELLED"].includes(detail.bizStatus))
 
+  // 角色级字段权限（P3）：mine 按 feature 缓存拉取，失败={}全放行；与节点级交集取更严
+  const [mineFieldPerms, setMineFieldPerms] = useState<MineFieldPerms>({})
+  useEffect(() => {
+    let alive = true
+    void fetchMineFieldPerms("WORKFLOW_TASKS").then((m) => {
+      if (alive) setMineFieldPerms(m)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
   // CODE 表单：registry 命中 → HostedForm；套 nodeFormPerms 合成的字段策略（只读查看）
   const codeFormKey = detail?.formKey && isCodeForm(detail.formKey) ? detail.formKey : undefined
   const codeFieldPolicy: FieldPolicyMap | undefined = (() => {
@@ -191,7 +204,8 @@ export default function WorkflowInstanceDetailPage() {
     // 详情区为只读查看：强制不可编辑（可编辑填写→提交在办理动作里进行，见 wf-op-dialogs ApproveDialog）
     const view: FieldPolicyMap = {}
     for (const [k, p] of Object.entries(policy)) view[k] = { ...p, editable: false }
-    return view
+    // 角色级 × 节点级 交集更严（visible=两层都可见）
+    return intersectFieldPolicy(view, mineFieldPerms)
   })()
 
   /* ---------- 基座 loading / error 归一 ---------- */

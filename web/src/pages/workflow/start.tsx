@@ -33,6 +33,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAuthStore } from "@/stores/auth-store"
+import { fetchMineFieldPerms, intersectFieldPolicy, intersectFormPerms, type MineFieldPerms } from "@/lib/field-perms"
 import {
   parseFormSchema,
   type FormSchema,
@@ -90,6 +91,17 @@ export default function WorkflowStartPage() {
   // CODE 表单内嵌渲染（无自定义发起页时）：数据 + 受控提交句柄
   const [codeData, setCodeData] = useState<WfFormData>({})
   const codeFormRef = useRef<HostedFormHandle>(null)
+  // 角色级字段权限（P3）：发起表单按 mine 过滤（visible=false 不渲染 / editable=false 只读）
+  const [mineFieldPerms, setMineFieldPerms] = useState<MineFieldPerms>({})
+  useEffect(() => {
+    let alive = true
+    void fetchMineFieldPerms("WORKFLOW_START").then((m) => {
+      if (alive) setMineFieldPerms(m)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -341,6 +353,7 @@ export default function WorkflowStartPage() {
               key={active.defCode}
               formKey={active.formCode ?? active.defCode}
               formData={codeData}
+              fieldPolicy={intersectFieldPolicy(undefined, mineFieldPerms)}
               onChange={setCodeData}
               formRef={codeFormRef}
             />
@@ -383,6 +396,7 @@ export default function WorkflowStartPage() {
             <FormRenderer
               key={active?.defCode}
               widgets={formSchema.widgets}
+              perms={intersectFormPerms(undefined, mineFieldPerms)}
               submitting={submitting}
               savingDraft={savingDraft}
               submitLabel="提交申请"

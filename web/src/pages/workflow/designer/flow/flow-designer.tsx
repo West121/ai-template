@@ -27,7 +27,7 @@ import { FormulaDesigner } from "@/components/formula-designer"
 import { ScriptEditor } from "@/components/script-editor"
 import { FieldPermsEditor } from "@/components/field-perms-editor"
 import { ErrorBoundary } from "@/components/error-boundary"
-import "@/pages/workflow/forms" // 触发 CODE 表单登记（registerForm 副作用）
+import { LEAVE_FORM_KEY } from "@/pages/workflow/forms" // 兼触发 CODE 表单登记（registerForm 副作用）
 import { PropertyPanel } from "../shared/property-panel"
 import { defaultFlowConfig, type FormFieldOption, type ProcessBase, type ProcessConfig } from "../shared/config"
 import type { BranchCondition, WfNodeProps } from "../types"
@@ -59,8 +59,8 @@ const SEED_MODEL: ProcessModel = {
   schemaVersion: 1,
   key: "demo_leave",
   name: "请假审批（示例）",
-  // 绑定 CODE 示范表单（registry 已登记 'leave'）：审批节点即可拉字段清单配字段权限
-  formKey: "leave",
+  // 绑定 CODE 示范表单（registry 登记 key=demo_leave；'leave' 留给后端 ONLINE 表单）：审批节点即可拉字段清单配字段权限
+  formKey: LEAVE_FORM_KEY,
   flowConfig: defaultFlowConfig(),
   nodes: [
     { id: "start", type: "startEvent", name: "开始", position: { x: 260, y: 20 } },

@@ -1,7 +1,7 @@
 /**
  * 数据维度管理 · API 层（权限中心 P1，磐石 V51 并行，契约钉死 mock 先行）。
- * withMock/normList 范式：offline/404/NetworkError → 演示维度（三种 valueSource 各一）+ demo；
- * 真实业务错照抛——删除被授权引用 → 409（提示先解除授权）。
+ * withMock/normList 范式：仅 offline/NetworkError → 演示维度 + demo；后端已上线（V51），
+ * 信封错误（400/404/409）一律照抛不再降级——删除被授权引用 → 409（提示先解除授权）。
  *
  * ── 契约（字段名钉死）────────────────────────────────────────────────────────
  *  GET    /api/system/data-dimensions?all=1（管理口径：含停用行；缺省仅启用=授权 UI 兼容）
@@ -154,8 +154,8 @@ async function withMock<T>(fn: () => Promise<T>, m: () => T): Promise<DpResult<T
   try {
     return { data: await fn(), demo: false }
   } catch (err) {
+    // 收紧（用户拍板）：仅网络不通降级演示；信封错误（含 404）照抛，避免掩盖真实故障
     if (err instanceof NetworkError) return { data: m(), demo: true }
-    if (err instanceof ApiError && err.code === 404) return { data: m(), demo: true }
     throw err
   }
 }

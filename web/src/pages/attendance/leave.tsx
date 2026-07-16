@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import type { ColumnDef } from "@tanstack/react-table"
+import { fetchMineFieldPerms, filterColumnsByMine, type MineFieldPerms } from "@/lib/field-perms"
 import { differenceInCalendarDays } from "date-fns"
 import { CloudOff, Plus, RotateCw, ShieldAlert } from "lucide-react"
 import { toast } from "sonner"
@@ -96,6 +97,17 @@ function formatTime(iso?: string) {
 
 export default function AttendanceLeavePage() {
   const [rows, setRows] = useState<LeaveRow[]>([])
+  // 角色级字段权限（P3）：@FieldPerm 固定列（事由/时长等）按 mine 隐藏整列
+  const [mineFieldPerms, setMineFieldPerms] = useState<MineFieldPerms>({})
+  useEffect(() => {
+    let alive = true
+    void fetchMineFieldPerms("ATTENDANCE_LEAVE").then((m) => {
+      if (alive) setMineFieldPerms(m)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
   const [quotas, setQuotas] = useState<LeaveQuota[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -185,7 +197,7 @@ export default function AttendanceLeavePage() {
     }
   }
 
-  const columns: ColumnDef<LeaveRow, unknown>[] = [
+  const allColumns: ColumnDef<LeaveRow, unknown>[] = [
     {
       accessorKey: "id",
       meta: { title: "单号" },
@@ -260,6 +272,9 @@ export default function AttendanceLeavePage() {
       ),
     },
   ]
+
+  // 角色级字段权限：mine.visible=false 的列整列隐藏（示范接入；后端脱敏为权威）
+  const columns = filterColumnsByMine(allColumns, mineFieldPerms)
 
   if (loadError === "network") {
     return (

@@ -5,7 +5,11 @@
  *  - 组件接收 `HostedFormComponentProps`（formData / fieldPolicy / onChange）。
  *  - 逐字段用 `fieldStateOf(fieldPolicy, key)` 派生渲染态：
  *      hidden → 不渲染；disabled → 字段只读；required → 注入必填校验（rules.required）。
- *  - 组件旁静态导出 `formMeta: FormFieldManifest` 并 `registerForm('leave', …)`。
+ *  - 组件旁静态导出 `formMeta: FormFieldManifest` 并 `registerForm('demo_leave', …)`。
+ *
+ * 登记 key 为 `demo_leave`（不是 `leave`）：`leave` 是后端 ONLINE 请假表单的 code
+ * （字段 leaveType/startDate/endDate/days/reason，见 form-registry.online-leave 守护测试）。
+ * registry 命中优先于后端端点，若此处登记 `leave` 会抢走 ONLINE 表单的字段清单（历史漂移，已修）。
  *
  * manifest 的字段 `key` 必须与 useForm 字段名对齐。
  */
@@ -24,8 +28,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { fieldStateOf, type FormFieldManifest } from "@/lib/form-manifest"
 import { registerForm, type HostedFormComponentProps } from "@/lib/form-registry"
 
-/** CODE 表单标识；与 registry key、后端 defCode/formCode 约定一致。 */
-export const LEAVE_FORM_KEY = "leave"
+/** CODE 示范表单标识（registry key）。`leave` 留给后端 ONLINE 请假表单，勿占用。 */
+export const LEAVE_FORM_KEY = "demo_leave"
 
 /** 静态字段清单：与下方 useForm 字段名逐一对齐。 */
 export const formMeta: FormFieldManifest = {

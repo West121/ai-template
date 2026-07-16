@@ -38,6 +38,9 @@ beforeAll(() => {
     else if (p.includes("/api/system/roles/1/permissions")) data = [10]
     else if (p.includes("/api/system/depts/tree")) data = []
     else if (p.includes("/data-dimensions")) data = []
+    else if (p.includes("/api/ai/features")) data = [{ featureCode: "ATTENDANCE_LEAVE", name: "请假管理" }]
+    else if (p.includes("/api/system/field-perms/catalog")) data = { formFields: [{ key: "reason", label: "事由" }], fixedColumns: [] }
+    else if (p.includes("/field-perms")) data = []
     return { status: 200, json: async () => ({ code: 0, data }) } as unknown as Response
   })
 })
@@ -61,15 +64,15 @@ const openEditSheet = async () => {
 }
 
 describe("角色详情 Sheet（四 Tab）", () => {
-  it("编辑 → Sheet 四 Tab 渲染 + 字段权限占位", async () => {
+  it("编辑 → Sheet 四 Tab 渲染 + 字段权限 Tab 落真（P3）", async () => {
     renderPage()
     await openEditSheet()
     expect(screen.getByRole("tab", { name: "基本信息" })).toBeTruthy()
     expect(screen.getByRole("tab", { name: "功能权限" })).toBeTruthy()
     expect(screen.getByRole("tab", { name: "数据权限" })).toBeTruthy()
     expect(screen.getByRole("tab", { name: "字段权限" })).toBeTruthy()
-    // 字段权限 P3 占位（forceMount 在 DOM）
-    expect(screen.getByText("字段权限即将上线")).toBeTruthy()
+    // 字段权限 Tab 已落真（forceMount 在 DOM）：功能选择器空态引导
+    expect(await screen.findByText("选择一个功能以配置其字段权限")).toBeTruthy()
     // 基本信息回填
     expect((screen.getByLabelText("角色名称") as HTMLInputElement).value).toBe("部门经理")
   })
