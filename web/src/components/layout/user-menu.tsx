@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 import { BriefcaseBusiness, Check, CircleUserRound, KeyRound, Layers, LogOut } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -14,6 +15,7 @@ import { useAuthStore } from "@/stores/auth-store"
 import { toast } from "sonner"
 
 export function UserMenu() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const user = useAuthStore((s) => s.user)
   const assignments = useAuthStore((s) => s.assignments)
@@ -25,9 +27,9 @@ export function UserMenu() {
     if (assignmentId === activeAssignmentId) return
     try {
       await switchAssignment(assignmentId)
-      toast.success(`已切换身份：${label}，数据权限已更新`)
+      toast.success(t("已切换身份：{{label}}，数据权限已更新", { label }))
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "切换身份失败")
+      toast.error(err instanceof Error ? err.message : t("切换身份失败"))
     }
   }
 
@@ -38,10 +40,10 @@ export function UserMenu() {
           <Avatar className="size-7">
             {user?.avatar && <AvatarImage src={user.avatar} alt={user.name} />}
             <AvatarFallback className="bg-primary text-xs text-primary-foreground">
-              {user?.name?.slice(0, 1) ?? "客"}
+              {user?.name?.slice(0, 1) ?? t("客")}
             </AvatarFallback>
           </Avatar>
-          <span className="hidden max-w-24 truncate text-sm md:block">{user?.name ?? "访客"}</span>
+          <span className="hidden max-w-24 truncate text-sm md:block">{user?.name ?? t("访客")}</span>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">
@@ -58,7 +60,7 @@ export function UserMenu() {
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="flex items-center gap-1 text-xs font-normal text-muted-foreground">
               <BriefcaseBusiness className="size-3" />
-              我的身份（数据权限随身份切换）
+              {t("我的身份（数据权限随身份切换）")}
             </DropdownMenuLabel>
             {assignments.map((assignment) => {
               const label = `${assignment.deptName} · ${assignment.postName}`
@@ -79,7 +81,7 @@ export function UserMenu() {
                         variant={assignment.primary ? "default" : "outline"}
                         className="h-4 shrink-0 px-1 text-[10px]"
                       >
-                        {assignment.primary ? "主任职" : "兼任"}
+                        {assignment.primary ? t("主任职") : t("兼任")}
                       </Badge>
                     </span>
                     <span className="block truncate text-xs text-muted-foreground">
@@ -90,12 +92,12 @@ export function UserMenu() {
               )
             })}
             {assignments.length > 1 && (
-              <DropdownMenuItem onClick={() => void handleSwitch("ALL", "全部身份")}>
+              <DropdownMenuItem onClick={() => void handleSwitch("ALL", t("全部身份"))}>
                 <span className="flex size-4 items-center justify-center">
                   {activeAssignmentId === "ALL" && <Check className="size-3.5 text-primary" />}
                 </span>
                 <Layers className="size-4 text-muted-foreground" />
-                全部身份（数据范围并集）
+                {t("全部身份（数据范围并集）")}
               </DropdownMenuItem>
             )}
           </>
@@ -104,11 +106,11 @@ export function UserMenu() {
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => navigate("/profile")}>
           <CircleUserRound className="size-4" />
-          个人中心
+          {t("个人中心")}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => navigate("/profile?tab=security")}>
           <KeyRound className="size-4" />
-          修改密码
+          {t("修改密码")}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -119,7 +121,7 @@ export function UserMenu() {
           }}
         >
           <LogOut className="size-4" />
-          退出登录
+          {t("退出登录")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
+import { useTranslation } from "react-i18next"
 import { Bell, ExternalLink, FileCode2, MessagesSquare, Send, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { useAuthStore } from "@/stores/auth-store"
@@ -56,15 +57,16 @@ const TIMELINE_META: Record<string, { label: string; dot: string }> = {
 /* ================= 沟通线程（评论 Tab） ================= */
 
 function CommentThread({ items }: { items: WfComment[] }) {
+  const { t } = useTranslation()
   if (items.length === 0) {
-    return <div className="py-6 text-center text-sm text-muted-foreground">暂无沟通记录</div>
+    return <div className="py-6 text-center text-sm text-muted-foreground">{t("暂无沟通记录")}</div>
   }
   return (
     <div className="space-y-3 py-1">
       {items.map((item, index) => (
         <div key={index} className="rounded-lg border bg-muted/30 px-3 py-2">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">{item.fromName ?? "系统"}</span>
+            <span className="font-medium text-foreground">{item.fromName ?? t("系统")}</span>
             <span>{wfFormatTime(item.createdAt)}</span>
           </div>
           <div className="mt-1 text-sm">{item.content}</div>
@@ -77,6 +79,7 @@ function CommentThread({ items }: { items: WfComment[] }) {
 /* ================= 页面（套 WorkflowDetailShell 基座） ================= */
 
 export default function WorkflowInstanceDetailPage() {
+  const { t } = useTranslation()
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const offline = useAuthStore((s) => s.offline)
@@ -99,11 +102,11 @@ export default function WorkflowInstanceDetailPage() {
       setDetail(data)
     } catch (err) {
       if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
+      else setLoadError(err instanceof Error ? err.message : t("加载失败"))
     } finally {
       setLoading(false)
     }
-  }, [id])
+  }, [id, t])
 
   useEffect(() => {
     if (offline) {
@@ -126,8 +129,16 @@ export default function WorkflowInstanceDetailPage() {
   const formData = useMemo(() => parseFormData(detail?.formData), [detail?.formData])
   // 通知：从流转记录中筛出抄送 / 催办等通知类事件
   const notifyItems = useMemo(
-    () => (detail?.timeline ?? []).filter((t) => ["CC", "URGE"].includes(t.action ?? "")),
+    () => (detail?.timeline ?? []).filter((it) => ["CC", "URGE"].includes(it.action ?? "")),
     [detail?.timeline],
+  )
+  // 时间线行为标记文案在渲染处翻译（数据 TIMELINE_META 保持原样，t 命中 zh-CN 时原样回退）
+  const timelineMeta = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(TIMELINE_META).map(([k, v]) => [k, { ...v, label: t(v.label) }]),
+      ),
+    [t],
   )
 
   const isInitiator = detail != null && userId != null && detail.initiatorId === userId
@@ -142,15 +153,15 @@ export default function WorkflowInstanceDetailPage() {
     setActing(true)
     try {
       await api(`/api/wf/instances/${detail.id}/cancel`, { method: "POST" })
-      toast.success("流程已撤销")
+      toast.success(t("流程已撤销"))
       setCanceling(false)
       void load()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "撤销失败")
+      toast.error(err instanceof Error ? err.message : t("撤销失败"))
     } finally {
       setActing(false)
     }
-  }, [detail, load])
+  }, [detail, load, t])
 
   const doResubmit = useCallback(
     async (data: WfFormData) => {
@@ -158,15 +169,15 @@ export default function WorkflowInstanceDetailPage() {
       setActing(true)
       try {
         await api(`/api/wf/instances/${detail.id}/resubmit`, { method: "POST", body: JSON.stringify({ formData: data }) })
-        toast.success("已重新提交")
+        toast.success(t("已重新提交"))
         void load()
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "提交失败")
+        toast.error(err instanceof Error ? err.message : t("提交失败"))
       } finally {
         setActing(false)
       }
     },
-    [detail, load],
+    [detail, load, t],
   )
 
   /* ---------- 派生（防御 detail 可空：基座 loading/error 态短路，不会读到） ---------- */
@@ -230,17 +241,17 @@ export default function WorkflowInstanceDetailPage() {
         <div className="space-y-3">
           <div className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-2.5 text-sm">
             <FileCode2 className="size-4 shrink-0 text-primary" />
-            <span className="text-muted-foreground">此流程使用自定义表单</span>
+            <span className="text-muted-foreground">{t("此流程使用自定义表单")}</span>
           </div>
           {detail.formViewPath ? (
             <Button size="sm" variant="outline" className="gap-1.5" onClick={() => navigate(detail.formViewPath as string)}>
-              <ExternalLink className="size-3.5" /> 查看自定义表单
+              <ExternalLink className="size-3.5" /> {t("查看自定义表单")}
             </Button>
           ) : (
-            <div className="text-xs text-muted-foreground">未配置查看页路径</div>
+            <div className="text-xs text-muted-foreground">{t("未配置查看页路径")}</div>
           )}
           <div className="space-y-1">
-            <div className="text-xs font-medium text-muted-foreground">表单数据（只读）</div>
+            <div className="text-xs font-medium text-muted-foreground">{t("表单数据（只读）")}</div>
             <pre className="max-h-72 overflow-auto rounded-lg border bg-muted/40 p-3 text-xs leading-relaxed">
               {JSON.stringify(formData, null, 2)}
             </pre>
@@ -248,7 +259,7 @@ export default function WorkflowInstanceDetailPage() {
         </div>
       ) : formSchema.widgets.length === 0 ? (
         <div className="flex h-28 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
-          暂无表单快照
+          {t("暂无表单快照")}
         </div>
       ) : resubmitMode ? (
         <FormRenderer
@@ -258,7 +269,7 @@ export default function WorkflowInstanceDetailPage() {
           submitLabel={
             (
               <span className="flex items-center gap-1.5">
-                <Send className="size-3.5" /> 重新提交
+                <Send className="size-3.5" /> {t("重新提交")}
               </span>
             ) as unknown as string
           }
@@ -271,7 +282,7 @@ export default function WorkflowInstanceDetailPage() {
       {/* 电子章展示（按节点盖章记录叠加） */}
       {detail.seals && detail.seals.length > 0 && (
         <div className="mt-4 space-y-1.5">
-          <div className="text-xs font-medium text-muted-foreground">电子章</div>
+          <div className="text-xs font-medium text-muted-foreground">{t("电子章")}</div>
           <SealStrip seals={detail.seals} />
         </div>
       )}
@@ -279,7 +290,7 @@ export default function WorkflowInstanceDetailPage() {
       {/* 子流程入口 */}
       {detail.subInstances && detail.subInstances.length > 0 && (
         <div className="mt-4 space-y-1.5">
-          <div className="text-xs font-medium text-muted-foreground">子流程</div>
+          <div className="text-xs font-medium text-muted-foreground">{t("子流程")}</div>
           <SubInstanceLinks subInstances={detail.subInstances} />
         </div>
       )}
@@ -288,11 +299,11 @@ export default function WorkflowInstanceDetailPage() {
 
   const meta: ShellMetaItem[] = detail
     ? [
-        { label: "流程", value: detail.defName },
-        { label: "发起人", value: detail.initiatorName },
-        { label: "发起时间", value: wfFormatTime(detail.createdAt) },
-        ...(detail.bizTime ? [{ label: "业务时间", value: `${wfFormatTime(detail.bizTime)}（穿越时空）`, tone: "warn" as const }] : []),
-        ...(detail.endedAt ? [{ label: "结束时间", value: wfFormatTime(detail.endedAt) }] : []),
+        { label: t("流程"), value: detail.defName },
+        { label: t("发起人"), value: detail.initiatorName },
+        { label: t("发起时间"), value: wfFormatTime(detail.createdAt) },
+        ...(detail.bizTime ? [{ label: t("业务时间"), value: t("{{time}}（穿越时空）", { time: wfFormatTime(detail.bizTime) }), tone: "warn" as const }] : []),
+        ...(detail.endedAt ? [{ label: t("结束时间"), value: wfFormatTime(detail.endedAt) }] : []),
       ]
     : []
 
@@ -301,11 +312,11 @@ export default function WorkflowInstanceDetailPage() {
       <WorkflowDetailShell
         title={detail?.title ?? ""}
         onBack={() => navigate(-1)}
-        status={detail ? { label: statusMeta?.label ?? detail.bizStatus, className: statusMeta?.className } : undefined}
+        status={detail ? { label: statusMeta?.label ? t(statusMeta.label) : detail.bizStatus, className: statusMeta?.className } : undefined}
         badges={
           resubmitMode ? (
             <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-amber-600">
-              已驳回至发起人，可修改后重新提交
+              {t("已驳回至发起人，可修改后重新提交")}
             </Badge>
           ) : undefined
         }
@@ -318,7 +329,7 @@ export default function WorkflowInstanceDetailPage() {
               <WfP3Bar detail={detail} schema={formSchema} data={formData} onReload={() => void load()} />
               {detail.canCancel && isInitiator && (
                 <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setCanceling(true)}>
-                  <Undo2 className="size-3.5" /> 撤销
+                  <Undo2 className="size-3.5" /> {t("撤销")}
                 </Button>
               )}
             </>
@@ -327,12 +338,12 @@ export default function WorkflowInstanceDetailPage() {
         onRefresh={() => void load()}
         currentNode={currentNodeNames || undefined}
         stageActions={detail ? <WfOpBar detail={detail} onReload={() => void load()} /> : undefined}
-        infoTitle="表单信息"
+        infoTitle={t("表单信息")}
         info={info}
         flow={{
           source: { load: "inline", designerType: detail?.designerType, designerJson: detail?.designerJson, bpmnXml: detail?.bpmnXml },
           timeline: detail?.timeline ?? [],
-          timelineMeta: TIMELINE_META,
+          timelineMeta,
           highlight: detail?.highlight,
           currentNodes: detail?.currentNodes,
           predict:
@@ -345,21 +356,21 @@ export default function WorkflowInstanceDetailPage() {
             ? [
                 {
                   key: "comments",
-                  label: "评论",
+                  label: t("评论"),
                   icon: <MessagesSquare className="size-3.5" />,
                   count: detail.comments?.length,
                   content: <CommentThread items={detail.comments ?? []} />,
                 },
                 {
                   key: "notify",
-                  label: "通知",
+                  label: t("通知"),
                   icon: <Bell className="size-3.5" />,
                   count: notifyItems.length,
                   content:
                     notifyItems.length === 0 ? (
-                      <div className="py-6 text-center text-sm text-muted-foreground">暂无通知记录</div>
+                      <div className="py-6 text-center text-sm text-muted-foreground">{t("暂无通知记录")}</div>
                     ) : (
-                      <ShellTimeline items={notifyItems} meta={TIMELINE_META} />
+                      <ShellTimeline items={notifyItems} meta={timelineMeta} />
                     ),
                 },
               ]
@@ -375,7 +386,7 @@ export default function WorkflowInstanceDetailPage() {
         <Modal
           open={canceling}
           onOpenChange={(open) => !open && !acting && setCanceling(false)}
-          title="撤销流程"
+          title={t("撤销流程")}
           description={detail.title}
           width={420}
           resizable={false}
@@ -383,15 +394,15 @@ export default function WorkflowInstanceDetailPage() {
           footer={
             <>
               <Button variant="outline" onClick={() => setCanceling(false)} disabled={acting}>
-                取消
+                {t("取消")}
               </Button>
               <Button variant="destructive" onClick={() => void doCancel()} disabled={acting}>
-                {acting ? "撤销中…" : "确认撤销"}
+                {acting ? t("撤销中…") : t("确认撤销")}
               </Button>
             </>
           }
         >
-          <p className="text-sm text-muted-foreground">撤销后流程立即终止，状态记为「已撤销」。确定要撤销这条申请吗？</p>
+          <p className="text-sm text-muted-foreground">{t("撤销后流程立即终止，状态记为「已撤销」。确定要撤销这条申请吗？")}</p>
         </Modal>
       )}
     </>

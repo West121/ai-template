@@ -1,4 +1,5 @@
 import type { Column } from "@tanstack/react-table"
+import { useTranslation } from "react-i18next"
 import { ArrowDown, ArrowUp, ChevronsUpDown, EyeOff, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -21,6 +22,7 @@ export function DataTableColumnHeader<TData, TValue>({
   title,
   className,
 }: DataTableColumnHeaderProps<TData, TValue>) {
+  const { t } = useTranslation()
   if (!column.getCanSort()) {
     return <div className={cn("text-nowrap", className)}>{title}</div>
   }
@@ -44,19 +46,19 @@ export function DataTableColumnHeader<TData, TValue>({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
           <DropdownMenuItem onClick={() => column.toggleSorting(false)}>
-            <ArrowUp className="size-3.5 text-muted-foreground" /> 升序
+            <ArrowUp className="size-3.5 text-muted-foreground" /> {t("升序")}
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => column.toggleSorting(true)}>
-            <ArrowDown className="size-3.5 text-muted-foreground" /> 降序
+            <ArrowDown className="size-3.5 text-muted-foreground" /> {t("降序")}
           </DropdownMenuItem>
           {sorted && (
             <DropdownMenuItem onClick={() => column.clearSorting()}>
-              <X className="size-3.5 text-muted-foreground" /> 取消排序
+              <X className="size-3.5 text-muted-foreground" /> {t("取消排序")}
             </DropdownMenuItem>
           )}
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => column.toggleVisibility(false)}>
-            <EyeOff className="size-3.5 text-muted-foreground" /> 隐藏该列
+            <EyeOff className="size-3.5 text-muted-foreground" /> {t("隐藏该列")}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { useTranslation } from "react-i18next"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Eye, ShieldAlert, Undo2 } from "lucide-react"
 import { toast } from "sonner"
@@ -37,6 +38,7 @@ import {
 } from "@/components/ui/select"
 
 export default function ApprovalMyPage() {
+  const { t } = useTranslation()
   const [rows, setRows] = useState<ApprovalRow[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -58,11 +60,11 @@ export default function ApprovalMyPage() {
       setRows(page.list)
     } catch (err) {
       if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
+      else setLoadError(err instanceof Error ? err.message : t("加载失败"))
     } finally {
       setLoading(false)
     }
-  }, [statusFilter])
+  }, [statusFilter, t])
 
   useEffect(() => {
     if (offline) {
@@ -77,12 +79,12 @@ export default function ApprovalMyPage() {
     if (!revokeRow) return
     try {
       await api(`/api/office/approvals/${revokeRow.id}/withdraw`, { method: "POST" })
-      toast.success(`申请「${revokeRow.title}」已撤销`)
+      toast.success(t("申请「{{title}}」已撤销", { title: revokeRow.title }))
       setRevokeRow(null)
       void load()
     } catch (err) {
       if (err instanceof ApiError) toast.error(err.message)
-      else toast.error(err instanceof Error ? err.message : "撤销失败")
+      else toast.error(err instanceof Error ? err.message : t("撤销失败"))
     }
   }
 
@@ -106,7 +108,7 @@ export default function ApprovalMyPage() {
         accessorKey: "type",
         meta: { title: "类型" },
         header: () => <span>类型</span>,
-        cell: ({ row }) => <Badge variant="secondary">{typeLabel(row.original.type)}</Badge>,
+        cell: ({ row }) => <Badge variant="secondary">{t(typeLabel(row.original.type))}</Badge>,
       },
       {
         accessorKey: "reason",
@@ -139,7 +141,7 @@ export default function ApprovalMyPage() {
           <div className="flex gap-1">
             <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setViewRow(row.original)}>
               <Eye className="size-3.5" />
-              查看
+              {t("查看")}
             </Button>
             {row.original.status === "PENDING" && (
               <Button
@@ -149,24 +151,24 @@ export default function ApprovalMyPage() {
                 onClick={() => setRevokeRow(row.original)}
               >
                 <Undo2 className="size-3.5" />
-                撤销
+                {t("撤销")}
               </Button>
             )}
           </div>
         ),
       },
     ],
-    [],
+    [t],
   )
 
   return (
     <div className="space-y-4">
       <PageHeader
-        title="我的申请"
+        title={t("我的申请")}
         description={
           offline || loadError === "network"
-            ? "后端未连接——启动 server/ 后此页为本人发起的真实审批单据"
-            : "查看本人发起的全部审批单据及流转进度"
+            ? t("后端未连接——启动 server/ 后此页为本人发起的真实审批单据")
+            : t("查看本人发起的全部审批单据及流转进度")
         }
       />
 
@@ -178,7 +180,7 @@ export default function ApprovalMyPage() {
             <ShieldAlert className="size-8 text-rose-500/60" />
             <div className="text-sm">{loadError}</div>
             <Button size="sm" variant="outline" onClick={() => void load()}>
-              重试
+              {t("重试")}
             </Button>
           </CardContent>
         </Card>
@@ -189,19 +191,19 @@ export default function ApprovalMyPage() {
           loading={loading}
           onRefresh={() => void load()}
           searchKeys={["title", "reason"]}
-          searchPlaceholder="搜索标题 / 事由…"
-          exportFileName="我的申请"
+          searchPlaceholder={t("搜索标题 / 事由…")}
+          exportFileName={t("我的申请")}
           filterSlot={
             <Select value={statusFilter} onValueChange={setStatusFilter}>
               <SelectTrigger size="sm" className="h-8 w-32 text-sm">
-                <SelectValue placeholder="状态" />
+                <SelectValue placeholder={t("状态")} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">全部状态</SelectItem>
-                <SelectItem value="PENDING">审批中</SelectItem>
-                <SelectItem value="APPROVED">已通过</SelectItem>
-                <SelectItem value="REJECTED">已驳回</SelectItem>
-                <SelectItem value="WITHDRAWN">已撤销</SelectItem>
+                <SelectItem value="all">{t("全部状态")}</SelectItem>
+                <SelectItem value="PENDING">{t("审批中")}</SelectItem>
+                <SelectItem value="APPROVED">{t("已通过")}</SelectItem>
+                <SelectItem value="REJECTED">{t("已驳回")}</SelectItem>
+                <SelectItem value="WITHDRAWN">{t("已撤销")}</SelectItem>
               </SelectContent>
             </Select>
           }
@@ -214,7 +216,7 @@ export default function ApprovalMyPage() {
           <DialogHeader>
             <DialogTitle>{viewRow?.title}</DialogTitle>
             <DialogDescription>
-              单号 {viewRow ? formatOrderNo(viewRow.id) : ""} · {typeLabel(viewRow?.type)} · 提交于{" "}
+              {t("单号")} {viewRow ? formatOrderNo(viewRow.id) : ""} · {t(typeLabel(viewRow?.type))} · {t("提交于")}{" "}
               {formatTime(viewRow?.createdAt)}
             </DialogDescription>
           </DialogHeader>
@@ -222,26 +224,26 @@ export default function ApprovalMyPage() {
             <div className="space-y-4 py-1">
               <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-sm">
                 <div>
-                  <span className="text-muted-foreground">状态：</span>
+                  <span className="text-muted-foreground">{t("状态：")}</span>
                   <StatusBadge status={viewRow.status} />
                 </div>
                 <div>
-                  <span className="text-muted-foreground">所属部门：</span>
+                  <span className="text-muted-foreground">{t("所属部门：")}</span>
                   {viewRow.deptName ?? "—"}
                 </div>
                 {(viewRow.startDate || viewRow.endDate) && (
                   <div className="col-span-2">
-                    <span className="text-muted-foreground">起止日期：</span>
-                    {viewRow.startDate ?? "—"} 至 {viewRow.endDate ?? "—"}
+                    <span className="text-muted-foreground">{t("起止日期：")}</span>
+                    {viewRow.startDate ?? "—"} {t("至")} {viewRow.endDate ?? "—"}
                   </div>
                 )}
                 <div className="col-span-2">
-                  <div className="text-muted-foreground">事由：</div>
+                  <div className="text-muted-foreground">{t("事由：")}</div>
                   <div className="mt-1 rounded bg-muted/60 px-3 py-2">{viewRow.reason ?? "—"}</div>
                 </div>
               </div>
               <div>
-                <div className="mb-3 text-sm font-medium">审批流程</div>
+                <div className="mb-3 text-sm font-medium">{t("审批流程")}</div>
                 <LogTimeline logs={logs} loading={logsLoading} />
               </div>
             </div>
@@ -253,17 +255,20 @@ export default function ApprovalMyPage() {
       <Dialog open={revokeRow !== null} onOpenChange={(open) => !open && setRevokeRow(null)}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>确认撤销申请</DialogTitle>
+            <DialogTitle>{t("确认撤销申请")}</DialogTitle>
             <DialogDescription>
-              撤销后单据 {revokeRow ? formatOrderNo(revokeRow.id) : ""}（{revokeRow?.title}）将终止流转，如需重新申请请再次发起。
+              {t("撤销后单据 {{orderNo}}（{{title}}）将终止流转，如需重新申请请再次发起。", {
+                orderNo: revokeRow ? formatOrderNo(revokeRow.id) : "",
+                title: revokeRow?.title ?? "",
+              })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRevokeRow(null)}>
-              取消
+              {t("取消")}
             </Button>
             <Button variant="destructive" onClick={() => void handleRevoke()}>
-              确认撤销
+              {t("确认撤销")}
             </Button>
           </DialogFooter>
         </DialogContent>

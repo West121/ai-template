@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { useTranslation } from "react-i18next"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Eye, ShieldAlert } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
@@ -34,18 +35,20 @@ interface DoneRow extends ApprovalRow {
 }
 
 function ActionBadge({ action }: { action: string }) {
+  const { t } = useTranslation()
   return action === "APPROVE" ? (
     <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-600">
-      同意
+      {t("同意")}
     </Badge>
   ) : (
     <Badge variant="outline" className="border-rose-500/30 bg-rose-500/10 text-rose-600">
-      驳回
+      {t("驳回")}
     </Badge>
   )
 }
 
 export default function ApprovalDonePage() {
+  const { t } = useTranslation()
   const [rows, setRows] = useState<DoneRow[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -62,11 +65,11 @@ export default function ApprovalDonePage() {
       setRows(page.list)
     } catch (err) {
       if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
+      else setLoadError(err instanceof Error ? err.message : t("加载失败"))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     if (offline) {
@@ -97,7 +100,7 @@ export default function ApprovalDonePage() {
         accessorKey: "type",
         meta: { title: "类型" },
         header: () => <span>类型</span>,
-        cell: ({ row }) => <Badge variant="secondary">{typeLabel(row.original.type)}</Badge>,
+        cell: ({ row }) => <Badge variant="secondary">{t(typeLabel(row.original.type))}</Badge>,
       },
       {
         accessorKey: "applicant",
@@ -133,22 +136,22 @@ export default function ApprovalDonePage() {
         cell: ({ row }) => (
           <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setDetailRow(row.original)}>
             <Eye className="size-3.5" />
-            详情
+            {t("详情")}
           </Button>
         ),
       },
     ],
-    [],
+    [t],
   )
 
   return (
     <div className="space-y-4">
       <PageHeader
-        title="已办事项"
+        title={t("已办事项")}
         description={
           offline || loadError === "network"
-            ? "后端未连接——启动 server/ 后此页为您处理过的真实审批记录"
-            : "您已处理的审批记录及单据当前状态"
+            ? t("后端未连接——启动 server/ 后此页为您处理过的真实审批记录")
+            : t("您已处理的审批记录及单据当前状态")
         }
       />
 
@@ -160,7 +163,7 @@ export default function ApprovalDonePage() {
             <ShieldAlert className="size-8 text-rose-500/60" />
             <div className="text-sm">{loadError}</div>
             <Button size="sm" variant="outline" onClick={() => void load()}>
-              重试
+              {t("重试")}
             </Button>
           </CardContent>
         </Card>
@@ -171,8 +174,8 @@ export default function ApprovalDonePage() {
           loading={loading}
           onRefresh={() => void load()}
           searchKeys={["title", "applicant"]}
-          searchPlaceholder="搜索标题 / 申请人…"
-          exportFileName="已办事项"
+          searchPlaceholder={t("搜索标题 / 申请人…")}
+          exportFileName={t("已办事项")}
         />
       )}
 
@@ -180,38 +183,38 @@ export default function ApprovalDonePage() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{detailRow?.title}</DialogTitle>
-            <DialogDescription>单号 {detailRow ? formatOrderNo(detailRow.id) : ""}</DialogDescription>
+            <DialogDescription>{t("单号")} {detailRow ? formatOrderNo(detailRow.id) : ""}</DialogDescription>
           </DialogHeader>
           {detailRow && (
             <div className="space-y-4 py-1">
               <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-sm">
                 <div>
-                  <span className="text-muted-foreground">类型：</span>
-                  {typeLabel(detailRow.type)}
+                  <span className="text-muted-foreground">{t("类型：")}</span>
+                  {t(typeLabel(detailRow.type))}
                 </div>
                 <div>
-                  <span className="text-muted-foreground">申请人：</span>
+                  <span className="text-muted-foreground">{t("申请人：")}</span>
                   {detailRow.applicant}
                 </div>
                 <div>
-                  <span className="text-muted-foreground">我的操作：</span>
+                  <span className="text-muted-foreground">{t("我的操作：")}</span>
                   <ActionBadge action={detailRow.myAction} />
                 </div>
                 <div>
-                  <span className="text-muted-foreground">当前状态：</span>
+                  <span className="text-muted-foreground">{t("当前状态：")}</span>
                   <StatusBadge status={detailRow.status} />
                 </div>
                 <div className="col-span-2">
-                  <span className="text-muted-foreground">处理时间：</span>
+                  <span className="text-muted-foreground">{t("处理时间：")}</span>
                   {formatTime(detailRow.actedAt)}
                 </div>
                 <div className="col-span-2">
-                  <div className="text-muted-foreground">事由：</div>
+                  <div className="text-muted-foreground">{t("事由：")}</div>
                   <div className="mt-1 rounded bg-muted/60 px-3 py-2">{detailRow.reason ?? "—"}</div>
                 </div>
               </div>
               <div>
-                <div className="mb-3 text-sm font-medium">审批流程</div>
+                <div className="mb-3 text-sm font-medium">{t("审批流程")}</div>
                 <LogTimeline logs={logs} loading={logsLoading} />
               </div>
             </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 import {
   Bell,
@@ -42,6 +43,7 @@ const themeOptions: Array<{ value: ThemeMode; label: string; icon: typeof Sun }>
 ]
 
 function ThemeToggle() {
+  const { t } = useTranslation()
   const themeMode = useAppStore((s) => s.themeMode)
   const updateSettings = useAppStore((s) => s.updateSettings)
   const CurrentIcon = themeOptions.find((o) => o.value === themeMode)?.icon ?? Sun
@@ -61,7 +63,7 @@ function ThemeToggle() {
             onClick={() => updateSettings({ themeMode: option.value })}
           >
             <option.icon className="size-4" />
-            {option.label}
+            {t(option.label)}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
@@ -70,6 +72,7 @@ function ThemeToggle() {
 }
 
 function FullscreenToggle() {
+  const { t } = useTranslation()
   const [fullscreen, setFullscreen] = useState(false)
 
   useEffect(() => {
@@ -96,7 +99,7 @@ function FullscreenToggle() {
           {fullscreen ? <Minimize className="size-4.5" /> : <Maximize className="size-4.5" />}
         </Button>
       </TooltipTrigger>
-      <TooltipContent>{fullscreen ? "退出全屏" : "全屏"}</TooltipContent>
+      <TooltipContent>{fullscreen ? t("退出全屏") : t("全屏")}</TooltipContent>
     </Tooltip>
   )
 }
@@ -117,6 +120,7 @@ const POLL_INTERVAL = 30_000
  * 后端未启动/离线时静默降级为 0 未读、空列表，不打断布局。
  */
 function WfNotificationsBell() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const offline = useAuthStore((s) => s.offline)
   const token = useAuthStore((s) => s.token)
@@ -168,8 +172,8 @@ function WfNotificationsBell() {
     api("/api/wf/notifies/read-all", { method: "POST" }).catch(() => {})
     setList((prev) => prev.map((n) => ({ ...n, readFlag: true })))
     setUnread(0)
-    toast.success("已全部标记为已读")
-  }, [])
+    toast.success(t("已全部标记为已读"))
+  }, [t])
 
   return (
     <Popover
@@ -194,14 +198,14 @@ function WfNotificationsBell() {
       </PopoverTrigger>
       <PopoverContent align="end" className="w-90 p-0">
         <div className="flex items-center justify-between border-b px-4 py-2.5">
-          <span className="text-sm font-medium">流程通知</span>
-          {unread > 0 && <span className="text-xs text-destructive">{unread} 条未读</span>}
+          <span className="text-sm font-medium">{t("流程通知")}</span>
+          {unread > 0 && <span className="text-xs text-destructive">{t("{{n}} 条未读", { n: unread })}</span>}
         </div>
         <ScrollArea className="h-80">
           {list.length === 0 ? (
             <div className="flex h-80 flex-col items-center justify-center gap-2 text-muted-foreground">
               <Bell className="size-8 opacity-30" />
-              <span className="text-sm">暂无通知</span>
+              <span className="text-sm">{t("暂无通知")}</span>
             </div>
           ) : (
             <div className="divide-y">
@@ -220,7 +224,7 @@ function WfNotificationsBell() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <Badge variant="outline" className="h-4 px-1 text-[10px] font-normal">
-                          {WF_NOTIFY_TYPE_LABEL[item.type] ?? item.type}
+                          {t(WF_NOTIFY_TYPE_LABEL[item.type] ?? item.type)}
                         </Badge>
                         <span className="truncate text-sm font-medium">{item.title}</span>
                         {!item.readFlag && <span className="size-1.5 shrink-0 rounded-full bg-destructive" />}
@@ -245,7 +249,7 @@ function WfNotificationsBell() {
             disabled={unread === 0}
           >
             <CheckCheck className="size-3.5" />
-            全部已读
+            {t("全部已读")}
           </Button>
           <Button
             variant="ghost"
@@ -256,7 +260,7 @@ function WfNotificationsBell() {
               navigate("/workflow/tasks?tab=todo")
             }}
           >
-            查看待办
+            {t("查看待办")}
           </Button>
         </div>
       </PopoverContent>
@@ -265,6 +269,7 @@ function WfNotificationsBell() {
 }
 
 export function Header({ left }: { left?: ReactNode }) {
+  const { t } = useTranslation()
   const setSearchOpen = useUiStore((s) => s.setSearchOpen)
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
 
@@ -278,7 +283,7 @@ export function Header({ left }: { left?: ReactNode }) {
           className="mr-1.5 hidden h-9 w-56 items-center gap-2.5 rounded-lg bg-muted px-3 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:flex"
         >
           <Search className="size-4 shrink-0" />
-          <span className="flex-1 truncate text-left text-sm">搜索菜单</span>
+          <span className="flex-1 truncate text-left text-sm">{t("搜索菜单")}</span>
           <kbd className="pointer-events-none flex h-5.5 shrink-0 items-center gap-0.5 rounded-md border bg-background px-1.5 font-medium text-muted-foreground shadow-xs">
             <Command className="size-3" />
             <span className="text-[11px] leading-none">K</span>
@@ -298,7 +303,7 @@ export function Header({ left }: { left?: ReactNode }) {
               <Settings2 className="size-4.5" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>偏好设置</TooltipContent>
+          <TooltipContent>{t("偏好设置")}</TooltipContent>
         </Tooltip>
       </div>
     </header>

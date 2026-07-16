@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next"
 import { ChevronDown, ListFilter, Plus, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
@@ -172,6 +173,7 @@ function LogicSelect({
   value: "and" | "or"
   onChange: (logic: "and" | "or") => void
 }) {
+  const { t } = useTranslation()
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -179,16 +181,16 @@ function LogicSelect({
           type="button"
           className="flex items-center gap-1 text-xs font-medium text-foreground/80 hover:text-foreground"
         >
-          {value === "and" ? "满足所有条件" : "满足任一条件"}
+          {value === "and" ? t("满足所有条件") : t("满足任一条件")}
           <ChevronDown className="size-3 text-muted-foreground" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         <DropdownMenuItem className={cn("text-xs", value === "and" && "bg-accent")} onClick={() => onChange("and")}>
-          满足所有条件
+          {t("满足所有条件")}
         </DropdownMenuItem>
         <DropdownMenuItem className={cn("text-xs", value === "or" && "bg-accent")} onClick={() => onChange("or")}>
-          满足任一条件
+          {t("满足任一条件")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -206,6 +208,7 @@ function ConditionRow({
   onChange: (next: FilterCondition) => void
   onRemove: () => void
 }) {
+  const { t } = useTranslation()
   const field = fields.find((f) => f.id === condition.field) ?? fields[0]
   const operators = OPERATORS[field.type]
   const needsValue = !NO_VALUE_OPERATORS.has(condition.operator)
@@ -238,7 +241,7 @@ function ConditionRow({
         <SelectContent>
           {operators.map((op) => (
             <SelectItem key={op.value} value={op.value} className="text-xs">
-              {op.label}
+              {t(op.label)}
             </SelectItem>
           ))}
         </SelectContent>
@@ -248,7 +251,7 @@ function ConditionRow({
         field.type === "select" ? (
           <Select value={condition.value || undefined} onValueChange={(value) => onChange({ ...condition, value })}>
             <SelectTrigger size="sm" className="h-8 min-w-0 flex-1 text-xs">
-              <SelectValue placeholder="选择值" />
+              <SelectValue placeholder={t("选择值")} />
             </SelectTrigger>
             <SelectContent>
               {(field.options ?? []).map((option) => (
@@ -263,7 +266,7 @@ function ConditionRow({
             type={field.type === "number" ? "number" : field.type === "date" ? "date" : "text"}
             value={condition.value}
             onChange={(e) => onChange({ ...condition, value: e.target.value })}
-            placeholder={field.type === "date" ? "选择日期" : "输入值"}
+            placeholder={field.type === "date" ? t("选择日期") : t("输入值")}
             className="h-8 min-w-0 flex-1 text-xs"
           />
         )
@@ -289,6 +292,7 @@ function GroupBox({
   onChange: (next: FilterGroup) => void
   onRemove: () => void
 }) {
+  const { t } = useTranslation()
   const updateItem = (index: number, item: FilterItem) =>
     onChange({ ...group, items: group.items.map((it, i) => (i === index ? item : it)) })
   const removeItem = (index: number) =>
@@ -325,7 +329,7 @@ function GroupBox({
       )}
       {group.items.length === 0 && (
         <div className="rounded-md border border-dashed py-2 text-center text-xs text-muted-foreground">
-          点击右上角 + 添加条件
+          {t("点击右上角 + 添加条件")}
         </div>
       )}
     </div>
@@ -340,6 +344,7 @@ interface DataTableAdvancedFilterProps {
 
 /** Notion 风格条件构建器：条件 / 条件组 / 与或逻辑 */
 export function DataTableAdvancedFilter({ fields, root, onChange }: DataTableAdvancedFilterProps) {
+  const { t } = useTranslation()
   if (fields.length === 0) return null
   const count = countConditions(root)
 
@@ -357,7 +362,7 @@ export function DataTableAdvancedFilter({ fields, root, onChange }: DataTableAdv
           className="h-8 gap-1.5 text-xs"
         >
           <ListFilter className="size-3.5" />
-          筛选
+          {t("筛选")}
           {count > 0 && (
             <Badge className="h-4 min-w-4 rounded-full px-1 text-[10px]">{count}</Badge>
           )}
@@ -389,7 +394,7 @@ export function DataTableAdvancedFilter({ fields, root, onChange }: DataTableAdv
             )}
             {root.items.length === 0 && (
               <div className="rounded-md border border-dashed py-5 text-center text-xs text-muted-foreground">
-                暂无筛选条件，点击下方按钮添加
+                {t("暂无筛选条件，点击下方按钮添加")}
               </div>
             )}
           </div>
@@ -402,7 +407,7 @@ export function DataTableAdvancedFilter({ fields, root, onChange }: DataTableAdv
               onClick={() => onChange({ ...root, items: [...root.items, newCondition(fields)] })}
             >
               <Plus className="size-3.5" />
-              添加条件
+              {t("添加条件")}
             </Button>
             <Button
               variant="outline"
@@ -419,7 +424,7 @@ export function DataTableAdvancedFilter({ fields, root, onChange }: DataTableAdv
               }
             >
               <Plus className="size-3.5" />
-              添加条件组
+              {t("添加条件组")}
             </Button>
             {count > 0 && (
               <Button
@@ -428,7 +433,7 @@ export function DataTableAdvancedFilter({ fields, root, onChange }: DataTableAdv
                 className="ml-auto h-7 text-xs text-muted-foreground"
                 onClick={() => onChange(emptyFilterRoot())}
               >
-                清空
+                {t("清空")}
               </Button>
             )}
           </div>

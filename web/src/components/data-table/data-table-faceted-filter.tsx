@@ -1,4 +1,5 @@
 import type { Column } from "@tanstack/react-table"
+import { useTranslation } from "react-i18next"
 import { Check, CirclePlus } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
@@ -28,6 +29,7 @@ export function DataTableFacetedFilter<TData, TValue>({
   column,
   title,
 }: DataTableFacetedFilterProps<TData, TValue>) {
+  const { t } = useTranslation()
   if (!column) return null
   const facets = column.getFacetedUniqueValues()
   const selected = new Set((column.getFilterValue() as string[] | undefined) ?? [])
@@ -52,7 +54,7 @@ export function DataTableFacetedFilter<TData, TValue>({
                 ))
               ) : (
                 <Badge variant="secondary" className="rounded-sm px-1 text-[10px] font-normal">
-                  已选 {selected.size} 项
+                  {t("已选 {{count}} 项", { count: selected.size })}
                 </Badge>
               )}
             </>
@@ -61,9 +63,9 @@ export function DataTableFacetedFilter<TData, TValue>({
       </PopoverTrigger>
       <PopoverContent align="start" className="w-48 p-0">
         <Command>
-          <CommandInput placeholder={`筛选${title}…`} className="h-8 text-xs" />
+          <CommandInput placeholder={t("筛选{{title}}…", { title })} className="h-8 text-xs" />
           <CommandList>
-            <CommandEmpty>无匹配项</CommandEmpty>
+            <CommandEmpty>{t("无匹配项")}</CommandEmpty>
             <CommandGroup>
               {options.map(({ value, count }) => {
                 const active = selected.has(value)
@@ -103,7 +105,7 @@ export function DataTableFacetedFilter<TData, TValue>({
                     className="justify-center text-xs text-muted-foreground"
                     onSelect={() => column.setFilterValue(undefined)}
                   >
-                    清除筛选
+                    {t("清除筛选")}
                   </CommandItem>
                 </CommandGroup>
               </>

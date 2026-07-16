@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from "react"
+import { useTranslation } from "react-i18next"
 import { Outlet, useLocation, useNavigate } from "react-router-dom"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react"
@@ -55,9 +56,10 @@ function Sidebar({ items, showLogo }: { items: MenuItem[]; showLogo?: boolean })
 }
 
 function Footer() {
+  const { t } = useTranslation()
   return (
     <footer className="flex h-9 shrink-0 items-center justify-center border-t bg-card text-xs text-muted-foreground">
-      Copyright © 2026 企业开发平台 · 企业协同办公平台
+      Copyright © 2026 {t("企业开发平台")} · {t("企业协同办公平台")}
     </footer>
   )
 }

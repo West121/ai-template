@@ -1,4 +1,5 @@
 import { Fragment } from "react"
+import { useTranslation } from "react-i18next"
 import { Link, useLocation } from "react-router-dom"
 import { findMenuChain } from "@/config/menu"
 import {
@@ -11,6 +12,7 @@ import {
 } from "@/components/ui/breadcrumb"
 
 export function Breadcrumbs() {
+  const { t } = useTranslation()
   const { pathname } = useLocation()
   const chain = findMenuChain(pathname)
   if (chain.length === 0) return null
@@ -24,12 +26,12 @@ export function Breadcrumbs() {
             <Fragment key={item.path}>
               <BreadcrumbItem>
                 {last ? (
-                  <BreadcrumbPage>{item.title}</BreadcrumbPage>
+                  <BreadcrumbPage>{t(item.title)}</BreadcrumbPage>
                 ) : item.children?.length ? (
-                  <span className="text-muted-foreground">{item.title}</span>
+                  <span className="text-muted-foreground">{t(item.title)}</span>
                 ) : (
                   <BreadcrumbLink asChild>
-                    <Link to={item.path}>{item.title}</Link>
+                    <Link to={item.path}>{t(item.title)}</Link>
                   </BreadcrumbLink>
                 )}
               </BreadcrumbItem>

@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { useTranslation } from "react-i18next"
 import { Calendar, CircleCheckBig, Hash, Search, Type, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Input } from "@/components/ui/input"
@@ -66,8 +67,9 @@ export function DataTableSearch({
   onModeChange,
   displayMode,
   onDisplayModeChange,
-  placeholder = "搜索",
+  placeholder,
 }: DataTableSearchProps) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [fieldKeyword, setFieldKeyword] = useState("")
 
@@ -83,7 +85,7 @@ export function DataTableSearch({
             <Search className="size-4" />
           </button>
         </TooltipTrigger>
-        <TooltipContent>搜索</TooltipContent>
+        <TooltipContent>{t("搜索")}</TooltipContent>
       </Tooltip>
     )
   }
@@ -98,7 +100,7 @@ export function DataTableSearch({
             type="button"
             className="flex h-6 shrink-0 items-center rounded-full bg-muted px-2.5 text-xs text-foreground/80 transition-colors hover:bg-accent"
           >
-            {mode === "global" ? "全局" : `字段 ${enabledFields.length}`}
+            {mode === "global" ? t("全局") : t("字段 {{count}}", { count: enabledFields.length })}
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-64 p-0">
@@ -108,7 +110,7 @@ export function DataTableSearch({
               <Input
                 value={fieldKeyword}
                 onChange={(e) => setFieldKeyword(e.target.value)}
-                placeholder="搜索字段"
+                placeholder={t("搜索字段")}
                 className="h-7 pl-7 text-xs"
               />
             </div>
@@ -140,24 +142,24 @@ export function DataTableSearch({
               )
             })}
             {visibleFields.length === 0 && (
-              <div className="py-4 text-center text-xs text-muted-foreground">无匹配字段</div>
+              <div className="py-4 text-center text-xs text-muted-foreground">{t("无匹配字段")}</div>
             )}
           </div>
           <div className="space-y-1.5 border-t p-2">
             <div className="flex gap-1.5">
               <SegmentedButton active={mode === "global"} onClick={() => onModeChange("global")}>
-                全局搜索
+                {t("全局搜索")}
               </SegmentedButton>
               <SegmentedButton active={mode === "fields"} onClick={() => onModeChange("fields")}>
-                字段搜索
+                {t("字段搜索")}
               </SegmentedButton>
             </div>
             <div className="flex gap-1.5">
               <SegmentedButton active={displayMode === "all"} onClick={() => onDisplayModeChange("all")}>
-                显示全部
+                {t("显示全部")}
               </SegmentedButton>
               <SegmentedButton active={displayMode === "filter"} onClick={() => onDisplayModeChange("filter")}>
-                仅显示匹配行
+                {t("仅显示匹配行")}
               </SegmentedButton>
             </div>
           </div>
@@ -174,7 +176,7 @@ export function DataTableSearch({
             setOpen(false)
           }
         }}
-        placeholder={placeholder}
+        placeholder={placeholder ?? t("搜索")}
         className="w-36 min-w-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
       />
       <button

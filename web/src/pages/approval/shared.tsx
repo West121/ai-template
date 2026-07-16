@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { useTranslation } from "react-i18next"
 import { CloudOff, RotateCw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
@@ -52,10 +53,11 @@ export function statusLabel(status?: string) {
 }
 
 export function StatusBadge({ status }: { status: string }) {
+  const { t } = useTranslation()
   const meta = STATUS_META[status]
   return (
     <Badge variant="outline" className={meta?.className}>
-      {meta?.label ?? status}
+      {t(meta?.label ?? status)}
     </Badge>
   )
 }
@@ -71,19 +73,21 @@ export function formatOrderNo(id: number) {
 
 /** 后端未启动兜底卡片（与 pending.tsx 同款） */
 export function BackendDownCard({ onRetry }: { onRetry: () => void }) {
+  const { t } = useTranslation()
   return (
     <Card>
       <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
         <div className="flex size-12 items-center justify-center rounded-full bg-muted">
           <CloudOff className="size-5 text-muted-foreground" />
         </div>
-        <div className="text-sm font-medium">后端服务未启动</div>
+        <div className="text-sm font-medium">{t("后端服务未启动")}</div>
         <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
-          此页面已接入真实接口。启动后端：cd server && docker compose up -d && mvn -pl oa-boot spring-boot:run，
-          然后用 admin / manager / zhangsan（密码 admin123）重新登录，即可体验真实数据。
+          {t(
+            "此页面已接入真实接口。启动后端：cd server && docker compose up -d && mvn -pl oa-boot spring-boot:run， 然后用 admin / manager / zhangsan（密码 admin123）重新登录，即可体验真实数据。",
+          )}
         </p>
         <Button size="sm" className="gap-1.5" onClick={onRetry}>
-          <RotateCw className="size-3.5" /> 重试连接
+          <RotateCw className="size-3.5" /> {t("重试连接")}
         </Button>
       </CardContent>
     </Card>
@@ -107,6 +111,7 @@ const LOG_META: Record<string, { label: string; dot: string }> = {
 
 /** 竖向审批日志时间线 */
 export function LogTimeline({ logs, loading }: { logs: ApprovalLog[]; loading: boolean }) {
+  const { t } = useTranslation()
   if (loading) {
     return (
       <div className="space-y-3">
@@ -123,7 +128,7 @@ export function LogTimeline({ logs, loading }: { logs: ApprovalLog[]; loading: b
     )
   }
   if (logs.length === 0) {
-    return <div className="py-2 text-xs text-muted-foreground">暂无流转记录</div>
+    return <div className="py-2 text-xs text-muted-foreground">{t("暂无流转记录")}</div>
   }
   return (
     <div className="space-y-0">
@@ -134,7 +139,7 @@ export function LogTimeline({ logs, loading }: { logs: ApprovalLog[]; loading: b
             {index < logs.length - 1 && <div className="absolute left-[5px] top-4 h-full w-px bg-border" />}
             <div className={cn("mt-1 size-[11px] shrink-0 rounded-full", meta.dot)} />
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium">{meta.label}</div>
+              <div className="text-sm font-medium">{t(meta.label)}</div>
               <div className="mt-0.5 text-xs text-muted-foreground">
                 {log.actorName} · {formatTime(log.createdAt)}
               </div>

@@ -3,6 +3,7 @@
  * 右上角放 A/B 切换器（持久化）。两个风格各自包 ErrorBoundary，坏数据只局部降级不白屏。
  */
 import { LayoutGrid, Sparkles } from "lucide-react"
+import { useTranslation } from "react-i18next"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { cn } from "@/lib/utils"
 import { useAppStore, type DashboardStyle } from "@/stores/app-store"
@@ -15,10 +16,11 @@ const OPTIONS: { key: DashboardStyle; label: string; icon: typeof LayoutGrid }[]
 ]
 
 function StyleSwitcher() {
+  const { t } = useTranslation()
   const style = useAppStore((s) => s.dashboardStyle)
   const setStyle = useAppStore((s) => s.setDashboardStyle)
   return (
-    <div className="inline-flex items-center gap-1 rounded-full border bg-muted/40 p-1" role="tablist" aria-label="工作台风格切换">
+    <div className="inline-flex items-center gap-1 rounded-full border bg-muted/40 p-1" role="tablist" aria-label={t("工作台风格切换")}>
       {OPTIONS.map((opt) => {
         const active = style === opt.key
         return (
@@ -34,7 +36,7 @@ function StyleSwitcher() {
             )}
           >
             <opt.icon className="size-3.5" />
-            {opt.label}
+            {t(opt.label)}
           </button>
         )
       })}

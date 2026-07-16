@@ -34,6 +34,34 @@ function* walk(dir) {
   }
 }
 
+/**
+ * 动态 key 源（第二遍）：渲染处是 t(x.label)/t(map[k]) 这类**动态 key**，第一遍的字面量
+ * 扫描抓不到——其 label 数据表在下列文件里（菜单 title / 枚举→中文映射 / 常量 label 表）。
+ * 对这些文件收集**全部中文字符串字面量**为 key（过收集的多余 key 只是闲置，不影响运行时）。
+ */
+const DYNAMIC_LABEL_FILES = [
+  "config/menu.ts",
+  "types/workflow.ts",
+  "components/layout/header.tsx",
+  "components/layout/settings-drawer.tsx",
+  "components/layout/tabs-bar.tsx",
+  "components/org-picker.tsx",
+  "components/file-uploader.tsx",
+  "components/data-table/data-table-advanced-filter.tsx",
+  "components/wf-op-dialogs.tsx",
+  "pages/dashboard/index.tsx",
+  "pages/dashboard/use-dashboard-data.ts",
+  "pages/workflow/tasks.tsx",
+  "pages/workflow/todo.tsx",
+  "pages/workflow/done.tsx",
+  "pages/workflow/mine.tsx",
+  "pages/workflow/instance-detail.tsx",
+  "pages/workflow/start.tsx",
+  "pages/approval/shared.tsx",
+  "pages/approval/create.tsx",
+]
+const CN_LITERAL_RE = /(["'])((?:\\.|(?!\1)[^\\\n])*[一-鿿](?:\\.|(?!\1)[^\\\n])*)\1/g
+
 const keys = new Set()
 let scanned = 0
 for (const file of walk(SRC)) {
@@ -45,8 +73,19 @@ for (const file of walk(SRC)) {
     if (key.trim()) keys.add(key)
   }
 }
+let dynCount = 0
+for (const rel of DYNAMIC_LABEL_FILES) {
+  const text = readFileSync(join(SRC, rel), "utf8")
+  for (const m of text.matchAll(CN_LITERAL_RE)) {
+    const key = m[2].replace(/\\(["'\\])/g, "$1")
+    if (key.trim() && !keys.has(key)) {
+      keys.add(key)
+      dynCount++
+    }
+  }
+}
 
-console.log(`扫描 ${scanned} 个文件，抽取 ${keys.size} 个 t() key`)
+console.log(`扫描 ${scanned} 个文件，抽取 t() 字面量 + 动态 label 源新增 ${dynCount} 个，共 ${keys.size} 个 key`)
 
 for (const locale of TARGET_LOCALES) {
   const file = join(LOCALES_DIR, `${locale}.json`)

@@ -24,6 +24,7 @@ import {
   type UseFormReturn,
 } from "react-hook-form"
 import { z } from "zod"
+import { useTranslation } from "react-i18next"
 import {
   Bold,
   Eraser,
@@ -39,6 +40,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
+import i18n from "@/lib/i18n"
 import { sanitizeHtml } from "@/lib/sanitize"
 import { localizeWidgets, useLocale } from "@/lib/i18n-label"
 import { AuthImg } from "@/components/auth-img"
@@ -213,10 +215,10 @@ function buildSchema(
         const min = typeof props.min === "number" ? props.min : required ? 1 : 0
         const max = typeof props.max === "number" ? props.max : undefined
         if (rows.length < min) {
-          ctx.addIssue({ code: "custom", path: [key], message: `至少填写 ${min} 行` })
+          ctx.addIssue({ code: "custom", path: [key], message: i18n.t("至少填写 {{min}} 行", { min }) })
         }
         if (max != null && rows.length > max) {
-          ctx.addIssue({ code: "custom", path: [key], message: `最多填写 ${max} 行` })
+          ctx.addIssue({ code: "custom", path: [key], message: i18n.t("最多填写 {{max}} 行", { max }) })
         }
         const cols = w.children ?? []
         rows.forEach((row, idx) => {
@@ -226,7 +228,7 @@ function buildSchema(
             const colRequired = Boolean(col.required)
             const emptyCell = cv == null || cv === "" || (Array.isArray(cv) && cv.length === 0)
             if (colRequired && emptyCell) {
-              ctx.addIssue({ code: "custom", path: [key, idx, ck], message: `请填写${col.label}` })
+              ctx.addIssue({ code: "custom", path: [key, idx, ck], message: i18n.t("请填写{{label}}", { label: col.label }) })
             } else {
               const msg = validateValue(col.validation, cv, data)
               if (msg) ctx.addIssue({ code: "custom", path: [key, idx, ck], message: msg })
@@ -239,7 +241,7 @@ function buildSchema(
       const empty = value == null || value === "" || (Array.isArray(value) && value.length === 0)
       if (required && empty) {
         const verb = w.type === "input" || w.type === "textarea" || w.type === "number" ? "请输入" : "请选择"
-        ctx.addIssue({ code: "custom", path: [key], message: `${verb}${w.label}` })
+        ctx.addIssue({ code: "custom", path: [key], message: i18n.t(`${verb}{{label}}`, { label: w.label }) })
         continue
       }
       const msg = validateValue(w.validation, value, data)
@@ -1595,17 +1597,18 @@ export function FormRenderer({
   perms,
   readOnly,
   submitting,
-  submitLabel = "提交",
-  cancelLabel = "取消",
+  submitLabel,
+  cancelLabel,
   onSubmit,
   onCancel,
   onSaveDraft,
   savingDraft,
-  saveDraftLabel = "暂存",
+  saveDraftLabel,
   className,
   formEvents,
   variables,
 }: FormRendererProps) {
+  const { t } = useTranslation()
   const overridesRef = useRef<OverrideMap>({})
   const [overrides, setOverridesState] = useState<OverrideMap>({})
   const variablesRef = useRef<Record<string, unknown>>({ ...(variables ?? {}) })
@@ -1717,7 +1720,7 @@ export function FormRenderer({
   if (!hasFields) {
     return (
       <div className="flex h-28 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
-        该表单暂无可填写的字段
+        {t("该表单暂无可填写的字段")}
       </div>
     )
   }
@@ -1736,7 +1739,7 @@ export function FormRenderer({
             <div className="col-span-2 flex justify-end gap-2 pt-1">
               {onCancel && (
                 <Button type="button" variant="outline" onClick={onCancel} disabled={submitting || savingDraft}>
-                  {cancelLabel}
+                  {cancelLabel ?? t("取消")}
                 </Button>
               )}
               {onSaveDraft && (
@@ -1748,11 +1751,11 @@ export function FormRenderer({
                     void onSaveDraft(toFormData(widgets, form.getValues(), perms, readOnly, overridesRef.current))
                   }
                 >
-                  {savingDraft ? "暂存中…" : saveDraftLabel}
+                  {savingDraft ? t("暂存中…") : (saveDraftLabel ?? t("暂存"))}
                 </Button>
               )}
               <Button type="submit" disabled={submitting || savingDraft}>
-                {submitting ? "提交中…" : submitLabel}
+                {submitting ? t("提交中…") : (submitLabel ?? t("提交"))}
               </Button>
             </div>
           )}

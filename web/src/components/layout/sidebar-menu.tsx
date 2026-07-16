@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { useTranslation } from "react-i18next"
 import { useLocation, useNavigate } from "react-router-dom"
 import { ChevronRight } from "lucide-react"
 import type { MenuItem } from "@/config/menu"
@@ -38,6 +39,7 @@ function isActive(pathname: string, item: MenuItem): boolean {
 
 /** 折叠态下的子菜单（递归 DropdownMenuSub） */
 function CollapsedSubMenu({ items, onNavigate }: { items: MenuItem[]; onNavigate: (path: string) => void }) {
+  const { t } = useTranslation()
   const { pathname } = useLocation()
   const badges = useBadgeStore((s) => s.badges)
   return (
@@ -47,7 +49,7 @@ function CollapsedSubMenu({ items, onNavigate }: { items: MenuItem[]; onNavigate
           <DropdownMenuSub key={item.path}>
             <DropdownMenuSubTrigger className="gap-2">
               {item.icon && <item.icon className="size-4 text-muted-foreground" />}
-              {item.title}
+              {t(item.title)}
             </DropdownMenuSubTrigger>
             <DropdownMenuPortal>
               <DropdownMenuSubContent>
@@ -62,7 +64,7 @@ function CollapsedSubMenu({ items, onNavigate }: { items: MenuItem[]; onNavigate
             onClick={() => openMenuItem(item, onNavigate)}
           >
             {item.icon && <item.icon className="size-4 text-muted-foreground" />}
-            {item.title}
+            {t(item.title)}
             {resolveBadge(badges, item) != null && (
               <Badge className="ml-auto h-4 min-w-4 rounded-full px-1 text-[10px]">
                 {resolveBadge(badges, item)}
@@ -89,6 +91,7 @@ function ExpandedMenuItem({
   onToggle: (item: MenuItem, level: number) => void
   onNavigate: (path: string) => void
 }) {
+  const { t } = useTranslation()
   const { pathname } = useLocation()
   const active = isActive(pathname, item)
   const hasChildren = !!item.children?.length
@@ -111,7 +114,8 @@ function ExpandedMenuItem({
         )}
       >
         {item.icon && <item.icon className="size-4 shrink-0" />}
-        <span className="flex-1 truncate text-left">{item.title}</span>
+        {/* 膨胀红线：英/泰译文可能超宽——truncate + title 悬停可读全文 */}
+        <span className="flex-1 truncate text-left" title={t(item.title)}>{t(item.title)}</span>
         {badge != null && (
           <Badge
             variant={pathname === item.path ? "secondary" : "destructive"}
@@ -138,7 +142,8 @@ function ExpandedMenuItem({
         )}
       >
         {item.icon && <item.icon className="size-4 shrink-0" />}
-        <span className="flex-1 truncate text-left">{item.title}</span>
+        {/* 膨胀红线：英/泰译文可能超宽——truncate + title 悬停可读全文 */}
+        <span className="flex-1 truncate text-left" title={t(item.title)}>{t(item.title)}</span>
         {badge != null && (
           <Badge variant="destructive" className="h-4.5 min-w-4.5 rounded-full px-1.5 text-[10px]">
             {badge}
@@ -172,6 +177,7 @@ function ExpandedMenuItem({
 }
 
 export function SidebarMenu({ items, collapsed }: SidebarMenuProps) {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const accordionMenu = useAppStore((s) => s.accordionMenu)
@@ -223,7 +229,7 @@ export function SidebarMenu({ items, collapsed }: SidebarMenuProps) {
                     )}
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="right">{item.title}</TooltipContent>
+                <TooltipContent side="right">{t(item.title)}</TooltipContent>
               </Tooltip>
             )
           }
@@ -246,7 +252,7 @@ export function SidebarMenu({ items, collapsed }: SidebarMenuProps) {
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent side="right" align="start" className="min-w-40">
-                <DropdownMenuLabel>{item.title}</DropdownMenuLabel>
+                <DropdownMenuLabel>{t(item.title)}</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <CollapsedSubMenu items={item.children} onNavigate={navigate} />
               </DropdownMenuContent>

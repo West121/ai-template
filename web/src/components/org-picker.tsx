@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { useTranslation } from "react-i18next"
 import {
   Building2,
   ChevronRight,
@@ -110,14 +111,15 @@ export interface OrgPickerProps {
 export function OrgPicker({
   open,
   onOpenChange,
-  title = "选择组织对象",
+  title,
   multiple = true,
   types,
   value,
   onConfirm,
 }: OrgPickerProps) {
+  const { t } = useTranslation()
   const allowedTypes = types && types.length ? types : (["USER", "DEPT", "ROLE"] as OrgRefType[])
-  const allowedTabs = allowedTypes.map((t) => TAB_BY_TYPE[t])
+  const allowedTabs = allowedTypes.map((ty) => TAB_BY_TYPE[ty])
   const [tab, setTab] = useState<OrgTab>(allowedTabs[0])
   const [keyword, setKeyword] = useState("")
   const [selected, setSelected] = useState<OrgRef[]>(value)
@@ -241,14 +243,14 @@ export function OrgPicker({
           <Input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索姓名 / 账号 / 工号 / 手机号"
+            placeholder={t("搜索姓名 / 账号 / 工号 / 手机号")}
             className="h-8 pl-8 text-sm"
           />
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         {users.length === 0 && !loading
-          ? emptyHint("未找到匹配成员")
+          ? emptyHint(t("未找到匹配成员"))
           : users.map((user) => {
               const checked = isChecked("USER", user.id)
               return (
@@ -321,7 +323,7 @@ export function OrgPicker({
             <Building2 className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
             <span className="min-w-0 flex-1 truncate text-sm">{node.name}</span>
             {node.userCount != null && (
-              <span className="text-xs text-muted-foreground">{node.userCount} 人</span>
+              <span className="text-xs text-muted-foreground">{node.userCount} {t("人")}</span>
             )}
           </div>
           {hasChildren && isOpen && renderDeptNodes(node.children!, depth + 1)}
@@ -331,14 +333,14 @@ export function OrgPicker({
 
   const renderDeptTab = () => (
     <div className="min-h-0 flex-1 overflow-y-auto p-2">
-      {depts.length === 0 && !loading ? emptyHint("暂无部门数据") : renderDeptNodes(depts, 0)}
+      {depts.length === 0 && !loading ? emptyHint(t("暂无部门数据")) : renderDeptNodes(depts, 0)}
     </div>
   )
 
   const renderRoleTab = () => (
     <div className="min-h-0 flex-1 overflow-y-auto p-2">
       {roles.length === 0 && !loading
-        ? emptyHint("暂无角色数据")
+        ? emptyHint(t("暂无角色数据"))
         : roles.map((role) => {
             const checked = isChecked("ROLE", role.id)
             return (
@@ -355,7 +357,7 @@ export function OrgPicker({
                 <ShieldCheck className="size-4 shrink-0 text-violet-600 dark:text-violet-400" />
                 <span className="min-w-0 flex-1 truncate text-sm">{role.name}</span>
                 <span className="text-xs text-muted-foreground">
-                  {SCOPE_LABELS[role.dataScope] ?? role.dataScope}
+                  {t(SCOPE_LABELS[role.dataScope] ?? role.dataScope)}
                 </span>
               </button>
             )
@@ -367,13 +369,15 @@ export function OrgPicker({
     <Modal
       open={open}
       onOpenChange={onOpenChange}
-      title={title}
+      title={title ?? t("选择组织对象")}
       description={
         allowedTypes.length === 1
-          ? `选择${orgTypeMeta[allowedTypes[0]].label}`
+          ? t("选择{{label}}", { label: t(orgTypeMeta[allowedTypes[0]].label) })
           : multiple
-            ? `可混合选择${allowedTypes.map((t) => orgTypeMeta[t].label).join("、")}`
-            : "单选：点选即替换当前值"
+            ? t("可混合选择{{labels}}", {
+                labels: allowedTypes.map((ty) => t(orgTypeMeta[ty].label)).join("、"),
+              })
+            : t("单选：点选即替换当前值")
       }
       width={760}
       height={560}
@@ -381,10 +385,10 @@ export function OrgPicker({
       footer={
         <>
           <span className="mr-auto text-xs text-muted-foreground">
-            已选 <span className="font-semibold text-primary">{selected.length}</span> 项
+            {t("已选")} <span className="font-semibold text-primary">{selected.length}</span> {t("项")}
           </span>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            取消
+            {t("取消")}
           </Button>
           <Button
             onClick={() => {
@@ -392,7 +396,7 @@ export function OrgPicker({
               onOpenChange(false)
             }}
           >
-            确定
+            {t("确定")}
           </Button>
         </>
       }
@@ -409,19 +413,19 @@ export function OrgPicker({
               {allowedTabs.includes("user") && (
                 <TabsTrigger value="user" className="gap-1.5">
                   <UserRound className="size-3.5" />
-                  成员
+                  {t("成员")}
                 </TabsTrigger>
               )}
               {allowedTabs.includes("dept") && (
                 <TabsTrigger value="dept" className="gap-1.5">
                   <Building2 className="size-3.5" />
-                  部门
+                  {t("部门")}
                 </TabsTrigger>
               )}
               {allowedTabs.includes("role") && (
                 <TabsTrigger value="role" className="gap-1.5">
                   <ShieldCheck className="size-3.5" />
-                  角色
+                  {t("角色")}
                 </TabsTrigger>
               )}
             </TabsList>
@@ -433,12 +437,12 @@ export function OrgPicker({
             <div className="flex size-12 items-center justify-center rounded-full bg-muted">
               <WifiOff className="size-5 text-muted-foreground" />
             </div>
-            <div className="text-sm font-medium">后端未启动</div>
+            <div className="text-sm font-medium">{t("后端未启动")}</div>
             <p className="text-xs text-muted-foreground">
-              无法连接后端服务，组织数据（成员 / 部门 / 角色）暂不可用
+              {t("无法连接后端服务，组织数据（成员 / 部门 / 角色）暂不可用")}
             </p>
             <Button variant="outline" size="sm" onClick={() => loadAll(keyword.trim())}>
-              重试
+              {t("重试")}
             </Button>
           </div>
         ) : (
@@ -454,7 +458,7 @@ export function OrgPicker({
       <aside className="flex w-60 shrink-0 flex-col border-l bg-muted/20">
         <div className="flex shrink-0 items-center justify-between border-b px-3 py-2">
           <span className="text-xs text-muted-foreground">
-            已选 <span className="font-semibold text-primary">{selected.length}</span> 项
+            {t("已选")} <span className="font-semibold text-primary">{selected.length}</span> {t("项")}
           </span>
           {selected.length > 0 && (
             <Button
@@ -463,16 +467,16 @@ export function OrgPicker({
               className="h-6 px-1.5 text-xs text-muted-foreground"
               onClick={() => setSelected([])}
             >
-              清空
+              {t("清空")}
             </Button>
           )}
         </div>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
           {grouped.length === 0 ? (
             <p className="pt-8 text-center text-xs text-muted-foreground">
-              尚未选择
+              {t("尚未选择")}
               <br />
-              从左侧列表勾选成员、部门或角色
+              {t("从左侧列表勾选成员、部门或角色")}
             </p>
           ) : (
             grouped.map(({ type, refs }) => {
@@ -480,7 +484,7 @@ export function OrgPicker({
               return (
                 <div key={type} className="space-y-1.5">
                   <div className="text-xs text-muted-foreground">
-                    {meta.label}（{refs.length}）
+                    {t(meta.label)}（{refs.length}）
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {refs.map((ref) => (
@@ -525,12 +529,13 @@ export interface OrgPickerFieldProps {
 /** 表单字段样式的触发器：chips 带类型图标与配色，点击打开选择弹窗 */
 export function OrgPickerField({
   value,
-  placeholder = "点击选择成员 / 部门 / 角色",
+  placeholder,
   multiple,
   onOpen,
   onRemove,
   className,
 }: OrgPickerFieldProps) {
+  const { t } = useTranslation()
   return (
     <button
       type="button"
@@ -541,7 +546,7 @@ export function OrgPickerField({
       )}
     >
       {value.length === 0 ? (
-        <span className="text-muted-foreground">{placeholder}</span>
+        <span className="text-muted-foreground">{placeholder ?? t("点击选择成员 / 部门 / 角色")}</span>
       ) : (
         value.map((ref) => {
           const meta = orgTypeMeta[ref.type]

@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from "react"
 import { AlertTriangle, RotateCw } from "lucide-react"
+import i18n from "@/lib/i18n"
 
 interface Props {
   children: ReactNode
@@ -37,7 +38,7 @@ export class ErrorBoundary extends Component<Props, State> {
         <div className="m-2 rounded-md border border-destructive/40 bg-destructive/5 p-4 text-sm">
           <div className="mb-1 flex items-center gap-1.5 font-medium text-destructive">
             <AlertTriangle className="size-4" />
-            此区域渲染出错，已隔离以免整页崩溃
+            {i18n.t("此区域渲染出错，已隔离以免整页崩溃")}
           </div>
           <p className="mb-2 break-all text-xs text-muted-foreground">{this.state.error.message}</p>
           <button
@@ -45,7 +46,7 @@ export class ErrorBoundary extends Component<Props, State> {
             onClick={this.reset}
             className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-muted"
           >
-            <RotateCw className="size-3" /> 重试
+            <RotateCw className="size-3" /> {i18n.t("重试")}
           </button>
         </div>
       )

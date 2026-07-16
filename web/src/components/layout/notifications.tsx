@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 import { Bell, CheckCheck, FileCheck2, Megaphone, MessageSquare } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -34,6 +35,7 @@ const typeMeta = {
 } as const
 
 export function Notifications() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const [notices, setNotices] = useState(initialNotices)
   const [tab, setTab] = useState<keyof typeof typeMeta>("notice")
@@ -63,7 +65,7 @@ export function Notifications() {
                 const count = notices.filter((n) => n.type === key && !n.read).length
                 return (
                   <TabsTrigger key={key} value={key} className="flex-1">
-                    {typeMeta[key].label}
+                    {t(typeMeta[key].label)}
                     {count > 0 && <span className="ml-1 text-xs text-destructive">({count})</span>}
                   </TabsTrigger>
                 )
@@ -73,7 +75,7 @@ export function Notifications() {
           <ScrollArea className="h-72">
             {list.length === 0 ? (
               <div className="flex h-72 items-center justify-center text-sm text-muted-foreground">
-                暂无{typeMeta[tab].label}
+                {t("暂无{{type}}", { type: t(typeMeta[tab].label) })}
               </div>
             ) : (
               <div className="divide-y">
@@ -116,11 +118,11 @@ export function Notifications() {
               className="h-7 gap-1 text-xs text-muted-foreground"
               onClick={() => {
                 setNotices((prev) => prev.map((n) => ({ ...n, read: true })))
-                toast.success("已全部标记为已读")
+                toast.success(t("已全部标记为已读"))
               }}
             >
               <CheckCheck className="size-3.5" />
-              全部已读
+              {t("全部已读")}
             </Button>
             <Button
               variant="ghost"
@@ -128,7 +130,7 @@ export function Notifications() {
               className="h-7 text-xs text-muted-foreground"
               onClick={() => navigate("/workflow/tasks")}
             >
-              查看全部
+              {t("查看全部")}
             </Button>
           </div>
         </Tabs>

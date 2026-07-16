@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { useSearchParams } from "react-router-dom"
+import { useTranslation } from "react-i18next"
 import { cn } from "@/lib/utils"
 import { api, type PageResult } from "@/lib/api"
 import { PageHeader } from "@/components/page-header"
@@ -31,6 +32,7 @@ function isTabValue(v: string | null): v is TabValue {
 }
 
 export default function WorkflowTasksPage() {
+  const { t } = useTranslation()
   const [searchParams, setSearchParams] = useSearchParams()
   const offline = useAuthStore((s) => s.offline)
   const activeAssignmentId = useAuthStore((s) => s.activeAssignmentId)
@@ -92,8 +94,8 @@ export default function WorkflowTasksPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="我的审批"
-        description="待办、待阅、已办、我发起、草稿与委托规则统一入口"
+        title={t("我的审批")}
+        description={t("待办、待阅、已办、我发起、草稿与委托规则统一入口")}
       />
 
       <Tabs value={tab} onValueChange={onTabChange}>
@@ -103,7 +105,7 @@ export default function WorkflowTasksPage() {
               (value === "todo" && !!todoCount) || (value === "cc" && !!ccUnread)
             return (
               <TabsTrigger key={value} value={value} className="flex-none gap-1.5">
-                {TAB_LABELS[value]}
+                {t(TAB_LABELS[value])}
                 {dot && (
                   <span
                     className={cn(

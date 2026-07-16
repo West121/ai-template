@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
+import { useTranslation } from "react-i18next"
 import type { ColumnDef } from "@tanstack/react-table"
 import { ShieldAlert, SquarePen, Undo2 } from "lucide-react"
 import { toast } from "sonner"
@@ -16,6 +17,7 @@ import { useDebounced, useServerPage } from "@/lib/use-server-page"
 
 /** 我发起的列表（我的审批「我发起」Tab 内容） */
 export function MineList() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const [canceling, setCanceling] = useState<WfMyInstance | null>(null)
   const [cancelSubmitting, setCancelSubmitting] = useState(false)
@@ -35,47 +37,47 @@ export function MineList() {
     setCancelSubmitting(true)
     try {
       await api(`/api/wf/instances/${canceling.id}/cancel`, { method: "POST" })
-      toast.success(`「${canceling.title}」已撤销`)
+      toast.success(t("「{{title}}」已撤销", { title: canceling.title }))
       setCanceling(null)
       reload()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "撤销失败")
+      toast.error(err instanceof Error ? err.message : t("撤销失败"))
     } finally {
       setCancelSubmitting(false)
     }
-  }, [canceling, reload])
+  }, [canceling, reload, t])
 
   const columns = useMemo<ColumnDef<WfMyInstance, unknown>[]>(
     () => [
       {
         accessorKey: "title",
-        meta: { title: "标题" },
-        header: () => <span>标题</span>,
+        meta: { title: t("标题") },
+        header: () => <span>{t("标题")}</span>,
         cell: ({ row }) => <span className="font-medium">{row.original.title}</span>,
       },
       {
         accessorKey: "defName",
-        meta: { title: "流程" },
-        header: ({ column }) => <DataTableColumnHeader column={column} title="流程" />,
+        meta: { title: t("流程") },
+        header: ({ column }) => <DataTableColumnHeader column={column} title={t("流程")} />,
         cell: ({ row }) => <Badge variant="outline">{row.original.defName ?? "—"}</Badge>,
       },
       {
         accessorKey: "bizStatus",
-        meta: { title: "状态" },
-        header: () => <span>状态</span>,
+        meta: { title: t("状态") },
+        header: () => <span>{t("状态")}</span>,
         cell: ({ row }) => {
           const meta = WF_STATUS_META[row.original.bizStatus]
           return (
             <Badge variant="outline" className={meta?.className}>
-              {meta?.label ?? row.original.bizStatus}
+              {meta?.label ? t(meta.label) : row.original.bizStatus}
             </Badge>
           )
         },
       },
       {
         id: "currentNodes",
-        meta: { title: "当前节点" },
-        header: () => <span>当前节点</span>,
+        meta: { title: t("当前节点") },
+        header: () => <span>{t("当前节点")}</span>,
         cell: ({ row }) => (
           <span className="text-sm text-muted-foreground">
             {row.original.currentNodeNames?.length ? row.original.currentNodeNames.join("、") : "—"}
@@ -84,16 +86,16 @@ export function MineList() {
       },
       {
         accessorKey: "createdAt",
-        meta: { title: "发起时间" },
-        header: ({ column }) => <DataTableColumnHeader column={column} title="发起时间" />,
+        meta: { title: t("发起时间") },
+        header: ({ column }) => <DataTableColumnHeader column={column} title={t("发起时间")} />,
         cell: ({ row }) => (
           <span className="text-sm text-muted-foreground">{wfFormatTime(row.original.createdAt)}</span>
         ),
       },
       {
         accessorKey: "endedAt",
-        meta: { title: "结束时间" },
-        header: ({ column }) => <DataTableColumnHeader column={column} title="结束时间" />,
+        meta: { title: t("结束时间") },
+        header: ({ column }) => <DataTableColumnHeader column={column} title={t("结束时间")} />,
         cell: ({ row }) => (
           <span className="text-sm text-muted-foreground">{wfFormatTime(row.original.endedAt)}</span>
         ),
@@ -102,7 +104,7 @@ export function MineList() {
         id: "actions",
         enableSorting: false,
         enableHiding: false,
-        header: () => <span>操作</span>,
+        header: () => <span>{t("操作")}</span>,
         cell: ({ row }) =>
           row.original.canCancel ? (
             <Button
@@ -114,21 +116,21 @@ export function MineList() {
                 setCanceling(row.original)
               }}
             >
-              <Undo2 className="size-3.5" /> 撤销
+              <Undo2 className="size-3.5" /> {t("撤销")}
             </Button>
           ) : (
             <span className="text-xs text-muted-foreground">—</span>
           ),
       },
     ],
-    [],
+    [t],
   )
 
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
         <Button size="sm" className="gap-1.5" onClick={() => navigate("/workflow/start")}>
-          <SquarePen className="size-3.5" /> 发起申请
+          <SquarePen className="size-3.5" /> {t("发起申请")}
         </Button>
       </div>
 
@@ -140,7 +142,7 @@ export function MineList() {
             <ShieldAlert className="size-8 text-rose-500/60" />
             <div className="text-sm">{loadError}</div>
             <Button size="sm" variant="outline" onClick={reload}>
-              重试
+              {t("重试")}
             </Button>
           </CardContent>
         </Card>
@@ -150,11 +152,11 @@ export function MineList() {
           data={rows}
           loading={loading}
           searchKeys={["title", "defName"]}
-          searchPlaceholder="搜索标题 / 流程"
+          searchPlaceholder={t("搜索标题 / 流程")}
           serverSearch={{ keyword, onKeywordChange: setKeyword }}
           onRowClick={(row) => navigate(wfInstancePath(row))}
           onRefresh={reload}
-          exportFileName="我发起的"
+          exportFileName={t("我发起的")}
           serverPagination={{
             pageIndex: page.pageIndex,
             pageSize: page.pageSize,
@@ -168,7 +170,7 @@ export function MineList() {
       <Modal
         open={!!canceling}
         onOpenChange={(open) => !open && !cancelSubmitting && setCanceling(null)}
-        title="撤销流程"
+        title={t("撤销流程")}
         description={canceling?.title}
         width={420}
         resizable={false}
@@ -176,16 +178,16 @@ export function MineList() {
         footer={
           <>
             <Button variant="outline" onClick={() => setCanceling(null)} disabled={cancelSubmitting}>
-              取消
+              {t("取消")}
             </Button>
             <Button variant="destructive" onClick={() => void cancel()} disabled={cancelSubmitting}>
-              {cancelSubmitting ? "撤销中…" : "确认撤销"}
+              {cancelSubmitting ? t("撤销中…") : t("确认撤销")}
             </Button>
           </>
         }
       >
         <p className="text-sm text-muted-foreground">
-          撤销后流程立即终止，状态记为「已撤销」。确定要撤销这条申请吗？
+          {t("撤销后流程立即终止，状态记为「已撤销」。确定要撤销这条申请吗？")}
         </p>
       </Modal>
     </div>

@@ -1,4 +1,5 @@
 import { useRef, useState, type ChangeEvent, type DragEvent } from "react"
+import { useTranslation } from "react-i18next"
 import {
   CloudUpload,
   File as FileIcon,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
+import i18n from "@/lib/i18n"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -144,19 +146,20 @@ function xhrUpload<T>(
       opts.register(null)
       try {
         const body = JSON.parse(xhr.responseText) as Envelope<T>
-        if (body.code !== 0) reject(new Error(body.message ?? `上传失败（HTTP ${xhr.status}）`))
+        if (body.code !== 0)
+          reject(new Error(body.message ?? i18n.t("上传失败（HTTP {{status}}）", { status: xhr.status })))
         else resolve(body.data)
       } catch {
-        reject(new Error(`上传失败（HTTP ${xhr.status}）`))
+        reject(new Error(i18n.t("上传失败（HTTP {{status}}）", { status: xhr.status })))
       }
     }
     xhr.onerror = () => {
       opts.register(null)
-      reject(new Error("无法连接后端服务"))
+      reject(new Error(i18n.t("无法连接后端服务")))
     }
     xhr.onabort = () => {
       opts.register(null)
-      reject(new UploadAborted("已中断"))
+      reject(new UploadAborted(i18n.t("已中断")))
     }
     xhr.send(form)
   })
@@ -194,6 +197,7 @@ export function FileUploader({
   chunkSize = 2 * 1024 * 1024,
   className,
 }: FileUploaderProps) {
+  const { t } = useTranslation()
   const [tasks, setTasks] = useState<UploadTask[]>([])
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -290,7 +294,7 @@ export function FileUploader({
         patch(key, { status: "paused" })
         return
       }
-      patch(key, { status: "failed", error: err instanceof Error ? err.message : "上传失败" })
+      patch(key, { status: "failed", error: err instanceof Error ? err.message : t("上传失败") })
     }
   }
 
@@ -376,9 +380,11 @@ export function FileUploader({
         <div className="flex size-11 items-center justify-center rounded-full bg-primary/10">
           <CloudUpload className="size-5 text-primary" />
         </div>
-        <div className="text-sm font-medium">拖拽文件到此处，或点击选择</div>
+        <div className="text-sm font-medium">{t("拖拽文件到此处，或点击选择")}</div>
         <p className="text-xs text-muted-foreground">
-          单文件 ≤ {formatFileSize(chunkThreshold)} 直传；更大文件自动分片上传，支持秒传 / 断点续传 / 暂停继续
+          {t("单文件 ≤ {{size}} 直传；更大文件自动分片上传，支持秒传 / 断点续传 / 暂停继续", {
+            size: formatFileSize(chunkThreshold),
+          })}
         </p>
         <input
           ref={inputRef}
@@ -405,13 +411,13 @@ export function FileUploader({
                     <span className="truncate text-sm font-medium">{task.file.name}</span>
                     <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                       {formatFileSize(task.file.size)}
-                      {task.chunked && " · 分片"}
+                      {task.chunked && t(" · 分片")}
                     </span>
                   </div>
                   <Progress value={task.progress} className="h-1.5" />
                   <div className="flex items-center justify-between gap-2">
                     <span className={cn("text-xs", meta.className)}>
-                      {meta.label}
+                      {t(meta.label)}
                       {(task.status === "uploading" || task.status === "paused") && ` · ${task.progress}%`}
                     </span>
                     {task.error && (
@@ -427,7 +433,7 @@ export function FileUploader({
                           <Pause className="size-3.5" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>暂停</TooltipContent>
+                      <TooltipContent>{t("暂停")}</TooltipContent>
                     </Tooltip>
                   )}
                   {task.status === "paused" && (
@@ -437,7 +443,7 @@ export function FileUploader({
                           <Play className="size-3.5" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>继续（断点续传）</TooltipContent>
+                      <TooltipContent>{t("继续（断点续传）")}</TooltipContent>
                     </Tooltip>
                   )}
                   {task.status === "failed" && (
@@ -447,7 +453,7 @@ export function FileUploader({
                           <RotateCw className="size-3.5" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>重试</TooltipContent>
+                      <TooltipContent>{t("重试")}</TooltipContent>
                     </Tooltip>
                   )}
                   <Tooltip>
@@ -461,7 +467,7 @@ export function FileUploader({
                         <X className="size-3.5" />
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent>{busy ? "取消上传" : "移除"}</TooltipContent>
+                    <TooltipContent>{busy ? t("取消上传") : t("移除")}</TooltipContent>
                   </Tooltip>
                 </div>
               </div>

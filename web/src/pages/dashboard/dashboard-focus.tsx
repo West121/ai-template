@@ -3,6 +3,7 @@
  * 数据全部来自 useDashboardData（真实数据 + 离线兜底），概念稿的假数据不使用。明暗双主题均以 token 适配。
  */
 import { useNavigate } from "react-router-dom"
+import { useTranslation } from "react-i18next"
 import {
   AlarmClockCheck,
   CalendarDays,
@@ -65,7 +66,8 @@ function FocusCard({ className, children }: { className?: string; children: Reac
 
 /** 近 7 日审批处理量：自绘 SVG 折线 + 面积（无第三方库；空数据兜底） */
 function WeekChart({ data, max }: { data: WeekPoint[]; max: number }) {
-  if (data.length === 0) return <div className="py-10 text-center text-sm text-muted-foreground">暂无审批数据</div>
+  const { t } = useTranslation()
+  if (data.length === 0) return <div className="py-10 text-center text-sm text-muted-foreground">{t("暂无审批数据")}</div>
   const W = 720
   const padX = 40
   const top = 25
@@ -116,11 +118,12 @@ function WeekChart({ data, max }: { data: WeekPoint[]; max: number }) {
 }
 
 export function DashboardFocus() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const vm = useDashboardData()
 
-  const clockState = vm.hasCheckOut ? "今日已完成上下班打卡" : vm.hasCheckIn ? "别忘了下班打卡" : "今日还未打卡"
-  const clockChip = vm.hasCheckOut ? "打卡 · 已完成" : vm.hasCheckIn ? "打卡 · 待下班" : "打卡 · 待上班"
+  const clockState = vm.hasCheckOut ? t("今日已完成上下班打卡") : vm.hasCheckIn ? t("别忘了下班打卡") : t("今日还未打卡")
+  const clockChip = vm.hasCheckOut ? t("打卡 · 已完成") : vm.hasCheckIn ? t("打卡 · 待下班") : t("打卡 · 待上班")
 
   return (
     <div className="mx-auto max-w-6xl space-y-7">
@@ -128,9 +131,9 @@ export function DashboardFocus() {
       {vm.degraded && (
         <div className="flex items-center gap-2 rounded-2xl border border-dashed bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
           <CloudOff className="size-3.5 shrink-0" />
-          离线演示数据——启动后端并重新登录后展示真实数据
+          {t("离线演示数据——启动后端并重新登录后展示真实数据")}
           <Button variant="ghost" size="sm" className="ml-auto h-6 px-2 text-xs" onClick={() => void vm.load()}>
-            重试连接
+            {t("重试连接")}
           </Button>
         </div>
       )}
@@ -143,21 +146,21 @@ export function DashboardFocus() {
           </div>
           <div>
             <div className="text-2xl font-semibold tracking-tight">
-              {greetingByHour()}，{vm.userName} <span className="text-xl">☀️</span>
+              {t(greetingByHour())}，{vm.userName} <span className="text-xl">☀️</span>
             </div>
             <div className="mt-1 text-sm text-muted-foreground">
               {vm.userDept ? `${vm.userDept} · ` : ""}
-              {vm.userPost ?? "涵韬 OA"} ｜ 2026 年 7 月 13 日 星期一 · 多云转晴 26℃
+              {vm.userPost ?? t("涵韬 OA")} ｜ 2026 年 7 月 13 日 星期一 · 多云转晴 26℃
             </div>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className={cn("flex min-w-24 flex-col rounded-2xl border px-4 py-2", vm.hasCheckIn ? "border-primary/20 bg-primary/[0.06]" : "border-border")}>
-            <span className="text-[11px] text-muted-foreground">上班</span>
+            <span className="text-[11px] text-muted-foreground">{t("上班")}</span>
             <span className={cn("text-lg font-semibold tabular-nums", vm.hasCheckIn ? "text-primary" : "text-muted-foreground/60")}>{vm.checkInDisplay}</span>
           </div>
           <div className={cn("flex min-w-24 flex-col rounded-2xl border px-4 py-2", vm.hasCheckOut ? "border-primary/20 bg-primary/[0.06]" : "border-border")}>
-            <span className="text-[11px] text-muted-foreground">下班</span>
+            <span className="text-[11px] text-muted-foreground">{t("下班")}</span>
             <span className={cn("text-lg font-semibold tabular-nums", vm.hasCheckOut ? "text-primary" : "text-muted-foreground/60")}>{vm.checkOutDisplay}</span>
           </div>
           <Button
@@ -165,7 +168,7 @@ export function DashboardFocus() {
             onClick={() => void vm.handleCheck()}
             className="gap-2 rounded-full bg-gradient-to-br from-primary to-primary/85 px-5 shadow-md shadow-primary/25 hover:brightness-105"
           >
-            <Clock3 className="size-4" /> {vm.hasCheckIn ? "下班打卡" : "上班打卡"}
+            <Clock3 className="size-4" /> {vm.hasCheckIn ? t("下班打卡") : t("上班打卡")}
           </Button>
         </div>
       </header>
@@ -178,19 +181,19 @@ export function DashboardFocus() {
             <Sparkles className="size-6" />
           </div>
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-semibold uppercase tracking-widest text-primary/80">AI 今日速览</div>
+            <div className="text-xs font-semibold uppercase tracking-widest text-primary/80">{t("AI 今日速览")}</div>
             <p className="mt-2 max-w-[52em] text-[15px] leading-relaxed text-foreground/90">
-              {greetingByHour()}，{vm.userName}，你有 <b className="font-semibold text-primary">{vm.metrics.pendingCount} 项待办</b>
+              {t(greetingByHour())}，{vm.userName}，{t("你有")} <b className="font-semibold text-primary">{t("{{n}} 项待办", { n: vm.metrics.pendingCount })}</b>
               {vm.urgentCount > 0 && (
                 <>
-                  （其中 <span className="font-semibold text-rose-500">{vm.urgentCount} 项加急</span>需优先处理）
+                  {t("（其中")} <span className="font-semibold text-rose-500">{t("{{n}} 项加急", { n: vm.urgentCount })}</span>{t("需优先处理）")}
                 </>
               )}
-              、<b className="font-semibold text-primary">{vm.metrics.todayMeetings} 场会议</b>、
-              <b className="font-semibold text-primary">{vm.metrics.unreadAnnouncements} 条未读公告</b>
+              、<b className="font-semibold text-primary">{t("{{n}} 场会议", { n: vm.metrics.todayMeetings })}</b>、
+              <b className="font-semibold text-primary">{t("{{n}} 条未读公告", { n: vm.metrics.unreadAnnouncements })}</b>
               {vm.nextSchedule && (
                 <>
-                  ，下一场 <b className="font-semibold text-primary">{vm.nextSchedule.time} {vm.nextSchedule.title}</b>
+                  ，{t("下一场")} <b className="font-semibold text-primary">{vm.nextSchedule.time} {vm.nextSchedule.title}</b>
                 </>
               )}
               ；{clockState}。
@@ -198,12 +201,12 @@ export function DashboardFocus() {
             <div className="mt-4 flex flex-wrap gap-2.5">
               {vm.urgentCount > 0 && (
                 <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/70 px-3 py-1.5 text-xs font-medium text-muted-foreground">
-                  <i className="size-1.5 rounded-full bg-rose-500" />优先处理 · 加急 <span className="tabular-nums text-foreground">{vm.urgentCount}</span> 项
+                  <i className="size-1.5 rounded-full bg-rose-500" />{t("优先处理 · 加急")} <span className="tabular-nums text-foreground">{vm.urgentCount}</span> {t("项")}
                 </span>
               )}
               {vm.nextSchedule && (
                 <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/70 px-3 py-1.5 text-xs font-medium text-muted-foreground">
-                  <i className="size-1.5 rounded-full bg-sky-500" />下一场 · <span className="tabular-nums text-foreground">{vm.nextSchedule.time}</span> {vm.nextSchedule.title}
+                  <i className="size-1.5 rounded-full bg-sky-500" />{t("下一场 ·")} <span className="tabular-nums text-foreground">{vm.nextSchedule.time}</span> {vm.nextSchedule.title}
                 </span>
               )}
               <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/70 px-3 py-1.5 text-xs font-medium text-muted-foreground">
@@ -216,20 +219,20 @@ export function DashboardFocus() {
 
       {/* 今日聚焦 三栏 */}
       <section>
-        <h2 className="mb-4 px-1 text-base font-semibold tracking-tight">今日聚焦</h2>
+        <h2 className="mb-4 px-1 text-base font-semibold tracking-tight">{t("今日聚焦")}</h2>
         <div className="grid gap-5 lg:grid-cols-3">
           {/* 栏1 待我处理 */}
           <FocusCard>
             <div className="mb-4 flex items-center justify-between">
               <div className="flex items-center gap-2 text-[15px] font-semibold">
-                <Inbox className="size-[18px] text-primary" /> 待我处理
+                <Inbox className="size-[18px] text-primary" /> {t("待我处理")}
               </div>
               <button type="button" className="inline-flex items-center gap-0.5 text-xs text-muted-foreground transition-colors hover:text-primary" onClick={() => navigate("/workflow/tasks")}>
-                查看全部 <ChevronRight className="size-3.5" />
+                {t("查看全部")} <ChevronRight className="size-3.5" />
               </button>
             </div>
             {vm.pendingList.length === 0 ? (
-              <div className="py-10 text-center text-sm text-muted-foreground">暂无待办，休息一下吧</div>
+              <div className="py-10 text-center text-sm text-muted-foreground">{t("暂无待办，休息一下吧")}</div>
             ) : (
               <ul className="-mx-2">
                 {vm.pendingList.slice(0, 5).map((item: PendingItem, i) => (
@@ -245,7 +248,7 @@ export function DashboardFocus() {
                           <span className="truncate">{item.title}</span>
                           {item.urgent && (
                             <span className="inline-flex shrink-0 items-center gap-0.5 rounded-md bg-rose-500/12 px-1.5 py-0.5 text-[11px] font-semibold text-rose-600 dark:text-rose-300">
-                              <TriangleAlert className="size-3" />加急
+                              <TriangleAlert className="size-3" />{t("加急")}
                             </span>
                           )}
                         </span>
@@ -263,12 +266,12 @@ export function DashboardFocus() {
           <FocusCard>
             <div className="mb-4 flex items-center justify-between">
               <div className="flex items-center gap-2 text-[15px] font-semibold">
-                <CalendarDays className="size-[18px] text-primary" /> 今日日程
+                <CalendarDays className="size-[18px] text-primary" /> {t("今日日程")}
               </div>
-              <span className="text-xs text-muted-foreground"><span className="tabular-nums">{vm.todaySchedule.length}</span> 场</span>
+              <span className="text-xs text-muted-foreground"><span className="tabular-nums">{vm.todaySchedule.length}</span> {t("场")}</span>
             </div>
             {vm.todaySchedule.length === 0 ? (
-              <div className="py-10 text-center text-sm text-muted-foreground">今天没有日程安排</div>
+              <div className="py-10 text-center text-sm text-muted-foreground">{t("今天没有日程安排")}</div>
             ) : (
               <ul>
                 {vm.todaySchedule.map((item: ScheduleItem, i) => (
@@ -283,7 +286,7 @@ export function DashboardFocus() {
                       <div className="mt-0.5 text-xs text-muted-foreground">{item.place}</div>
                     </div>
                     <span className={cn("h-fit shrink-0 self-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold", item.done ? "bg-muted text-muted-foreground" : "bg-primary/12 text-primary")}>
-                      {item.done ? "已结束" : "待开始"}
+                      {item.done ? t("已结束") : t("待开始")}
                     </span>
                   </li>
                 ))}
@@ -295,21 +298,21 @@ export function DashboardFocus() {
           <FocusCard>
             <div className="mb-4 flex items-center justify-between">
               <div className="flex items-center gap-2 text-[15px] font-semibold">
-                <AlarmClockCheck className="size-[18px] text-primary" /> 出勤打卡
+                <AlarmClockCheck className="size-[18px] text-primary" /> {t("出勤打卡")}
               </div>
-              <span className={cn("text-xs font-medium", vm.hasCheckIn ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>{vm.hasCheckIn ? "正常" : "待打卡"}</span>
+              <span className={cn("text-xs font-medium", vm.hasCheckIn ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>{vm.hasCheckIn ? t("正常") : t("待打卡")}</span>
             </div>
             <div className="flex items-stretch gap-3">
               <div className="flex-1 rounded-2xl bg-primary/[0.05] py-4 text-center">
-                <div className="text-xs text-muted-foreground">上班</div>
+                <div className="text-xs text-muted-foreground">{t("上班")}</div>
                 <div className={cn("my-1 text-2xl font-bold tabular-nums", vm.hasCheckIn ? "text-primary" : "text-muted-foreground/50")}>{vm.checkInDisplay}</div>
-                <div className={cn("text-[11px] font-semibold", vm.hasCheckIn ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>{vm.hasCheckIn ? "已打卡" : "待打卡"}</div>
+                <div className={cn("text-[11px] font-semibold", vm.hasCheckIn ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>{vm.hasCheckIn ? t("已打卡") : t("待打卡")}</div>
               </div>
               <div className="w-px self-stretch bg-border" />
               <div className="flex-1 rounded-2xl bg-primary/[0.05] py-4 text-center">
-                <div className="text-xs text-muted-foreground">下班</div>
+                <div className="text-xs text-muted-foreground">{t("下班")}</div>
                 <div className={cn("my-1 text-2xl font-bold tabular-nums", vm.hasCheckOut ? "text-primary" : "text-muted-foreground/50")}>{vm.checkOutDisplay}</div>
-                <div className={cn("text-[11px] font-semibold", vm.hasCheckOut ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>{vm.hasCheckOut ? "已打卡" : "待打卡"}</div>
+                <div className={cn("text-[11px] font-semibold", vm.hasCheckOut ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>{vm.hasCheckOut ? t("已打卡") : t("待打卡")}</div>
               </div>
             </div>
             <Button
@@ -317,13 +320,13 @@ export function DashboardFocus() {
               onClick={() => void vm.handleCheck()}
               className="mt-4 w-full gap-2 rounded-full bg-gradient-to-br from-primary to-primary/85 shadow-md shadow-primary/25 hover:brightness-105"
             >
-              <CheckCircle2 className="size-4" /> {vm.hasCheckIn ? "下班打卡" : "上班打卡"}
+              <CheckCircle2 className="size-4" /> {vm.hasCheckIn ? t("下班打卡") : t("上班打卡")}
             </Button>
             <div className="mt-4 flex items-center gap-3.5">
               <AttendRing days={vm.metrics.monthAttendanceDays} />
               <div className="text-[12.5px] leading-relaxed text-muted-foreground">
-                本月出勤 <b className="tabular-nums text-foreground">{vm.metrics.monthAttendanceDays}</b> 天
-                <br />今日会议 <b className="tabular-nums text-foreground">{vm.metrics.todayMeetings}</b> 场
+                {t("本月出勤")} <b className="tabular-nums text-foreground">{vm.metrics.monthAttendanceDays}</b> {t("天")}
+                <br />{t("今日会议")} <b className="tabular-nums text-foreground">{vm.metrics.todayMeetings}</b> {t("场")}
               </div>
             </div>
           </FocusCard>
@@ -345,9 +348,9 @@ export function DashboardFocus() {
             <span>
               <span className="flex items-baseline gap-1">
                 <span className="text-2xl font-bold tabular-nums leading-none">{stat.value}</span>
-                <span className="text-xs font-medium text-muted-foreground">{stat.unit}</span>
+                <span className="text-xs font-medium text-muted-foreground">{t(stat.unit)}</span>
               </span>
-              <span className="mt-1.5 block text-[12.5px] text-muted-foreground">{stat.label}</span>
+              <span className="mt-1.5 block text-[12.5px] text-muted-foreground">{t(stat.label)}</span>
             </span>
           </button>
         ))}
@@ -358,10 +361,10 @@ export function DashboardFocus() {
         <FocusCard>
           <div className="mb-4 flex items-center justify-between">
             <div className="flex items-center gap-2 text-[15px] font-semibold">
-              <TrendingUp className="size-[18px] text-primary" /> 近 7 日审批处理量
+              <TrendingUp className="size-[18px] text-primary" /> {t("近 7 日审批处理量")}
             </div>
             <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <i className="inline-block h-[3px] w-4 rounded-sm bg-primary" />处理量（件）
+              <i className="inline-block h-[3px] w-4 rounded-sm bg-primary" />{t("处理量（件）")}
             </span>
           </div>
           <WeekChart data={vm.weekData} max={vm.weekMax} />
@@ -369,7 +372,7 @@ export function DashboardFocus() {
 
         <FocusCard>
           <div className="mb-4 flex items-center gap-2 text-[15px] font-semibold">
-            <Zap className="size-[18px] text-primary" /> 快捷发起
+            <Zap className="size-[18px] text-primary" /> {t("快捷发起")}
           </div>
           <div className="grid grid-cols-3 gap-3">
             {quickActions.map((action) => (
@@ -382,7 +385,7 @@ export function DashboardFocus() {
                 <span className={cn("grid size-11 place-items-center rounded-2xl", action.tone)}>
                   <action.icon className="size-[22px]" />
                 </span>
-                <span className="text-center text-xs text-muted-foreground">{action.label}</span>
+                <span className="text-center text-xs text-muted-foreground">{t(action.label)}</span>
               </button>
             ))}
           </div>
@@ -393,14 +396,14 @@ export function DashboardFocus() {
       <FocusCard>
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2 text-[15px] font-semibold">
-            <Megaphone className="size-[18px] text-primary" /> 公告通知
+            <Megaphone className="size-[18px] text-primary" /> {t("公告通知")}
           </div>
           <button type="button" className="inline-flex items-center gap-0.5 text-xs text-muted-foreground transition-colors hover:text-primary" onClick={() => navigate("/announcement")}>
-            全部公告 <ChevronRight className="size-3.5" />
+            {t("全部公告")} <ChevronRight className="size-3.5" />
           </button>
         </div>
         {vm.announcements.length === 0 ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">暂无公告</div>
+          <div className="py-8 text-center text-sm text-muted-foreground">{t("暂无公告")}</div>
         ) : (
           <ul className="-mx-2">
             {vm.announcements.map((item) => (
@@ -413,7 +416,7 @@ export function DashboardFocus() {
                   <span className={cn("size-1.5 shrink-0 rounded-full", item.top ? "bg-primary" : "bg-muted-foreground/30")} />
                   <span className="flex min-w-0 flex-1 items-center gap-1.5">
                     <span className="truncate text-[13.5px] font-medium">{item.title}</span>
-                    {item.top && <span className="shrink-0 rounded-md bg-rose-500/12 px-1.5 py-0.5 text-[10.5px] font-semibold text-rose-600 dark:text-rose-300">置顶</span>}
+                    {item.top && <span className="shrink-0 rounded-md bg-rose-500/12 px-1.5 py-0.5 text-[10.5px] font-semibold text-rose-600 dark:text-rose-300">{t("置顶")}</span>}
                   </span>
                   <span className="shrink-0 text-xs text-muted-foreground">{item.dept} · <span className="tabular-nums">{item.date}</span></span>
                 </button>
@@ -436,6 +439,7 @@ const KPI_TONE: Record<string, string> = {
 
 /** 本月出勤进度环（按 22 个工作日估算，仅视觉参考） */
 function AttendRing({ days }: { days: number }) {
+  const { t } = useTranslation()
   const pct = Math.max(0, Math.min(1, days / 22))
   const r = 32
   const circ = 2 * Math.PI * r
@@ -458,7 +462,7 @@ function AttendRing({ days }: { days: number }) {
         {days}
       </text>
       <text x="40" y="53" textAnchor="middle" className="fill-muted-foreground" fontSize={10}>
-        天
+        {t("天")}
       </text>
     </svg>
   )

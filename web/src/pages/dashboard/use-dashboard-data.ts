@@ -4,6 +4,7 @@
  * 视图只读取本 hook 的派生结果，不各自再拉一遍——两个风格切换不重复请求（每次只渲染其一）。
  */
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { useTranslation } from "react-i18next"
 import {
   CalendarClock,
   FileCheck2,
@@ -155,6 +156,7 @@ export interface DashboardVM {
 }
 
 export function useDashboardData(): DashboardVM {
+  const { t } = useTranslation()
   const user = useAuthStore((s) => s.user)
   const offline = useAuthStore((s) => s.offline)
   const activeAssignmentId = useAuthStore((s) => s.activeAssignmentId)
@@ -179,7 +181,7 @@ export function useDashboardData(): DashboardVM {
       setCheckIn(d.todayCheckIn ?? null)
     } catch (err) {
       if (err instanceof NetworkError) setDegraded(true)
-      else toast.error(err instanceof Error ? err.message : "工作台数据加载失败")
+      else toast.error(err instanceof Error ? err.message : t("工作台数据加载失败"))
     }
     try {
       const page = await api<PageResult<WfTaskItem>>("/api/wf/tasks/todo?pageNum=1&pageSize=5")
@@ -187,7 +189,7 @@ export function useDashboardData(): DashboardVM {
     } catch {
       /* 待办拉取失败：保持 0，不影响其它数据 */
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void load()
@@ -195,7 +197,7 @@ export function useDashboardData(): DashboardVM {
 
   const handleCheck = useCallback(async () => {
     if (useAuthStore.getState().offline || degraded) {
-      toast.success("打卡成功：17:58（离线演示）")
+      toast.success(t("打卡成功：17:58（离线演示）"))
       return
     }
     setChecking(true)
@@ -204,13 +206,13 @@ export function useDashboardData(): DashboardVM {
       const time = record.checkOut ?? record.checkIn
       setCheckIn(record.checkIn ?? null)
       setCheckOut(record.checkOut ?? null)
-      toast.success(`打卡成功：${time ?? ""}`)
+      toast.success(t("打卡成功：{{time}}", { time: time ?? "" }))
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "打卡失败")
+      toast.error(err instanceof Error ? err.message : t("打卡失败"))
     } finally {
       setChecking(false)
     }
-  }, [degraded])
+  }, [degraded, t])
 
   const metrics = useMemo(
     () => ({
@@ -290,7 +292,7 @@ export function useDashboardData(): DashboardVM {
   const checkOutDisplay = degraded ? "--:--" : (checkOut ?? "--:--")
 
   return {
-    userName: user?.name ?? "访客",
+    userName: user?.name ?? t("访客"),
     userDept: user?.dept,
     userPost: user?.post,
     degraded,

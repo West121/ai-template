@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next"
 import { Check, Monitor, Moon, RotateCcw, Sun } from "lucide-react"
 import { PRESET_COLORS } from "@/lib/theme"
 import { cn } from "@/lib/utils"
@@ -26,6 +27,7 @@ import { toast } from "sonner"
 
 /** 布局模式缩略图 */
 function LayoutPreview({ mode, active, onClick }: { mode: LayoutMode; active: boolean; onClick: () => void }) {
+  const { t } = useTranslation()
   const labels: Record<LayoutMode, string> = {
     vertical: "侧边布局",
     horizontal: "顶部布局",
@@ -66,7 +68,7 @@ function LayoutPreview({ mode, active, onClick }: { mode: LayoutMode; active: bo
         )}
       </div>
       <span className={cn("text-xs", active ? "font-medium text-primary" : "text-muted-foreground")}>
-        {labels[mode]}
+        {t(labels[mode])}
       </span>
     </button>
   )
@@ -74,6 +76,7 @@ function LayoutPreview({ mode, active, onClick }: { mode: LayoutMode; active: bo
 
 /** 标签页风格缩略图 */
 function TabStylePreview({ style, active, onClick }: { style: TabStyle; active: boolean; onClick: () => void }) {
+  const { t } = useTranslation()
   const labels: Record<TabStyle, string> = { default: "默认", chrome: "谷歌浏览器" }
   return (
     <button
@@ -98,7 +101,7 @@ function TabStylePreview({ style, active, onClick }: { style: TabStyle; active: 
         )}
       </div>
       <span className={cn("text-xs", active ? "font-medium text-primary" : "text-muted-foreground")}>
-        {labels[style]}
+        {t(labels[style])}
       </span>
     </button>
   )
@@ -124,13 +127,14 @@ function SwitchRow({
     "showTabs" | "showBreadcrumb" | "showFooter" | "accordionMenu" | "contentCompact" | "grayscale" | "colorWeak"
   >
 }) {
+  const { t } = useTranslation()
   const value = useAppStore((s) => s[settingKey])
   const updateSettings = useAppStore((s) => s.updateSettings)
   return (
     <div className="flex items-center justify-between py-2">
       <div>
-        <div className="text-sm">{label}</div>
-        {desc && <div className="text-xs text-muted-foreground">{desc}</div>}
+        <div className="text-sm">{t(label)}</div>
+        {desc && <div className="text-xs text-muted-foreground">{t(desc)}</div>}
       </div>
       <Switch checked={value} onCheckedChange={(checked) => updateSettings({ [settingKey]: checked })} />
     </div>
@@ -138,6 +142,7 @@ function SwitchRow({
 }
 
 export function SettingsDrawer() {
+  const { t } = useTranslation()
   const open = useUiStore((s) => s.settingsOpen)
   const setOpen = useUiStore((s) => s.setSettingsOpen)
   const layout = useAppStore((s) => s.layout)
@@ -154,13 +159,13 @@ export function SettingsDrawer() {
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetContent className="w-80 overflow-y-auto sm:max-w-80">
         <SheetHeader className="pb-0">
-          <SheetTitle>偏好设置</SheetTitle>
-          <SheetDescription>实时预览，配置持久化保存在本地</SheetDescription>
+          <SheetTitle>{t("偏好设置")}</SheetTitle>
+          <SheetDescription>{t("实时预览，配置持久化保存在本地")}</SheetDescription>
         </SheetHeader>
 
         <div className="space-y-5 px-4 pb-6">
           <section>
-            <Label className="text-xs text-muted-foreground">布局模式</Label>
+            <Label className="text-xs text-muted-foreground">{t("布局模式")}</Label>
             <div className="mt-2 flex gap-4">
               {(["vertical", "horizontal", "mixed"] as const).map((mode) => (
                 <LayoutPreview
@@ -176,7 +181,7 @@ export function SettingsDrawer() {
           <Separator />
 
           <section>
-            <Label className="text-xs text-muted-foreground">主题模式</Label>
+            <Label className="text-xs text-muted-foreground">{t("主题模式")}</Label>
             <div className="mt-2 grid grid-cols-3 gap-2">
               {themeModes.map((mode) => (
                 <button
@@ -191,7 +196,7 @@ export function SettingsDrawer() {
                   )}
                 >
                   <mode.icon className="size-4" />
-                  {mode.label}
+                  {t(mode.label)}
                 </button>
               ))}
             </div>
@@ -220,7 +225,7 @@ export function SettingsDrawer() {
           </section>
 
           <section>
-            <Label className="text-xs text-muted-foreground">主题色</Label>
+            <Label className="text-xs text-muted-foreground">{t("主题色")}</Label>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               {PRESET_COLORS.map((color) => (
                 <Tooltip key={color.value}>
@@ -234,7 +239,7 @@ export function SettingsDrawer() {
                       {primaryColor === color.value && <Check className="size-4 text-white" />}
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent>{color.name}</TooltipContent>
+                  <TooltipContent>{t(color.name)}</TooltipContent>
                 </Tooltip>
               ))}
               <Tooltip>
@@ -247,7 +252,7 @@ export function SettingsDrawer() {
                         : undefined
                     }
                   >
-                    自定
+                    {t("自定")}
                     <input
                       type="color"
                       value={primaryColor}
@@ -256,13 +261,13 @@ export function SettingsDrawer() {
                     />
                   </label>
                 </TooltipTrigger>
-                <TooltipContent>自定义主题色</TooltipContent>
+                <TooltipContent>{t("自定义主题色")}</TooltipContent>
               </Tooltip>
             </div>
           </section>
 
           <section>
-            <Label className="text-xs text-muted-foreground">圆角大小</Label>
+            <Label className="text-xs text-muted-foreground">{t("圆角大小")}</Label>
             <div className="mt-2 grid grid-cols-5 gap-2">
               {radiusOptions.map((option) => (
                 <button
@@ -285,7 +290,7 @@ export function SettingsDrawer() {
           <Separator />
 
           <section>
-            <Label className="text-xs text-muted-foreground">标签页风格</Label>
+            <Label className="text-xs text-muted-foreground">{t("标签页风格")}</Label>
             <div className="mt-2 grid grid-cols-2 gap-2">
               {(["default", "chrome"] as const).map((style) => (
                 <TabStylePreview
@@ -301,7 +306,7 @@ export function SettingsDrawer() {
           <Separator />
 
           <section>
-            <Label className="text-xs text-muted-foreground">界面功能</Label>
+            <Label className="text-xs text-muted-foreground">{t("界面功能")}</Label>
             <div className="mt-1 divide-y">
               <SwitchRow label="多标签页" settingKey="showTabs" />
               <SwitchRow label="面包屑导航" settingKey="showBreadcrumb" />
@@ -314,7 +319,7 @@ export function SettingsDrawer() {
           <Separator />
 
           <section>
-            <Label className="text-xs text-muted-foreground">辅助模式</Label>
+            <Label className="text-xs text-muted-foreground">{t("辅助模式")}</Label>
             <div className="mt-1 divide-y">
               <SwitchRow label="灰色模式" desc="哀悼日等特殊场景" settingKey="grayscale" />
               <SwitchRow label="色弱模式" settingKey="colorWeak" />
@@ -326,11 +331,11 @@ export function SettingsDrawer() {
             className="w-full gap-2"
             onClick={() => {
               resetSettings()
-              toast.success("已恢复默认设置")
+              toast.success(t("已恢复默认设置"))
             }}
           >
             <RotateCcw className="size-4" />
-            恢复默认
+            {t("恢复默认")}
           </Button>
         </div>
       </SheetContent>

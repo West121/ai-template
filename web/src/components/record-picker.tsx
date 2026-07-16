@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useTranslation } from "react-i18next"
 import { Check, ChevronLeft, ChevronRight, Inbox, Search, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Modal } from "@/components/modal"
@@ -46,7 +47,7 @@ export interface RecordPickerProps<T extends Record<string, unknown>> {
 export function RecordPicker<T extends Record<string, unknown>>({
   open,
   onOpenChange,
-  title = "选择记录",
+  title,
   description,
   data,
   columns,
@@ -58,6 +59,7 @@ export function RecordPicker<T extends Record<string, unknown>>({
   searchKeys,
   pageSize = 8,
 }: RecordPickerProps<T>) {
+  const { t } = useTranslation()
   const [keyword, setKeyword] = useState("")
   const [page, setPage] = useState(0)
   const [selected, setSelected] = useState<string[]>(value)
@@ -110,22 +112,25 @@ export function RecordPicker<T extends Record<string, unknown>>({
     <Modal
       open={open}
       onOpenChange={onOpenChange}
-      title={title}
-      description={description ?? `存储唯一字段「${idField}」· 展示名称字段「${labelField}」`}
+      title={title ?? t("选择记录")}
+      description={
+        description ??
+        t("存储唯一字段「{{idField}}」· 展示名称字段「{{labelField}}」", { idField, labelField })
+      }
       width={720}
       height={560}
       bodyClassName="flex flex-col gap-3 p-4"
       footer={
         <>
           <span className="mr-auto text-xs text-muted-foreground">
-            已选 <span className="font-semibold text-primary">{selected.length}</span>
-            {multiple ? " 条" : selected.length ? " 条" : "，请选择一条记录"}
+            {t("已选")} <span className="font-semibold text-primary">{selected.length}</span>
+            {multiple ? t(" 条") : selected.length ? t(" 条") : t("，请选择一条记录")}
           </span>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            取消
+            {t("取消")}
           </Button>
           <Button onClick={confirm} disabled={!multiple && selected.length === 0 && value.length === 0}>
-            确定
+            {t("确定")}
           </Button>
         </>
       }
@@ -139,7 +144,7 @@ export function RecordPicker<T extends Record<string, unknown>>({
             setKeyword(e.target.value)
             setPage(0)
           }}
-          placeholder={`搜索 ${keys.join(" / ")}`}
+          placeholder={t("搜索 {{keys}}", { keys: keys.join(" / ") })}
           className="h-8 pl-8 text-sm"
         />
       </div>
@@ -165,7 +170,7 @@ export function RecordPicker<T extends Record<string, unknown>>({
             className="h-6 px-1.5 text-xs text-muted-foreground"
             onClick={() => setSelected([])}
           >
-            清空
+            {t("清空")}
           </Button>
         </div>
       )}
@@ -181,7 +186,7 @@ export function RecordPicker<T extends Record<string, unknown>>({
                   {col.title}
                   {col.key === idField && (
                     <Badge variant="outline" className="ml-1.5 h-4 px-1 text-[9px] font-normal text-muted-foreground">
-                      唯一
+                      {t("唯一")}
                     </Badge>
                   )}
                 </th>
@@ -194,7 +199,7 @@ export function RecordPicker<T extends Record<string, unknown>>({
                 <td colSpan={columns.length + 1} className="h-40">
                   <div className="flex flex-col items-center justify-center gap-1.5 text-muted-foreground">
                     <Inbox className="size-8 opacity-30" />
-                    <span className="text-xs">未找到匹配记录</span>
+                    <span className="text-xs">{t("未找到匹配记录")}</span>
                   </div>
                 </td>
               </tr>
@@ -241,7 +246,8 @@ export function RecordPicker<T extends Record<string, unknown>>({
       {/* 分页 */}
       <div className="flex shrink-0 items-center justify-between text-xs text-muted-foreground">
         <span>
-          共 {filtered.length} 条{keyword && `（已过滤）`}
+          {t("共 {{count}} 条", { count: filtered.length })}
+          {keyword && t("（已过滤）")}
         </span>
         <span className="flex items-center gap-1">
           {page + 1} / {pageCount}
@@ -284,12 +290,13 @@ interface RecordPickerFieldProps {
 /** 表单字段样式的触发器：展示名称标签，存储层由调用方持有 id */
 export function RecordPickerField({
   labels,
-  placeholder = "点击选择",
+  placeholder,
   multiple,
   onOpen,
   onRemove,
   className,
 }: RecordPickerFieldProps) {
+  const { t } = useTranslation()
   return (
     <button
       type="button"
@@ -300,7 +307,7 @@ export function RecordPickerField({
       )}
     >
       {labels.length === 0 ? (
-        <span className="text-muted-foreground">{placeholder}</span>
+        <span className="text-muted-foreground">{placeholder ?? t("点击选择")}</span>
       ) : (
         labels.map(({ id, label }) => (
           <Badge key={id} variant="secondary" className="gap-1 pr-1 font-normal">

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
+import { useTranslation } from "react-i18next"
 import type { ColumnDef } from "@tanstack/react-table"
 import { ShieldAlert } from "lucide-react"
 import { DataTable } from "@/components/data-table/data-table"
@@ -20,6 +21,7 @@ const ACTION_META: Record<string, { label: string; className: string }> = {
 
 /** 已办列表（我的审批「已办」Tab 内容） */
 export function DoneList() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const [keyword, setKeyword] = useState("")
   const query = useDebounced(keyword.trim())
@@ -35,45 +37,45 @@ export function DoneList() {
     () => [
       {
         accessorKey: "instanceTitle",
-        meta: { title: "标题" },
-        header: () => <span>标题</span>,
+        meta: { title: t("标题") },
+        header: () => <span>{t("标题")}</span>,
         cell: ({ row }) => (
           <span className="font-medium">{row.original.instanceTitle ?? row.original.title ?? "—"}</span>
         ),
       },
       {
         accessorKey: "defName",
-        meta: { title: "流程" },
-        header: ({ column }) => <DataTableColumnHeader column={column} title="流程" />,
+        meta: { title: t("流程") },
+        header: ({ column }) => <DataTableColumnHeader column={column} title={t("流程")} />,
         cell: ({ row }) => <Badge variant="outline">{row.original.defName ?? "—"}</Badge>,
       },
       {
         accessorKey: "nodeName",
-        meta: { title: "处理节点" },
-        header: () => <span>处理节点</span>,
+        meta: { title: t("处理节点") },
+        header: () => <span>{t("处理节点")}</span>,
         cell: ({ row }) => (
           <span className="text-sm text-muted-foreground">{row.original.nodeName ?? "—"}</span>
         ),
       },
       {
         accessorKey: "action",
-        meta: { title: "处理结果" },
-        header: () => <span>处理结果</span>,
+        meta: { title: t("处理结果") },
+        header: () => <span>{t("处理结果")}</span>,
         cell: ({ row }) => {
           const action = row.original.action
           if (!action) return <span className="text-sm text-muted-foreground">—</span>
           const meta = ACTION_META[action]
           return (
             <Badge variant="outline" className={meta?.className}>
-              {meta?.label ?? action}
+              {meta?.label ? t(meta.label) : action}
             </Badge>
           )
         },
       },
       {
         accessorKey: "comment",
-        meta: { title: "审批意见" },
-        header: () => <span>审批意见</span>,
+        meta: { title: t("审批意见") },
+        header: () => <span>{t("审批意见")}</span>,
         cell: ({ row }) => (
           <span className="line-clamp-1 max-w-52 text-sm text-muted-foreground">
             {/* 意见升级富文本后列内展示纯文本摘要（存量纯文本幂等） */}
@@ -83,14 +85,14 @@ export function DoneList() {
       },
       {
         accessorKey: "createdAt",
-        meta: { title: "处理时间" },
-        header: ({ column }) => <DataTableColumnHeader column={column} title="处理时间" />,
+        meta: { title: t("处理时间") },
+        header: ({ column }) => <DataTableColumnHeader column={column} title={t("处理时间")} />,
         cell: ({ row }) => (
           <span className="text-sm text-muted-foreground">{wfFormatTime(row.original.createdAt)}</span>
         ),
       },
     ],
-    [],
+    [t],
   )
 
   return (
@@ -103,7 +105,7 @@ export function DoneList() {
             <ShieldAlert className="size-8 text-rose-500/60" />
             <div className="text-sm">{loadError}</div>
             <Button size="sm" variant="outline" onClick={reload}>
-              重试
+              {t("重试")}
             </Button>
           </CardContent>
         </Card>
@@ -113,11 +115,11 @@ export function DoneList() {
           data={rows}
           loading={loading}
           searchKeys={["instanceTitle", "defName", "nodeName"]}
-          searchPlaceholder="搜索标题 / 流程"
+          searchPlaceholder={t("搜索标题 / 流程")}
           serverSearch={{ keyword, onKeywordChange: setKeyword }}
           onRowClick={(row) => navigate(wfInstancePath(row))}
           onRefresh={reload}
-          exportFileName="我的已办"
+          exportFileName={t("我的已办")}
           serverPagination={{
             pageIndex: page.pageIndex,
             pageSize: page.pageSize,

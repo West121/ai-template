@@ -48,6 +48,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { useState, type ReactNode } from "react"
+import { useTranslation } from "react-i18next"
 import { ArrowLeft, CloudOff, GitBranch, History, RotateCw, Sparkles, ShieldAlert } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
@@ -173,9 +174,10 @@ export function ShellTimeline({
   meta: ShellTimelineMeta
   current?: { node?: string | null; assignee?: string | null }
 }) {
+  const { t } = useTranslation()
   const hasCurrent = !!current?.node
   if (items.length === 0 && !hasCurrent) {
-    return <div className="py-6 text-center text-sm text-muted-foreground">暂无流转记录</div>
+    return <div className="py-6 text-center text-sm text-muted-foreground">{t("暂无流转记录")}</div>
   }
   return (
     <div className="space-y-0 py-1">
@@ -196,7 +198,7 @@ export function ShellTimeline({
                 )}
               </div>
               <div className="mt-0.5 text-xs text-muted-foreground">
-                {item.actorName ?? "系统"} · {wfFormatTime(item.createdAt)}
+                {item.actorName ?? t("系统")} · {wfFormatTime(item.createdAt)}
               </div>
               {item.comment && (
                 <div className="mt-1 rounded bg-muted/60 px-2 py-1">
@@ -213,12 +215,12 @@ export function ShellTimeline({
           <div className="mt-1 size-[11px] shrink-0 animate-pulse rounded-full bg-primary motion-reduce:animate-none" />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium text-primary">进行中</span>
+              <span className="text-sm font-medium text-primary">{t("进行中")}</span>
               <Badge variant="outline" className="h-5 px-1.5 text-[11px] font-normal text-primary">
                 {current!.node}
               </Badge>
             </div>
-            {current?.assignee && <div className="mt-0.5 text-xs text-muted-foreground">{current.assignee} · 办理中</div>}
+            {current?.assignee && <div className="mt-0.5 text-xs text-muted-foreground">{current.assignee} · {t("办理中")}</div>}
           </div>
         </div>
       )}
@@ -239,6 +241,7 @@ function ShellLoading() {
 }
 
 function ShellError({ error, onBack, onRetry }: { error: string; onBack: () => void; onRetry?: () => void }) {
+  const { t } = useTranslation()
   const isNetwork = error === "network"
   const isNotFound = error === "notfound"
   return (
@@ -248,15 +251,15 @@ function ShellError({ error, onBack, onRetry }: { error: string; onBack: () => v
           {isNetwork ? <CloudOff className="size-5 text-muted-foreground" /> : <ShieldAlert className="size-8 text-rose-500/60" />}
         </div>
         <div className="text-sm font-medium">
-          {isNetwork ? "后端服务未启动" : isNotFound ? "记录不存在或已删除" : error}
+          {isNetwork ? t("后端服务未启动") : isNotFound ? t("记录不存在或已删除") : error}
         </div>
         <div className="flex gap-2">
           <Button size="sm" variant="outline" className="gap-1.5" onClick={onBack}>
-            <ArrowLeft className="size-3.5" /> 返回
+            <ArrowLeft className="size-3.5" /> {t("返回")}
           </Button>
           {onRetry && (
             <Button size="sm" className="gap-1.5" onClick={onRetry}>
-              <RotateCw className="size-3.5" /> 重试
+              <RotateCw className="size-3.5" /> {t("重试")}
             </Button>
           )}
         </div>
@@ -268,6 +271,7 @@ function ShellError({ error, onBack, onRetry }: { error: string; onBack: () => v
 /* ============================ 基座主体 ============================ */
 
 export function WorkflowDetailShell(p: WorkflowDetailShellProps) {
+  const { t } = useTranslation()
   const [tab, setTab] = useState("timeline")
 
   if (p.loading) return <ShellLoading />
@@ -284,7 +288,7 @@ export function WorkflowDetailShell(p: WorkflowDetailShellProps) {
         <CardContent className="space-y-3 px-4">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2">
-              <Button variant="ghost" size="icon" className="size-8 shrink-0" aria-label="返回" onClick={p.onBack}>
+              <Button variant="ghost" size="icon" className="size-8 shrink-0" aria-label={t("返回")} onClick={p.onBack}>
                 <ArrowLeft className="size-4.5" />
               </Button>
               <h1 className="truncate text-base font-semibold">{p.title}</h1>
@@ -300,11 +304,11 @@ export function WorkflowDetailShell(p: WorkflowDetailShellProps) {
               {/* 流程预测键（内建）：点击切到流程图 Tab 走图内连线预测（非独立弹窗） */}
               {p.flow.predict?.enabled && (
                 <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setTab("flow")}>
-                  <Sparkles className="size-3.5" /> 流程预测
+                  <Sparkles className="size-3.5" /> {t("流程预测")}
                 </Button>
               )}
               {p.onRefresh && (
-                <Button variant="ghost" size="icon" className="size-8" title="刷新" onClick={p.onRefresh}>
+                <Button variant="ghost" size="icon" className="size-8" title={t("刷新")} onClick={p.onRefresh}>
                   <RotateCw className="size-4" />
                 </Button>
               )}
@@ -332,12 +336,12 @@ export function WorkflowDetailShell(p: WorkflowDetailShellProps) {
             <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
               {p.currentNode && (
                 <span>
-                  <span className="text-muted-foreground">当前环节</span> <span className="font-medium">{p.currentNode}</span>
+                  <span className="text-muted-foreground">{t("当前环节")}</span> <span className="font-medium">{p.currentNode}</span>
                 </span>
               )}
               {p.currentAssignee && (
                 <span>
-                  <span className="text-muted-foreground">当前办理人</span> <span className="font-medium">{p.currentAssignee}</span>
+                  <span className="text-muted-foreground">{t("当前办理人")}</span> <span className="font-medium">{p.currentAssignee}</span>
                 </span>
               )}
             </div>
@@ -369,12 +373,12 @@ export function WorkflowDetailShell(p: WorkflowDetailShellProps) {
           <div className="flex flex-wrap items-center gap-2 border-b px-4 pt-3">
             <TabsList>
               <TabsTrigger value="timeline" className="gap-1.5">
-                <History className="size-3.5" /> 办理记录
+                <History className="size-3.5" /> {t("办理记录")}
                 {p.flow.timeline.length > 0 && <span className="text-xs text-muted-foreground">({p.flow.timeline.length})</span>}
               </TabsTrigger>
               <TabsTrigger value="flow" className="gap-1.5">
-                <GitBranch className="size-3.5 text-primary" /> 流程图
-                <span className="hidden text-[10px] text-muted-foreground sm:inline">· 回放 / 预测</span>
+                <GitBranch className="size-3.5 text-primary" /> {t("流程图")}
+                <span className="hidden text-[10px] text-muted-foreground sm:inline">{t("· 回放 / 预测")}</span>
               </TabsTrigger>
               {p.extraTabs?.map((t) => (
                 <TabsTrigger key={t.key} value={t.key} className="gap-1.5">

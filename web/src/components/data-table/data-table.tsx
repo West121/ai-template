@@ -35,6 +35,8 @@ import {
   Rows2,
   Settings2,
 } from "lucide-react"
+import { useTranslation } from "react-i18next"
+import i18n from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -113,14 +115,14 @@ export function selectionColumn<TData>(): ColumnDef<TData> {
       <Checkbox
         checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && "indeterminate")}
         onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
-        aria-label="全选"
+        aria-label={i18n.t("全选")}
       />
     ),
     cell: ({ row }) => (
       <Checkbox
         checked={row.getIsSelected()}
         onCheckedChange={(value) => row.toggleSelected(!!value)}
-        aria-label="选择行"
+        aria-label={i18n.t("选择行")}
         onClick={(e) => e.stopPropagation()}
       />
     ),
@@ -217,14 +219,14 @@ function exportCsv<TData>(table: TableInstance<TData>, fileName: string) {
   link.download = `${fileName}.csv`
   link.click()
   URL.revokeObjectURL(url)
-  toast.success(`已导出 ${rows.length} 条数据`)
+  toast.success(i18n.t("已导出 {{count}} 条数据", { count: rows.length }))
 }
 
 export function DataTable<TData>({
   columns: userColumns,
   data,
   searchKeys,
-  searchPlaceholder = "搜索…",
+  searchPlaceholder,
   filterSlot,
   actionSlot,
   batchSlot,
@@ -241,6 +243,7 @@ export function DataTable<TData>({
   serverSearch,
   serverPagination,
 }: DataTableProps<TData>) {
+  const { t } = useTranslation()
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
   const [rowSelection, setRowSelection] = useState({})
@@ -385,7 +388,7 @@ export function DataTable<TData>({
             onModeChange={setSearchMode}
             displayMode={searchDisplay}
             onDisplayModeChange={setSearchDisplay}
-            placeholder={searchPlaceholder}
+            placeholder={searchPlaceholder ?? t("搜索…")}
           />
         )}
         {advancedFilter && (
@@ -411,10 +414,10 @@ export function DataTable<TData>({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="none">不分组</SelectItem>
+              <SelectItem value="none">{t("不分组")}</SelectItem>
               {groupOptions.map((option) => (
                 <SelectItem key={option.id} value={option.id}>
-                  按{option.label}分组
+                  {t("按{{label}}分组", { label: option.label })}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -430,7 +433,7 @@ export function DataTable<TData>({
                   <RotateCw className={cn("size-4", loading && "animate-spin")} />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>刷新</TooltipContent>
+              <TooltipContent>{t("刷新")}</TooltipContent>
             </Tooltip>
           )}
           {exportFileName && (
@@ -440,7 +443,7 @@ export function DataTable<TData>({
                   <Download className="size-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>导出 CSV</TooltipContent>
+              <TooltipContent>{t("导出 CSV")}</TooltipContent>
             </Tooltip>
           )}
           <DropdownMenu>
@@ -452,13 +455,13 @@ export function DataTable<TData>({
                   </Button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
-              <TooltipContent>密度</TooltipContent>
+              <TooltipContent>{t("密度")}</TooltipContent>
             </Tooltip>
             <DropdownMenuContent align="end">
               <DropdownMenuRadioGroup value={density} onValueChange={(v) => setDensity(v as Density)}>
-                <DropdownMenuRadioItem value="compact">紧凑</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="default">默认</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="loose">宽松</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="compact">{t("紧凑")}</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="default">{t("默认")}</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="loose">{t("宽松")}</DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -471,10 +474,10 @@ export function DataTable<TData>({
                   </Button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
-              <TooltipContent>列设置</TooltipContent>
+              <TooltipContent>{t("列设置")}</TooltipContent>
             </Tooltip>
             <DropdownMenuContent align="end" className="w-40">
-              <DropdownMenuLabel className="text-xs">显示的列</DropdownMenuLabel>
+              <DropdownMenuLabel className="text-xs">{t("显示的列")}</DropdownMenuLabel>
               <DropdownMenuSeparator />
               {table
                 .getAllLeafColumns()
@@ -490,7 +493,7 @@ export function DataTable<TData>({
                   </DropdownMenuCheckboxItem>
                 ))}
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setColumnVisibility({})}>重置</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setColumnVisibility({})}>{t("重置")}</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
           <Tooltip>
@@ -499,7 +502,7 @@ export function DataTable<TData>({
                 {fullscreen ? <Minimize className="size-4" /> : <Maximize className="size-4" />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{fullscreen ? "退出全屏" : "全屏"}</TooltipContent>
+            <TooltipContent>{fullscreen ? t("退出全屏") : t("全屏")}</TooltipContent>
           </Tooltip>
         </div>
       </div>
@@ -509,7 +512,7 @@ export function DataTable<TData>({
         <div className="pointer-events-none fixed inset-x-0 bottom-8 z-50 flex justify-center">
           <div className="pointer-events-auto flex items-center gap-2.5 rounded-full border bg-background/95 py-1.5 pl-4 pr-1.5 shadow-lg backdrop-blur animate-in fade-in-0 slide-in-from-bottom-2">
             <span className="text-sm">
-              已选 <span className="font-semibold text-primary">{selectedRows.length}</span> 项
+              {t("已选")} <span className="font-semibold text-primary">{selectedRows.length}</span> {t("项")}
             </span>
             <span className="h-4 w-px bg-border" />
             {batchSlot?.(
@@ -522,7 +525,7 @@ export function DataTable<TData>({
               className="h-7 rounded-full px-2.5 text-xs text-muted-foreground"
               onClick={() => table.resetRowSelection()}
             >
-              取消
+              {t("取消")}
             </Button>
           </div>
         </div>
@@ -620,7 +623,7 @@ export function DataTable<TData>({
                 <TableCell colSpan={table.getVisibleLeafColumns().length} className="h-48">
                   <div className="flex flex-col items-center justify-center gap-2 text-muted-foreground">
                     <Inbox className="size-10 opacity-30" />
-                    <span className="text-sm">暂无数据</span>
+                    <span className="text-sm">{t("暂无数据")}</span>
                   </div>
                 </TableCell>
               </TableRow>
@@ -632,12 +635,14 @@ export function DataTable<TData>({
       {/* 分页 */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2.5">
         <div className="text-xs text-muted-foreground">
-          共 <span className="font-medium text-foreground">{total}</span> 条
-          {enableSelection && selectedRows.length > 0 && <span>，已选 {selectedRows.length} 条</span>}
+          {t("共")} <span className="font-medium text-foreground">{total}</span> {t("条")}
+          {enableSelection && selectedRows.length > 0 && (
+            <span>{t("，已选 {{count}} 条", { count: selectedRows.length })}</span>
+          )}
         </div>
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            每页
+            {t("每页")}
             <Select value={String(pageSize)} onValueChange={(v) => table.setPageSize(Number(v))}>
               <SelectTrigger size="sm" className="h-7 w-16 text-xs">
                 <SelectValue />
@@ -650,11 +655,11 @@ export function DataTable<TData>({
                 ))}
               </SelectContent>
             </Select>
-            条
+            {t("条")}
           </div>
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
             <span className="mr-1">
-              {pageCount === 0 ? 0 : pageIndex + 1} / {pageCount} 页
+              {pageCount === 0 ? 0 : pageIndex + 1} / {pageCount} {t("页")}
             </span>
             <Button
               variant="outline"

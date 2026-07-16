@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { useTranslation } from "react-i18next"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Eye, MailCheck, MailOpen, ShieldAlert } from "lucide-react"
 import { toast } from "sonner"
@@ -34,6 +35,7 @@ interface CcRow extends ApprovalRow {
 }
 
 export default function ApprovalCcPage() {
+  const { t } = useTranslation()
   const [rows, setRows] = useState<CcRow[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -61,11 +63,11 @@ export default function ApprovalCcPage() {
       syncBadge(page.list)
     } catch (err) {
       if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
+      else setLoadError(err instanceof Error ? err.message : t("加载失败"))
     } finally {
       setLoading(false)
     }
-  }, [syncBadge])
+  }, [syncBadge, t])
 
   useEffect(() => {
     if (offline) {
@@ -94,17 +96,17 @@ export default function ApprovalCcPage() {
       markReadLocal(row.id)
       try {
         await api(`/api/office/approvals/cc/${row.id}/read`, { method: "POST" })
-        if (withToast) toast.success(`已将「${row.title}」标记为已读`)
+        if (withToast) toast.success(t("已将「{{title}}」标记为已读", { title: row.title }))
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "标记已读失败")
+        toast.error(err instanceof Error ? err.message : t("标记已读失败"))
       }
     },
-    [markReadLocal],
+    [markReadLocal, t],
   )
 
   const handleMarkAllRead = async () => {
     if (unreadCount === 0) {
-      toast.info("没有未读的抄送")
+      toast.info(t("没有未读的抄送"))
       return
     }
     try {
@@ -114,9 +116,9 @@ export default function ApprovalCcPage() {
         syncBadge(next)
         return next
       })
-      toast.success(`已将 ${unreadCount} 条抄送全部标记为已读`)
+      toast.success(t("已将 {{count}} 条抄送全部标记为已读", { count: unreadCount }))
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "操作失败")
+      toast.error(err instanceof Error ? err.message : t("操作失败"))
     }
   }
 
@@ -153,7 +155,7 @@ export default function ApprovalCcPage() {
         accessorKey: "type",
         meta: { title: "类型" },
         header: () => <span>类型</span>,
-        cell: ({ row }) => <Badge variant="secondary">{typeLabel(row.original.type)}</Badge>,
+        cell: ({ row }) => <Badge variant="secondary">{t(typeLabel(row.original.type))}</Badge>,
       },
       {
         accessorKey: "applicant",
@@ -182,11 +184,11 @@ export default function ApprovalCcPage() {
         cell: ({ row }) =>
           row.original.readFlag ? (
             <Badge variant="outline" className="text-muted-foreground">
-              已读
+              {t("已读")}
             </Badge>
           ) : (
             <Badge variant="outline" className="border-blue-500/30 bg-blue-500/10 text-blue-600">
-              未读
+              {t("未读")}
             </Badge>
           ),
       },
@@ -199,7 +201,7 @@ export default function ApprovalCcPage() {
           <div className="flex gap-1">
             <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => handleView(row.original)}>
               <Eye className="size-3.5" />
-              查看
+              {t("查看")}
             </Button>
             {!row.original.readFlag && (
               <Button
@@ -209,24 +211,24 @@ export default function ApprovalCcPage() {
                 onClick={() => void markRead(row.original, true)}
               >
                 <MailOpen className="size-3.5" />
-                标记已读
+                {t("标记已读")}
               </Button>
             )}
           </div>
         ),
       },
     ],
-    [markRead, handleView],
+    [markRead, handleView, t],
   )
 
   return (
     <div className="space-y-4">
       <PageHeader
-        title="抄送我的"
+        title={t("抄送我的")}
         description={
           offline || loadError === "network"
-            ? "后端未连接——启动 server/ 后此页为抄送给您的真实审批单据"
-            : `共 ${rows.length} 条抄送，${unreadCount} 条未读`
+            ? t("后端未连接——启动 server/ 后此页为抄送给您的真实审批单据")
+            : t("共 {{total}} 条抄送，{{unread}} 条未读", { total: rows.length, unread: unreadCount })
         }
       />
 
@@ -238,7 +240,7 @@ export default function ApprovalCcPage() {
             <ShieldAlert className="size-8 text-rose-500/60" />
             <div className="text-sm">{loadError}</div>
             <Button size="sm" variant="outline" onClick={() => void load()}>
-              重试
+              {t("重试")}
             </Button>
           </CardContent>
         </Card>
@@ -249,12 +251,12 @@ export default function ApprovalCcPage() {
           loading={loading}
           onRefresh={() => void load()}
           searchKeys={["title", "applicant"]}
-          searchPlaceholder="搜索标题 / 申请人…"
-          exportFileName="抄送我的"
+          searchPlaceholder={t("搜索标题 / 申请人…")}
+          exportFileName={t("抄送我的")}
           actionSlot={
             <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => void handleMarkAllRead()}>
               <MailCheck className="size-3.5" />
-              全部已读
+              {t("全部已读")}
             </Button>
           }
         />
@@ -265,7 +267,7 @@ export default function ApprovalCcPage() {
           <DialogHeader>
             <DialogTitle>{viewRow?.title}</DialogTitle>
             <DialogDescription>
-              单号 {viewRow ? formatOrderNo(viewRow.id) : ""} · {typeLabel(viewRow?.type)} · 发起于{" "}
+              {t("单号")} {viewRow ? formatOrderNo(viewRow.id) : ""} · {t(typeLabel(viewRow?.type))} · {t("发起于")}{" "}
               {formatTime(viewRow?.createdAt)}
             </DialogDescription>
           </DialogHeader>
@@ -273,26 +275,26 @@ export default function ApprovalCcPage() {
             <div className="space-y-2.5 py-1 text-sm">
               <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
                 <div>
-                  <span className="text-muted-foreground">申请人：</span>
+                  <span className="text-muted-foreground">{t("申请人：")}</span>
                   {viewRow.applicant}
                 </div>
                 <div>
-                  <span className="text-muted-foreground">所属部门：</span>
+                  <span className="text-muted-foreground">{t("所属部门：")}</span>
                   {viewRow.deptName ?? "—"}
                 </div>
                 <div>
-                  <span className="text-muted-foreground">单据状态：</span>
+                  <span className="text-muted-foreground">{t("单据状态：")}</span>
                   <StatusBadge status={viewRow.status} />
                 </div>
                 {(viewRow.startDate || viewRow.endDate) && (
                   <div>
-                    <span className="text-muted-foreground">起止日期：</span>
-                    {viewRow.startDate ?? "—"} 至 {viewRow.endDate ?? "—"}
+                    <span className="text-muted-foreground">{t("起止日期：")}</span>
+                    {viewRow.startDate ?? "—"} {t("至")} {viewRow.endDate ?? "—"}
                   </div>
                 )}
               </div>
               <div>
-                <div className="text-muted-foreground">申请事由：</div>
+                <div className="text-muted-foreground">{t("申请事由：")}</div>
                 <div className="mt-1 rounded bg-muted/60 px-3 py-2">{viewRow.reason ?? "—"}</div>
               </div>
             </div>

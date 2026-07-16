@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next"
 import { ShieldAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -15,7 +16,8 @@ interface ErrorStateProps {
  * 通用错误卡片（业务/HTTP 错误，非网络离线）。
  * 与 useApiData 返回的 `error` 配套：`{error ? <ErrorState message={error} onRetry={reload} /> : ...}`。
  */
-export function ErrorState({ message, onRetry, retryLabel = "重试" }: ErrorStateProps) {
+export function ErrorState({ message, onRetry, retryLabel }: ErrorStateProps) {
+  const { t } = useTranslation()
   return (
     <Card>
       <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
@@ -23,7 +25,7 @@ export function ErrorState({ message, onRetry, retryLabel = "重试" }: ErrorSta
         <div className="text-sm">{message}</div>
         {onRetry && (
           <Button size="sm" variant="outline" onClick={onRetry}>
-            {retryLabel}
+            {retryLabel ?? t("重试")}
           </Button>
         )}
       </CardContent>

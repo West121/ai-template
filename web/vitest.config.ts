@@ -14,5 +14,7 @@ export default defineConfig({
   test: {
     include: ["src/**/*.test.{ts,tsx}"],
     environment: "node",
+    // i18n M2：初始化 i18next（zh-CN 空 bundle → t(key)=key+插值），与运行时行为对齐
+    setupFiles: ["./src/vitest.setup.ts"],
   },
 })

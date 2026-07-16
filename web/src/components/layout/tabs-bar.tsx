@@ -1,4 +1,5 @@
 import { Fragment } from "react"
+import { useTranslation } from "react-i18next"
 import { useLocation, useNavigate } from "react-router-dom"
 import {
   ArrowLeftToLine,
@@ -31,6 +32,7 @@ import { useTabsStore, type TabItem } from "@/stores/tabs-store"
 import { useUiStore } from "@/stores/ui-store"
 
 export function TabsBar() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const tabs = useTabsStore((s) => s.tabs)
@@ -138,7 +140,7 @@ export function TabsBar() {
                 >
                   {tab.pinned && <Pin className="size-3 shrink-0 opacity-70" />}
                   <span className={cn("truncate", chrome ? "max-w-36" : "max-w-32")}>
-                    {tab.title}
+                    {t(tab.title)}
                   </span>
                   {!tab.pinned && (
                     <button
@@ -160,27 +162,27 @@ export function TabsBar() {
               </ContextMenuTrigger>
               <ContextMenuContent className="w-40">
                 <ContextMenuItem onClick={a.refresh}>
-                  <RotateCw className="size-4" /> 重新加载
+                  <RotateCw className="size-4" /> {t("重新加载")}
                 </ContextMenuItem>
                 <ContextMenuItem onClick={a.pin}>
                   {tab.pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
-                  {tab.pinned ? "取消固定" : "固定标签"}
+                  {tab.pinned ? t("取消固定") : t("固定标签")}
                 </ContextMenuItem>
                 <ContextMenuSeparator />
                 <ContextMenuItem disabled={tab.pinned} onClick={a.close}>
-                  <X className="size-4" /> 关闭标签
+                  <X className="size-4" /> {t("关闭标签")}
                 </ContextMenuItem>
                 <ContextMenuItem onClick={a.closeLeft}>
-                  <ArrowLeftToLine className="size-4" /> 关闭左侧
+                  <ArrowLeftToLine className="size-4" /> {t("关闭左侧")}
                 </ContextMenuItem>
                 <ContextMenuItem onClick={a.closeRight}>
-                  <ArrowRightToLine className="size-4" /> 关闭右侧
+                  <ArrowRightToLine className="size-4" /> {t("关闭右侧")}
                 </ContextMenuItem>
                 <ContextMenuItem onClick={a.closeOthers}>
-                  <CircleX className="size-4" /> 关闭其他
+                  <CircleX className="size-4" /> {t("关闭其他")}
                 </ContextMenuItem>
                 <ContextMenuItem onClick={a.closeAll}>
-                  <CircleX className="size-4" /> 关闭全部
+                  <CircleX className="size-4" /> {t("关闭全部")}
                 </ContextMenuItem>
               </ContextMenuContent>
               </ContextMenu>
@@ -204,7 +206,7 @@ export function TabsBar() {
               ensureActive(pathname)
             }}
           >
-            <CircleX className="size-4" /> 关闭其他
+            <CircleX className="size-4" /> {t("关闭其他")}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
@@ -213,7 +215,7 @@ export function TabsBar() {
               ensureActive()
             }}
           >
-            <CircleX className="size-4" /> 关闭全部
+            <CircleX className="size-4" /> {t("关闭全部")}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

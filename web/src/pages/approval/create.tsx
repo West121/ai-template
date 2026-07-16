@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { useTranslation } from "react-i18next"
 import {
   BadgeCheck,
   Briefcase,
@@ -120,6 +121,7 @@ function todayPlus(days: number) {
 }
 
 export default function ApprovalCreatePage() {
+  const { t } = useTranslation()
   const user = useAuthStore((s) => s.user)
   const offline = useAuthStore((s) => s.offline)
 
@@ -162,11 +164,11 @@ export default function ApprovalCreatePage() {
   const handleSubmit = async () => {
     if (!activeFlow) return
     if (offline) {
-      toast.info("当前为离线演示模式，无法提交申请，请启动后端后重新登录")
+      toast.info(t("当前为离线演示模式，无法提交申请，请启动后端后重新登录"))
       return
     }
     if (!reason.trim()) {
-      toast.error("请填写申请事由")
+      toast.error(t("请填写申请事由"))
       return
     }
     setSubmitting(true)
@@ -182,12 +184,12 @@ export default function ApprovalCreatePage() {
           ...(ccUserIds.length > 0 ? { ccUserIds } : {}),
         }),
       })
-      toast.success("提交成功，已进入审批流程，可前往「我的申请」查看进度")
+      toast.success(t("提交成功，已进入审批流程，可前往「我的申请」查看进度"))
       setActiveFlow(null)
     } catch (err) {
-      if (err instanceof NetworkError) toast.error("无法连接后端服务，请稍后重试")
+      if (err instanceof NetworkError) toast.error(t("无法连接后端服务，请稍后重试"))
       else if (err instanceof ApiError) toast.error(err.message)
-      else toast.error("提交失败")
+      else toast.error(t("提交失败"))
     } finally {
       setSubmitting(false)
     }
@@ -195,19 +197,19 @@ export default function ApprovalCreatePage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader title="发起申请" description="选择流程模板发起审批，提交后将按预设流程逐级流转" />
+      <PageHeader title={t("发起申请")} description={t("选择流程模板发起审批，提交后将按预设流程逐级流转")} />
 
       {/* 常用流程 */}
       <div className="rounded-lg border bg-card p-4">
         <div className="mb-3 flex items-center gap-1.5 text-sm font-medium">
           <Star className="size-4 text-amber-500" />
-          常用流程
+          {t("常用流程")}
         </div>
         <div className="flex flex-wrap gap-2">
           {frequentFlows.map((flow) => (
             <Button key={flow.key} variant="outline" size="sm" className="gap-1.5" onClick={() => openFlow(flow)}>
               <flow.icon className="size-3.5" />
-              {flow.name}
+              {t(flow.name)}
             </Button>
           ))}
         </div>
@@ -216,7 +218,7 @@ export default function ApprovalCreatePage() {
       {/* 分类流程卡片 */}
       {flowCategories.map((group) => (
         <div key={group.category} className="space-y-3">
-          <h2 className="text-sm font-medium text-muted-foreground">{group.category}</h2>
+          <h2 className="text-sm font-medium text-muted-foreground">{t(group.category)}</h2>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {group.flows.map((flow) => (
               <button
@@ -229,8 +231,8 @@ export default function ApprovalCreatePage() {
                   <flow.icon className="size-5" />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-sm font-medium group-hover:text-primary">{flow.name}</div>
-                  <div className="truncate text-xs text-muted-foreground">{flow.description}</div>
+                  <div className="text-sm font-medium group-hover:text-primary">{t(flow.name)}</div>
+                  <div className="truncate text-xs text-muted-foreground">{t(flow.description)}</div>
                 </div>
               </button>
             ))}
@@ -242,26 +244,26 @@ export default function ApprovalCreatePage() {
       <Dialog open={activeFlow !== null} onOpenChange={(open) => !open && setActiveFlow(null)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>{activeFlow ? `发起${activeFlow.name}` : ""}</DialogTitle>
-            <DialogDescription>{activeFlow?.description}</DialogDescription>
+            <DialogTitle>{activeFlow ? t("发起{{name}}", { name: t(activeFlow.name) }) : ""}</DialogTitle>
+            <DialogDescription>{activeFlow ? t(activeFlow.description) : ""}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-1">
             <div className="space-y-1.5">
-              <Label>标题</Label>
+              <Label>{t("标题")}</Label>
               <Input value={title} readOnly className="bg-muted/50" />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="start-date">开始日期</Label>
+                <Label htmlFor="start-date">{t("开始日期")}</Label>
                 <Input id="start-date" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="end-date">结束日期</Label>
+                <Label htmlFor="end-date">{t("结束日期")}</Label>
                 <Input id="end-date" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="duration">时长（天）</Label>
+              <Label htmlFor="duration">{t("时长（天）")}</Label>
               <Input
                 id="duration"
                 type="number"
@@ -273,18 +275,18 @@ export default function ApprovalCreatePage() {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="reason">
-                <span className="text-destructive">*</span> 事由
+                <span className="text-destructive">*</span> {t("事由")}
               </Label>
               <Textarea
                 id="reason"
                 rows={3}
-                placeholder="请填写申请事由…"
+                placeholder={t("请填写申请事由…")}
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
               />
             </div>
             <div className="space-y-1.5">
-              <Label>抄送人</Label>
+              <Label>{t("抄送人")}</Label>
               <Popover open={ccOpen} onOpenChange={setCcOpen}>
                 <PopoverTrigger asChild>
                   <Button
@@ -293,7 +295,7 @@ export default function ApprovalCreatePage() {
                     className="h-auto min-h-9 w-full justify-between px-3 py-1.5 font-normal hover:bg-transparent"
                   >
                     {ccUserIds.length === 0 ? (
-                      <span className="text-muted-foreground">选择需要抄送的同事（可多选）</span>
+                      <span className="text-muted-foreground">{t("选择需要抄送的同事（可多选）")}</span>
                     ) : (
                       <span className="flex flex-wrap gap-1">
                         {ccUserIds.map((id) => {
@@ -318,9 +320,9 @@ export default function ApprovalCreatePage() {
                 </PopoverTrigger>
                 <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
                   <Command>
-                    <CommandInput placeholder="搜索姓名…" />
+                    <CommandInput placeholder={t("搜索姓名…")} />
                     <CommandList>
-                      <CommandEmpty>{offline ? "离线模式下无法获取人员列表" : "未找到人员"}</CommandEmpty>
+                      <CommandEmpty>{offline ? t("离线模式下无法获取人员列表") : t("未找到人员")}</CommandEmpty>
                       <CommandGroup>
                         {users.map((u) => (
                           <CommandItem key={u.id} value={u.name} onSelect={() => toggleCc(u.id)}>
@@ -340,18 +342,18 @@ export default function ApprovalCreatePage() {
               </Popover>
             </div>
             <div className="space-y-1.5">
-              <Label>紧急程度</Label>
+              <Label>{t("紧急程度")}</Label>
               <RadioGroup value={urgency} onValueChange={setUrgency} className="flex gap-6">
                 <div className="flex items-center gap-2">
                   <RadioGroupItem value="normal" id="urgency-normal" />
                   <Label htmlFor="urgency-normal" className="font-normal">
-                    普通
+                    {t("普通")}
                   </Label>
                 </div>
                 <div className="flex items-center gap-2">
                   <RadioGroupItem value="urgent" id="urgency-urgent" />
                   <Label htmlFor="urgency-urgent" className="font-normal text-amber-600">
-                    加急
+                    {t("加急")}
                   </Label>
                 </div>
               </RadioGroup>
@@ -359,10 +361,10 @@ export default function ApprovalCreatePage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setActiveFlow(null)}>
-              取消
+              {t("取消")}
             </Button>
             <Button disabled={submitting} onClick={() => void handleSubmit()}>
-              {submitting ? "提交中…" : "提交申请"}
+              {submitting ? t("提交中…") : t("提交申请")}
             </Button>
           </DialogFooter>
         </DialogContent>

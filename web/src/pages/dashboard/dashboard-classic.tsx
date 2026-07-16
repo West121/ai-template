@@ -3,6 +3,7 @@
  * 数据全部来自 useDashboardData（与风格B 共享真实数据 + 离线兜底）。
  */
 import { useNavigate } from "react-router-dom"
+import { useTranslation } from "react-i18next"
 import {
   ArrowRight,
   ArrowUpRight,
@@ -42,6 +43,7 @@ const KPI_STYLE: Record<StatKey, { tint: string; wash: string; ghost: string }> 
 }
 
 export function DashboardClassic() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const vm = useDashboardData()
 
@@ -51,9 +53,9 @@ export function DashboardClassic() {
       {vm.degraded && (
         <div className="flex items-center gap-2 rounded-md border border-dashed bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">
           <CloudOff className="size-3.5 shrink-0" />
-          离线演示数据——启动后端（cd server && mvn -pl oa-boot spring-boot:run）并重新登录后展示真实数据
+          {t("离线演示数据——启动后端（cd server && mvn -pl oa-boot spring-boot:run）并重新登录后展示真实数据")}
           <Button variant="ghost" size="sm" className="ml-auto h-6 px-2 text-xs" onClick={() => void vm.load()}>
-            重试连接
+            {t("重试连接")}
           </Button>
         </div>
       )}
@@ -65,7 +67,7 @@ export function DashboardClassic() {
             <AvatarFallback className="bg-primary text-lg text-primary-foreground">{vm.userName.slice(0, 1)}</AvatarFallback>
           </Avatar>
           <div className="min-w-0 flex-1">
-            <div className="text-lg font-semibold">下午好，{vm.userName}，今天也要元气满满哦 ☀️</div>
+            <div className="text-lg font-semibold">{t("下午好，{{name}}，今天也要元气满满哦 ☀️", { name: vm.userName })}</div>
             <div className="mt-0.5 text-sm text-muted-foreground">
               {vm.userDept} · {vm.userPost} ｜ 今天是 2026 年 7 月 13 日 星期一，多云转晴 26℃
             </div>
@@ -75,17 +77,17 @@ export function DashboardClassic() {
               <div className={cn("text-xl font-semibold", vm.checkInDisplay === "--:--" ? "text-muted-foreground/50" : "text-primary")}>
                 {vm.checkInDisplay}
               </div>
-              <div className="text-xs text-muted-foreground">上班打卡</div>
+              <div className="text-xs text-muted-foreground">{t("上班打卡")}</div>
             </div>
             <Separator orientation="vertical" className="h-8" />
             <div>
               <div className={cn("text-xl font-semibold", vm.checkOutDisplay === "--:--" ? "text-muted-foreground/50" : "text-primary")}>
                 {vm.checkOutDisplay}
               </div>
-              <div className="text-xs text-muted-foreground">下班打卡</div>
+              <div className="text-xs text-muted-foreground">{t("下班打卡")}</div>
             </div>
             <Button size="sm" disabled={vm.checking} onClick={() => void vm.handleCheck()}>
-              <Clock3 className="size-4" /> 打卡
+              <Clock3 className="size-4" /> {t("打卡")}
             </Button>
           </div>
         </CardContent>
@@ -113,9 +115,9 @@ export function DashboardClassic() {
                 <div>
                   <div className="flex items-baseline gap-1">
                     <span className="text-[1.75rem] font-bold leading-none tabular-nums tracking-tight">{stat.value}</span>
-                    <span className="text-xs font-medium text-muted-foreground">{stat.unit}</span>
+                    <span className="text-xs font-medium text-muted-foreground">{t(stat.unit)}</span>
                   </div>
-                  <div className="mt-1.5 text-sm text-muted-foreground">{stat.label}</div>
+                  <div className="mt-1.5 text-sm text-muted-foreground">{t(stat.label)}</div>
                 </div>
               </CardContent>
             </Card>
@@ -127,13 +129,13 @@ export function DashboardClassic() {
         {/* 待办审批 */}
         <Card className="xl:col-span-2">
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-base">待办审批</CardTitle>
+            <CardTitle className="text-base">{t("待办审批")}</CardTitle>
             <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs text-muted-foreground" onClick={() => navigate("/workflow/tasks")}>
-              查看全部 <ArrowRight className="size-3.5" />
+              {t("查看全部")} <ArrowRight className="size-3.5" />
             </Button>
           </CardHeader>
           <CardContent className="divide-y">
-            {vm.pendingList.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">暂无待办审批，好好休息一下吧</div>}
+            {vm.pendingList.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">{t("暂无待办审批，好好休息一下吧")}</div>}
             {vm.pendingList.map((item) => (
               <button
                 key={item.id}
@@ -144,7 +146,7 @@ export function DashboardClassic() {
                 <Badge variant="outline" className="shrink-0">{item.type}</Badge>
                 <span className="min-w-0 flex-1 truncate text-sm">
                   {item.title}
-                  {item.urgent && <Badge variant="destructive" className="ml-2 h-4 px-1 text-[10px]">加急</Badge>}
+                  {item.urgent && <Badge variant="destructive" className="ml-2 h-4 px-1 text-[10px]">{t("加急")}</Badge>}
                 </span>
                 <span className="hidden shrink-0 text-xs text-muted-foreground sm:block">{item.applicant}</span>
                 <span className="w-24 shrink-0 text-right text-xs text-muted-foreground/70">{item.time}</span>
@@ -156,7 +158,7 @@ export function DashboardClassic() {
         {/* 快捷入口 */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">快捷发起</CardTitle>
+            <CardTitle className="text-base">{t("快捷发起")}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-3 gap-3">
@@ -170,7 +172,7 @@ export function DashboardClassic() {
                   <div className={cn("flex size-10 items-center justify-center rounded-lg", action.color)}>
                     <action.icon className="size-5" />
                   </div>
-                  <span className="text-xs">{action.label}</span>
+                  <span className="text-xs">{t(action.label)}</span>
                 </button>
               ))}
             </div>
@@ -180,7 +182,7 @@ export function DashboardClassic() {
         {/* 近 7 日审批 */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">近 7 日审批处理量</CardTitle>
+            <CardTitle className="text-base">{t("近 7 日审批处理量")}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex h-40 items-end gap-3">
@@ -198,13 +200,13 @@ export function DashboardClassic() {
         {/* 公告 */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-base">公告通知</CardTitle>
+            <CardTitle className="text-base">{t("公告通知")}</CardTitle>
             <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs text-muted-foreground" onClick={() => navigate("/announcement")}>
-              更多 <ArrowRight className="size-3.5" />
+              {t("更多")} <ArrowRight className="size-3.5" />
             </Button>
           </CardHeader>
           <CardContent className="divide-y">
-            {vm.announcements.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">暂无公告</div>}
+            {vm.announcements.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">{t("暂无公告")}</div>}
             {vm.announcements.map((item) => (
               <button
                 key={item.id}
@@ -212,7 +214,7 @@ export function DashboardClassic() {
                 className="flex w-full items-center gap-2 py-2.5 text-left transition-colors hover:bg-accent/50"
                 onClick={() => navigate("/announcement")}
               >
-                {item.top && <Badge className="h-4.5 shrink-0 px-1.5 text-[10px]">置顶</Badge>}
+                {item.top && <Badge className="h-4.5 shrink-0 px-1.5 text-[10px]">{t("置顶")}</Badge>}
                 <span className="min-w-0 flex-1 truncate text-sm">{item.title}</span>
                 <span className="shrink-0 text-xs text-muted-foreground/70">{item.dept} · {item.date}</span>
               </button>
@@ -223,13 +225,13 @@ export function DashboardClassic() {
         {/* 今日日程 */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-base">今日日程</CardTitle>
+            <CardTitle className="text-base">{t("今日日程")}</CardTitle>
             <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs text-muted-foreground" onClick={() => navigate("/schedule")}>
-              日程表 <ArrowRight className="size-3.5" />
+              {t("日程表")} <ArrowRight className="size-3.5" />
             </Button>
           </CardHeader>
           <CardContent className="space-y-1">
-            {vm.todaySchedule.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">今天没有日程安排</div>}
+            {vm.todaySchedule.length === 0 && <div className="py-8 text-center text-sm text-muted-foreground">{t("今天没有日程安排")}</div>}
             {vm.todaySchedule.map((item) => (
               <div key={item.id} className="flex gap-3 rounded-md px-1 py-2 transition-colors hover:bg-accent/50">
                 <div className="flex flex-col items-center">

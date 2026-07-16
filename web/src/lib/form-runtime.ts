@@ -19,6 +19,9 @@ import type {
   WidgetOption,
 } from "@/types/workflow"
 import { evaluate } from "@/lib/formula-eval"
+// i18n M2：默认校验文案走 i18n.t（中文即 key；zh-CN 恒原样）。用户在设计器自填的
+// rule.message 是用户数据，不在此翻译（M3 可挂 messageI18n）。非组件模块用实例 t。
+import i18n from "@/lib/i18n"
 
 /* ---------------- 常量：类型集合 ---------------- */
 
@@ -198,12 +201,12 @@ export function validateValue(
   for (const rule of rules) {
     switch (rule.type) {
       case "required":
-        if (empty) return rule.message || "此项为必填"
+        if (empty) return rule.message || i18n.t("此项为必填")
         break
       case "regex":
         if (!empty && rule.pattern) {
           try {
-            if (!new RegExp(rule.pattern).test(String(value))) return rule.message || "格式不正确"
+            if (!new RegExp(rule.pattern).test(String(value))) return rule.message || i18n.t("格式不正确")
           } catch {
             /* 无效正则忽略 */
           }
@@ -212,8 +215,8 @@ export function validateValue(
       case "length": {
         if (!empty) {
           const len = Array.isArray(value) ? value.length : String(value).length
-          if (rule.min != null && len < rule.min) return rule.message || `长度不能少于 ${rule.min}`
-          if (rule.max != null && len > rule.max) return rule.message || `长度不能超过 ${rule.max}`
+          if (rule.min != null && len < rule.min) return rule.message || i18n.t("长度不能少于 {{min}}", { min: rule.min })
+          if (rule.max != null && len > rule.max) return rule.message || i18n.t("长度不能超过 {{max}}", { max: rule.max })
         }
         break
       }
@@ -221,8 +224,8 @@ export function validateValue(
         if (!empty) {
           const num = Number(value)
           if (!Number.isNaN(num)) {
-            if (rule.min != null && num < rule.min) return rule.message || `不能小于 ${rule.min}`
-            if (rule.max != null && num > rule.max) return rule.message || `不能大于 ${rule.max}`
+            if (rule.min != null && num < rule.min) return rule.message || i18n.t("不能小于 {{min}}", { min: rule.min })
+            if (rule.max != null && num > rule.max) return rule.message || i18n.t("不能大于 {{max}}", { max: rule.max })
           }
         }
         break
@@ -232,7 +235,7 @@ export function validateValue(
           try {
             // Tier 1 安全公式：AST 解释器求值（绝不 new Function）。表达式可引用 value / data.*，
             // 返回假值即校验不通过（与旧 new Function 语义等价，出错则不阻断）。
-            if (!evaluate(rule.expr, { value, data })) return rule.message || "校验未通过"
+            if (!evaluate(rule.expr, { value, data })) return rule.message || i18n.t("校验未通过")
           } catch {
             /* 表达式出错不阻断（与旧行为一致） */
           }

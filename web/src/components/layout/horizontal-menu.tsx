@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next"
 import { useLocation, useNavigate } from "react-router-dom"
 import { ChevronDown } from "lucide-react"
 import { openMenuItem, type MenuItem } from "@/config/menu"
@@ -21,6 +22,7 @@ function resolveBadge(badges: Record<string, number | undefined>, item: MenuItem
 }
 
 function DropdownItems({ items, onNavigate }: { items: MenuItem[]; onNavigate: (path: string) => void }) {
+  const { t } = useTranslation()
   const { pathname } = useLocation()
   const badges = useBadgeStore((s) => s.badges)
   return (
@@ -30,7 +32,7 @@ function DropdownItems({ items, onNavigate }: { items: MenuItem[]; onNavigate: (
           <DropdownMenuSub key={item.path}>
             <DropdownMenuSubTrigger className="gap-2">
               {item.icon && <item.icon className="size-4 text-muted-foreground" />}
-              {item.title}
+              {t(item.title)}
             </DropdownMenuSubTrigger>
             <DropdownMenuPortal>
               <DropdownMenuSubContent>
@@ -45,7 +47,7 @@ function DropdownItems({ items, onNavigate }: { items: MenuItem[]; onNavigate: (
             onClick={() => openMenuItem(item, onNavigate)}
           >
             {item.icon && <item.icon className="size-4 text-muted-foreground" />}
-            {item.title}
+            {t(item.title)}
             {resolveBadge(badges, item) != null && (
               <Badge variant="destructive" className="ml-auto h-4 min-w-4 rounded-full px-1 text-[10px]">
                 {resolveBadge(badges, item)}
@@ -66,6 +68,7 @@ interface HorizontalMenuProps {
 }
 
 export function HorizontalMenu({ items, rootOnly, onRootChange }: HorizontalMenuProps) {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const badges = useBadgeStore((s) => s.badges)
@@ -96,7 +99,7 @@ export function HorizontalMenu({ items, rootOnly, onRootChange }: HorizontalMenu
               }}
             >
               {item.icon && <item.icon className="size-4" />}
-              {item.title}
+              {t(item.title)}
               {resolveBadge(badges, item) != null && (
                 <Badge variant="destructive" className="h-4 min-w-4 rounded-full px-1 text-[10px]">
                   {resolveBadge(badges, item)}
@@ -111,7 +114,7 @@ export function HorizontalMenu({ items, rootOnly, onRootChange }: HorizontalMenu
             <DropdownMenuTrigger asChild>
               <button type="button" className={baseClass}>
                 {item.icon && <item.icon className="size-4" />}
-                {item.title}
+                {t(item.title)}
                 {resolveBadge(badges, item) != null && (
                   <Badge variant="destructive" className="h-4 min-w-4 rounded-full px-1 text-[10px]">
                     {resolveBadge(badges, item)}

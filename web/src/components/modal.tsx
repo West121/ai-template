@@ -6,6 +6,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react"
+import { useTranslation } from "react-i18next"
 import { Dialog as DialogPrimitive } from "radix-ui"
 import { Maximize2, Minimize2, X } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -72,6 +73,7 @@ export function Modal({
   className,
   bodyClassName,
 }: ModalProps) {
+  const { t } = useTranslation()
   const [fullscreen, setFullscreen] = useState(false)
   const contentRef = useRef<HTMLDivElement | null>(null)
   /** 位置偏移与尺寸的实时值。拖拽/伸缩期间直接写 DOM，不触发 React 渲染，保证丝滑 */
@@ -310,14 +312,14 @@ export function Modal({
                 type="button"
                 onClick={toggleFullscreen}
                 className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                aria-label={fullscreen ? "退出全屏" : "全屏"}
+                aria-label={fullscreen ? t("退出全屏") : t("全屏")}
               >
                 {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
               </button>
             )}
             <DialogPrimitive.Close
               className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-              aria-label="关闭"
+              aria-label={t("关闭")}
             >
               <X className="size-4" />
             </DialogPrimitive.Close>

@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, type ReactNode } from "react"
+import { useTranslation } from "react-i18next"
 import {
   Ban,
   BellRing,
@@ -120,12 +121,13 @@ function Field({ label, required, children }: { label: string; required?: boolea
 function OpinionEditor({
   value,
   onChange,
-  placeholder = "选填",
+  placeholder,
 }: {
   value: string
   onChange: (html: string) => void
   placeholder?: string
 }) {
+  const { t } = useTranslation()
   return (
     <RichTextEditor
       preset="minimal"
@@ -134,13 +136,14 @@ function OpinionEditor({
       maxHeight={200}
       value={value}
       onChange={onChange}
-      placeholder={placeholder}
+      placeholder={placeholder ?? t("选填")}
     />
   )
 }
 
 /** 统一提交封装：忙碌态 + toast + 完成回调 */
 function useOpSubmit(onDone: () => void) {
+  const { t } = useTranslation()
   const [busy, setBusy] = useState(false)
   const run = async (fn: () => Promise<unknown>, okMsg: string) => {
     setBusy(true)
@@ -149,7 +152,7 @@ function useOpSubmit(onDone: () => void) {
       toast.success(okMsg)
       onDone()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "操作失败")
+      toast.error(err instanceof Error ? err.message : t("操作失败"))
     } finally {
       setBusy(false)
     }
@@ -172,6 +175,7 @@ const post = (path: string, body: unknown) =>
 
 /** 加签 PRE/POST */
 function AddSignDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
+  const { t } = useTranslation()
   const [mode, setMode] = useState<"PRE" | "POST">("PRE")
   const [refs, setRefs] = useState<OrgRef[]>([])
   const [comment, setComment] = useState("")
@@ -184,13 +188,13 @@ function AddSignDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
           users: toOrgRef(refs),
           comment: comment.trim() || undefined,
         }),
-      "已加签",
+      t("已加签"),
     )
   return (
     <Modal
       open={open}
       onOpenChange={(o) => !o && !busy && onOpenChange(false)}
-      title="加签"
+      title={t("加签")}
       description={detail.title}
       width={480}
       resizable={false}
@@ -198,29 +202,29 @@ function AddSignDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
       footer={
         <>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            取消
+            {t("取消")}
           </Button>
           <Button onClick={submit} disabled={busy || refs.length === 0}>
-            {busy ? "提交中…" : "确认加签"}
+            {busy ? t("提交中…") : t("确认加签")}
           </Button>
         </>
       }
     >
       <div className="space-y-4">
-        <Field label="加签方式">
+        <Field label={t("加签方式")}>
           <RadioGroup value={mode} onValueChange={(v) => setMode(v as "PRE" | "POST")} className="flex gap-5 pt-1">
             <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-              <RadioGroupItem value="PRE" /> 前加签（先审完再回到我）
+              <RadioGroupItem value="PRE" /> {t("前加签（先审完再回到我）")}
             </label>
             <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-              <RadioGroupItem value="POST" /> 后加签（我通过后再审）
+              <RadioGroupItem value="POST" /> {t("后加签（我通过后再审）")}
             </label>
           </RadioGroup>
         </Field>
-        <Field label="加签人" required>
-          <OrgField value={refs} onChange={setRefs} title="选择加签人" placeholder="选择成员 / 部门 / 角色" />
+        <Field label={t("加签人")} required>
+          <OrgField value={refs} onChange={setRefs} title={t("选择加签人")} placeholder={t("选择成员 / 部门 / 角色")} />
         </Field>
-        <Field label="意见">
+        <Field label={t("意见")}>
           <OpinionEditor value={comment} onChange={setComment} />
         </Field>
       </div>
@@ -230,6 +234,7 @@ function AddSignDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
 
 /** 并签（当前多实例节点追加平行审批人） */
 function CounterSignDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
+  const { t } = useTranslation()
   const [refs, setRefs] = useState<OrgRef[]>([])
   const [comment, setComment] = useState("")
   const { busy, run } = useOpSubmit(onDone)
@@ -240,13 +245,13 @@ function CounterSignDialog({ detail, open, onOpenChange, onDone }: DialogProps) 
           users: toOrgRef(refs),
           comment: comment.trim() || undefined,
         }),
-      "已并签",
+      t("已并签"),
     )
   return (
     <Modal
       open={open}
       onOpenChange={(o) => !o && !busy && onOpenChange(false)}
-      title="并签"
+      title={t("并签")}
       description={detail.title}
       width={480}
       resizable={false}
@@ -254,19 +259,19 @@ function CounterSignDialog({ detail, open, onOpenChange, onDone }: DialogProps) 
       footer={
         <>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            取消
+            {t("取消")}
           </Button>
           <Button onClick={submit} disabled={busy || refs.length === 0}>
-            {busy ? "提交中…" : "确认并签"}
+            {busy ? t("提交中…") : t("确认并签")}
           </Button>
         </>
       }
     >
       <div className="space-y-4">
-        <Field label="并签人（与我同时审批）" required>
-          <OrgField value={refs} onChange={setRefs} title="选择并签人" />
+        <Field label={t("并签人（与我同时审批）")} required>
+          <OrgField value={refs} onChange={setRefs} title={t("选择并签人")} />
         </Field>
-        <Field label="意见">
+        <Field label={t("意见")}>
           <OpinionEditor value={comment} onChange={setComment} />
         </Field>
       </div>
@@ -276,18 +281,19 @@ function CounterSignDialog({ detail, open, onOpenChange, onDone }: DialogProps) 
 
 /** 减签：勾选本节点其他待办人；无候选数据时回退组织选择器 */
 function ReduceSignDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
+  const { t } = useTranslation()
   const handlers = detail.currentHandlers ?? []
   const [checked, setChecked] = useState<Set<number>>(new Set())
   const [refs, setRefs] = useState<OrgRef[]>([])
   const { busy, run } = useOpSubmit(onDone)
   const removeUserIds = handlers.length > 0 ? [...checked] : userIdsOf(refs)
   const submit = () =>
-    run(() => post(`/api/wf/tasks/${detail.myTaskId}/reduce-sign`, { removeUserIds }), "已减签")
+    run(() => post(`/api/wf/tasks/${detail.myTaskId}/reduce-sign`, { removeUserIds }), t("已减签"))
   return (
     <Modal
       open={open}
       onOpenChange={(o) => !o && !busy && onOpenChange(false)}
-      title="减签"
+      title={t("减签")}
       description={detail.title}
       width={460}
       resizable={false}
@@ -295,16 +301,16 @@ function ReduceSignDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
       footer={
         <>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            取消
+            {t("取消")}
           </Button>
           <Button variant="destructive" onClick={submit} disabled={busy || removeUserIds.length === 0}>
-            {busy ? "提交中…" : "确认减签"}
+            {busy ? t("提交中…") : t("确认减签")}
           </Button>
         </>
       }
     >
       <div className="space-y-3">
-        <p className="text-xs text-muted-foreground">移除本节点尚未办理的其他审批人（至少保留 1 人）。</p>
+        <p className="text-xs text-muted-foreground">{t("移除本节点尚未办理的其他审批人（至少保留 1 人）。")}</p>
         {handlers.length > 0 ? (
           <div className="space-y-1">
             {handlers.map((h) => (
@@ -328,8 +334,8 @@ function ReduceSignDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
             ))}
           </div>
         ) : (
-          <Field label="选择要移除的审批人" required>
-            <OrgField value={refs} onChange={setRefs} title="选择减签人（仅成员生效）" />
+          <Field label={t("选择要移除的审批人")} required>
+            <OrgField value={refs} onChange={setRefs} title={t("选择减签人（仅成员生效）")} />
           </Field>
         )}
       </div>
@@ -345,13 +351,14 @@ function AssigneeDialog({
   onDone,
   kind,
 }: DialogProps & { kind: "transfer" | "delegate" }) {
+  const { t } = useTranslation()
   const [refs, setRefs] = useState<OrgRef[]>([])
   const [comment, setComment] = useState("")
   const { busy, run } = useOpSubmit(onDone)
   const meta =
     kind === "transfer"
-      ? { title: "转办", tip: "责任转移，对方审批后进入下一节点", ok: "已转办" }
-      : { title: "委派", tip: "对方审批后退回给我，由我再提交", ok: "已委派" }
+      ? { title: t("转办"), tip: t("责任转移，对方审批后进入下一节点"), ok: t("已转办") }
+      : { title: t("委派"), tip: t("对方审批后退回给我，由我再提交"), ok: t("已委派") }
   const submit = () =>
     run(
       () =>
@@ -373,20 +380,20 @@ function AssigneeDialog({
       footer={
         <>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            取消
+            {t("取消")}
           </Button>
           <Button onClick={submit} disabled={busy || refs.length === 0}>
-            {busy ? "提交中…" : `确认${meta.title}`}
+            {busy ? t("提交中…") : t("确认{{title}}", { title: meta.title })}
           </Button>
         </>
       }
     >
       <div className="space-y-4">
         <p className="text-xs text-muted-foreground">{meta.tip}</p>
-        <Field label={`${meta.title}给`} required>
-          <OrgField value={refs} onChange={setRefs} multiple={false} title={`选择${meta.title}对象`} />
+        <Field label={t("{{title}}给", { title: meta.title })} required>
+          <OrgField value={refs} onChange={setRefs} multiple={false} title={t("选择{{title}}对象", { title: meta.title })} />
         </Field>
-        <Field label="意见">
+        <Field label={t("意见")}>
           <OpinionEditor value={comment} onChange={setComment} />
         </Field>
       </div>
@@ -396,19 +403,20 @@ function AssigneeDialog({
 
 /** 协办 / 征求意见：多选 + 意见（必填） */
 function AssistDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
+  const { t } = useTranslation()
   const [refs, setRefs] = useState<OrgRef[]>([])
   const [comment, setComment] = useState("")
   const { busy, run } = useOpSubmit(onDone)
   const submit = () =>
     run(
       () => post(`/api/wf/tasks/${detail.myTaskId}/assist`, { users: toOrgRef(refs), comment: comment.trim() }),
-      "已发起协办",
+      t("已发起协办"),
     )
   return (
     <Modal
       open={open}
       onOpenChange={(o) => !o && !busy && onOpenChange(false)}
-      title="协办 / 征求意见"
+      title={t("协办 / 征求意见")}
       description={detail.title}
       width={480}
       resizable={false}
@@ -416,21 +424,21 @@ function AssistDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
       footer={
         <>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            取消
+            {t("取消")}
           </Button>
           <Button onClick={submit} disabled={busy || refs.length === 0 || !comment.trim()}>
-            {busy ? "提交中…" : "发起协办"}
+            {busy ? t("提交中…") : t("发起协办")}
           </Button>
         </>
       }
     >
       <div className="space-y-4">
-        <p className="text-xs text-muted-foreground">建独立意见任务，不参与本节点完成条件，意见汇入主任务。</p>
-        <Field label="协办人" required>
-          <OrgField value={refs} onChange={setRefs} title="选择协办人" />
+        <p className="text-xs text-muted-foreground">{t("建独立意见任务，不参与本节点完成条件，意见汇入主任务。")}</p>
+        <Field label={t("协办人")} required>
+          <OrgField value={refs} onChange={setRefs} title={t("选择协办人")} />
         </Field>
-        <Field label="征求内容" required>
-          <OpinionEditor value={comment} onChange={setComment} placeholder="请填写需要征求意见的内容" />
+        <Field label={t("征求内容")} required>
+          <OpinionEditor value={comment} onChange={setComment} placeholder={t("请填写需要征求意见的内容")} />
         </Field>
       </div>
     </Modal>
@@ -439,6 +447,7 @@ function AssistDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
 
 /** 驳回增强：目标 + 重审策略 + 意见 */
 function RejectDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
+  const { t } = useTranslation()
   const targets = detail.jumpTargets ?? []
   const [comment, setComment] = useState("")
   const [target, setTarget] = useState<"PREV" | "START" | "NODE">("PREV")
@@ -454,14 +463,14 @@ function RejectDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
           comment: comment.trim(),
           resumeStrategy: strategy,
         }),
-      "已驳回",
+      t("已驳回"),
     )
   const disabled = busy || !comment.trim() || (target === "NODE" && !nodeId)
   return (
     <Modal
       open={open}
       onOpenChange={(o) => !o && !busy && onOpenChange(false)}
-      title="驳回"
+      title={t("驳回")}
       description={detail.title}
       width={480}
       resizable={false}
@@ -469,40 +478,40 @@ function RejectDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
       footer={
         <>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            取消
+            {t("取消")}
           </Button>
           <Button variant="destructive" onClick={submit} disabled={disabled}>
-            {busy ? "提交中…" : "确认驳回"}
+            {busy ? t("提交中…") : t("确认驳回")}
           </Button>
         </>
       }
     >
       <div className="space-y-4">
-        <Field label="驳回意见" required>
-          <OpinionEditor value={comment} onChange={setComment} placeholder="请填写驳回原因" />
+        <Field label={t("驳回意见")} required>
+          <OpinionEditor value={comment} onChange={setComment} placeholder={t("请填写驳回原因")} />
         </Field>
-        <Field label="退回到">
+        <Field label={t("退回到")}>
           <RadioGroup
             value={target}
             onValueChange={(v) => setTarget(v as typeof target)}
             className="flex flex-wrap gap-5 pt-1"
           >
             <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-              <RadioGroupItem value="PREV" /> 上一步
+              <RadioGroupItem value="PREV" /> {t("上一步")}
             </label>
             <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-              <RadioGroupItem value="START" /> 发起人
+              <RadioGroupItem value="START" /> {t("发起人")}
             </label>
             <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-              <RadioGroupItem value="NODE" disabled={targets.length === 0} /> 指定节点
+              <RadioGroupItem value="NODE" disabled={targets.length === 0} /> {t("指定节点")}
             </label>
           </RadioGroup>
         </Field>
         {target === "NODE" && (
-          <Field label="目标节点" required>
+          <Field label={t("目标节点")} required>
             <Select value={nodeId} onValueChange={setNodeId}>
               <SelectTrigger className="w-full">
-                <SelectValue placeholder={targets.length ? "选择驳回到的节点" : "暂无可选节点"} />
+                <SelectValue placeholder={targets.length ? t("选择驳回到的节点") : t("暂无可选节点")} />
               </SelectTrigger>
               <SelectContent>
                 {targets.map((n) => (
@@ -514,17 +523,17 @@ function RejectDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
             </Select>
           </Field>
         )}
-        <Field label="重审策略">
+        <Field label={t("重审策略")}>
           <RadioGroup
             value={strategy}
             onValueChange={(v) => setStrategy(v as typeof strategy)}
             className="flex flex-col gap-2 pt-1"
           >
             <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-              <RadioGroupItem value="CONTINUE" /> 继续执行（重审后回驳回点续走）
+              <RadioGroupItem value="CONTINUE" /> {t("继续执行（重审后回驳回点续走）")}
             </label>
             <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-              <RadioGroupItem value="BACK" /> 退回驳回节点（重走中间路径）
+              <RadioGroupItem value="BACK" /> {t("退回驳回节点（重走中间路径）")}
             </label>
           </RadioGroup>
         </Field>
@@ -535,6 +544,7 @@ function RejectDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
 
 /** 沟通留言：收件人 + 内容 */
 function CommunicateDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
+  const { t } = useTranslation()
   const [refs, setRefs] = useState<OrgRef[]>([])
   const [content, setContent] = useState("")
   const { busy, run } = useOpSubmit(onDone)
@@ -545,13 +555,13 @@ function CommunicateDialog({ detail, open, onOpenChange, onDone }: DialogProps) 
           toUserIds: userIdsOf(refs),
           content: content.trim(),
         }),
-      "留言已发送",
+      t("留言已发送"),
     )
   return (
     <Modal
       open={open}
       onOpenChange={(o) => !o && !busy && onOpenChange(false)}
-      title="沟通"
+      title={t("沟通")}
       description={detail.title}
       width={480}
       resizable={false}
@@ -559,21 +569,21 @@ function CommunicateDialog({ detail, open, onOpenChange, onDone }: DialogProps) 
       footer={
         <>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            取消
+            {t("取消")}
           </Button>
           <Button onClick={submit} disabled={busy || refs.length === 0 || !content.trim()}>
-            {busy ? "发送中…" : "发送留言"}
+            {busy ? t("发送中…") : t("发送留言")}
           </Button>
         </>
       }
     >
       <div className="space-y-4">
-        <p className="text-xs text-muted-foreground">留言不影响流转，将通知收件人并在沟通线程中展示。</p>
-        <Field label="收件人（仅成员）" required>
-          <OrgField value={refs} onChange={setRefs} title="选择收件人" />
+        <p className="text-xs text-muted-foreground">{t("留言不影响流转，将通知收件人并在沟通线程中展示。")}</p>
+        <Field label={t("收件人（仅成员）")} required>
+          <OrgField value={refs} onChange={setRefs} title={t("选择收件人")} />
         </Field>
-        <Field label="留言内容" required>
-          <Textarea value={content} onChange={(e) => setContent(e.target.value)} rows={3} placeholder="请输入留言" />
+        <Field label={t("留言内容")} required>
+          <Textarea value={content} onChange={(e) => setContent(e.target.value)} rows={3} placeholder={t("请输入留言")} />
         </Field>
       </div>
     </Modal>
@@ -582,19 +592,20 @@ function CommunicateDialog({ detail, open, onOpenChange, onDone }: DialogProps) 
 
 /** 拿回 */
 function RetrieveDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
+  const { t } = useTranslation()
   const [comment, setComment] = useState("")
   const { busy, run } = useOpSubmit(onDone)
   const submit = () =>
     run(
       () =>
         post(`/api/wf/tasks/${detail.myTaskId}/retrieve`, { comment: comment.trim() || undefined }),
-      "已拿回",
+      t("已拿回"),
     )
   return (
     <Modal
       open={open}
       onOpenChange={(o) => !o && !busy && onOpenChange(false)}
-      title="拿回"
+      title={t("拿回")}
       description={detail.title}
       width={440}
       resizable={false}
@@ -602,18 +613,18 @@ function RetrieveDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
       footer={
         <>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            取消
+            {t("取消")}
           </Button>
           <Button onClick={submit} disabled={busy}>
-            {busy ? "提交中…" : "确认拿回"}
+            {busy ? t("提交中…") : t("确认拿回")}
           </Button>
         </>
       }
     >
       <div className="space-y-3">
-        <p className="text-sm text-muted-foreground">在下一节点无人处理前取回重办。</p>
-        <Field label="说明">
-          <Textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder="选填" />
+        <p className="text-sm text-muted-foreground">{t("在下一节点无人处理前取回重办。")}</p>
+        <Field label={t("说明")}>
+          <Textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder={t("选填")} />
         </Field>
       </div>
     </Modal>
@@ -622,18 +633,19 @@ function RetrieveDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
 
 /** 催办 */
 function UrgeDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
+  const { t } = useTranslation()
   const [comment, setComment] = useState("")
   const { busy, run } = useOpSubmit(onDone)
   const submit = () =>
     run(
       () => post(`/api/wf/instances/${detail.id}/urge`, { comment: comment.trim() || undefined }),
-      "已催办",
+      t("已催办"),
     )
   return (
     <Modal
       open={open}
       onOpenChange={(o) => !o && !busy && onOpenChange(false)}
-      title="催办"
+      title={t("催办")}
       description={detail.title}
       width={440}
       resizable={false}
@@ -641,18 +653,18 @@ function UrgeDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
       footer={
         <>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            取消
+            {t("取消")}
           </Button>
           <Button onClick={submit} disabled={busy}>
-            {busy ? "提交中…" : "确认催办"}
+            {busy ? t("提交中…") : t("确认催办")}
           </Button>
         </>
       }
     >
       <div className="space-y-3">
-        <p className="text-sm text-muted-foreground">通知当前处理人尽快办理（可重复催办）。</p>
-        <Field label="催办留言">
-          <Textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder="选填" />
+        <p className="text-sm text-muted-foreground">{t("通知当前处理人尽快办理（可重复催办）。")}</p>
+        <Field label={t("催办留言")}>
+          <Textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder={t("选填")} />
         </Field>
       </div>
     </Modal>
@@ -661,6 +673,7 @@ function UrgeDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
 
 /** 管理员跳转 */
 function JumpDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
+  const { t } = useTranslation()
   const targets = detail.jumpTargets ?? []
   const [nodeId, setNodeId] = useState("")
   const [comment, setComment] = useState("")
@@ -672,13 +685,13 @@ function JumpDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
           targetNodeId: nodeId,
           comment: comment.trim() || undefined,
         }),
-      "已跳转",
+      t("已跳转"),
     )
   return (
     <Modal
       open={open}
       onOpenChange={(o) => !o && !busy && onOpenChange(false)}
-      title="跳转（管理员）"
+      title={t("跳转（管理员）")}
       description={detail.title}
       width={460}
       resizable={false}
@@ -686,19 +699,19 @@ function JumpDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
       footer={
         <>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            取消
+            {t("取消")}
           </Button>
           <Button onClick={submit} disabled={busy || !nodeId}>
-            {busy ? "提交中…" : "确认跳转"}
+            {busy ? t("提交中…") : t("确认跳转")}
           </Button>
         </>
       }
     >
       <div className="space-y-4">
-        <Field label="跳转到节点" required>
+        <Field label={t("跳转到节点")} required>
           <Select value={nodeId} onValueChange={setNodeId}>
             <SelectTrigger className="w-full">
-              <SelectValue placeholder={targets.length ? "选择目标节点" : "暂无可选节点"} />
+              <SelectValue placeholder={targets.length ? t("选择目标节点") : t("暂无可选节点")} />
             </SelectTrigger>
             <SelectContent>
               {targets.map((n) => (
@@ -709,8 +722,8 @@ function JumpDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
             </SelectContent>
           </Select>
         </Field>
-        <Field label="说明">
-          <Textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder="选填" />
+        <Field label={t("说明")}>
+          <Textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder={t("选填")} />
         </Field>
       </div>
     </Modal>
@@ -719,18 +732,19 @@ function JumpDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
 
 /** 管理员终止 */
 function TerminateDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
+  const { t } = useTranslation()
   const [comment, setComment] = useState("")
   const { busy, run } = useOpSubmit(onDone)
   const submit = () =>
     run(
       () => post(`/api/wf/instances/${detail.id}/terminate`, { comment: comment.trim() || undefined }),
-      "实例已终止",
+      t("实例已终止"),
     )
   return (
     <Modal
       open={open}
       onOpenChange={(o) => !o && !busy && onOpenChange(false)}
-      title="终止实例（管理员）"
+      title={t("终止实例（管理员）")}
       description={detail.title}
       width={440}
       resizable={false}
@@ -738,18 +752,18 @@ function TerminateDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
       footer={
         <>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            取消
+            {t("取消")}
           </Button>
           <Button variant="destructive" onClick={submit} disabled={busy}>
-            {busy ? "终止中…" : "确认终止"}
+            {busy ? t("终止中…") : t("确认终止")}
           </Button>
         </>
       }
     >
       <div className="space-y-3">
-        <p className="text-sm text-muted-foreground">强制终止后流程立即结束，状态记为「已终止」，不可恢复。</p>
-        <Field label="终止原因">
-          <Textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder="选填" />
+        <p className="text-sm text-muted-foreground">{t("强制终止后流程立即结束，状态记为「已终止」，不可恢复。")}</p>
+        <Field label={t("终止原因")}>
+          <Textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder={t("选填")} />
         </Field>
       </div>
     </Modal>
@@ -768,6 +782,7 @@ function AppendNodeDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
   const [name, setName] = useState("")
   const [refs, setRefs] = useState<OrgRef[]>([])
   const [multiMode, setMultiMode] = useState<"ANY" | "ALL" | "SEQUENCE">("ANY")
+  const { t } = useTranslation()
   const { busy, run } = useOpSubmit(onDone)
   const submit = () =>
     run(
@@ -778,13 +793,13 @@ function AppendNodeDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
           assignees: toOrgRef(refs),
           multiMode,
         }),
-      "已追加节点",
+      t("已追加节点"),
     )
   return (
     <Modal
       open={open}
       onOpenChange={(o) => !o && !busy && onOpenChange(false)}
-      title="追加节点（管理员）"
+      title={t("追加节点（管理员）")}
       description={detail.title}
       width={480}
       resizable={false}
@@ -792,20 +807,20 @@ function AppendNodeDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
       footer={
         <>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            取消
+            {t("取消")}
           </Button>
           <Button onClick={submit} disabled={busy || !afterNodeId || !name.trim() || refs.length === 0}>
-            {busy ? "提交中…" : "确认追加"}
+            {busy ? t("提交中…") : t("确认追加")}
           </Button>
         </>
       }
     >
       <div className="space-y-4">
-        <p className="text-xs text-muted-foreground">在指定节点后动态插入处理人，仅作用于本实例，不改流程定义。</p>
-        <Field label="追加到该节点之后" required>
+        <p className="text-xs text-muted-foreground">{t("在指定节点后动态插入处理人，仅作用于本实例，不改流程定义。")}</p>
+        <Field label={t("追加到该节点之后")} required>
           <Select value={afterNodeId} onValueChange={setAfterNodeId}>
             <SelectTrigger className="w-full">
-              <SelectValue placeholder={nodeOptions.length ? "选择前置节点" : "暂无可选节点"} />
+              <SelectValue placeholder={nodeOptions.length ? t("选择前置节点") : t("暂无可选节点")} />
             </SelectTrigger>
             <SelectContent>
               {nodeOptions.map((n) => (
@@ -816,26 +831,26 @@ function AppendNodeDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
             </SelectContent>
           </Select>
         </Field>
-        <Field label="节点名称" required>
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="如：补充审批" />
+        <Field label={t("节点名称")} required>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("如：补充审批")} />
         </Field>
-        <Field label="处理人" required>
-          <OrgField value={refs} onChange={setRefs} title="选择处理人" />
+        <Field label={t("处理人")} required>
+          <OrgField value={refs} onChange={setRefs} title={t("选择处理人")} />
         </Field>
-        <Field label="多人模式">
+        <Field label={t("多人模式")}>
           <RadioGroup
             value={multiMode}
             onValueChange={(v) => setMultiMode(v as typeof multiMode)}
             className="flex flex-wrap gap-5 pt-1"
           >
             <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-              <RadioGroupItem value="ANY" /> 或签
+              <RadioGroupItem value="ANY" /> {t("或签")}
             </label>
             <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-              <RadioGroupItem value="ALL" /> 会签
+              <RadioGroupItem value="ALL" /> {t("会签")}
             </label>
             <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-              <RadioGroupItem value="SEQUENCE" /> 顺序
+              <RadioGroupItem value="SEQUENCE" /> {t("顺序")}
             </label>
           </RadioGroup>
         </Field>
@@ -847,6 +862,7 @@ function AppendNodeDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
 /* ================= 同意 / 认领（无额外表单） ================= */
 
 function ApproveDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
+  const { t } = useTranslation()
   const [comment, setComment] = useState("")
   const { busy, run } = useOpSubmit(onDone)
   const formHandle = useRef<HostedFormHandle>(null)
@@ -871,7 +887,7 @@ function ApproveDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
       // 权威门禁：清单必填（来自 manifest → fieldPolicy.required）未填则拦截
       const missing = missingRequiredFields(codeFieldPolicy, values)
       if (missing.length > 0) {
-        toast.error(`请完善必填项：${missing.map(labelOf).join("、")}`)
+        toast.error(t("请完善必填项：{{fields}}", { fields: missing.map(labelOf).join("、") }))
         return
       }
       formData = values
@@ -882,7 +898,7 @@ function ApproveDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
           comment: comment.trim() || undefined,
           ...(formData ? { formData } : {}),
         }),
-      "已同意",
+      t("已同意"),
     )
   }
 
@@ -890,7 +906,7 @@ function ApproveDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
     <Modal
       open={open}
       onOpenChange={(o) => !o && !busy && onOpenChange(false)}
-      title="同意"
+      title={t("同意")}
       description={detail.title}
       width={codeFormKey ? 520 : 440}
       resizable={false}
@@ -898,14 +914,14 @@ function ApproveDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
       footer={
         <>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            取消
+            {t("取消")}
           </Button>
           <Button
             className="bg-emerald-600 text-white hover:bg-emerald-600/90"
             onClick={() => void submit()}
             disabled={busy}
           >
-            {busy ? "提交中…" : "确认同意"}
+            {busy ? t("提交中…") : t("确认同意")}
           </Button>
         </>
       }
@@ -913,7 +929,7 @@ function ApproveDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
       <div className="space-y-4">
         {codeFormKey && (
           <div className="space-y-2">
-            <div className="text-xs font-medium text-muted-foreground">表单填写</div>
+            <div className="text-xs font-medium text-muted-foreground">{t("表单填写")}</div>
             <HostedForm
               formKey={codeFormKey}
               formData={codeFormData}
@@ -922,8 +938,8 @@ function ApproveDialog({ detail, open, onOpenChange, onDone }: DialogProps) {
             />
           </div>
         )}
-        <Field label="审批意见">
-          <OpinionEditor value={comment} onChange={setComment} placeholder="选填，默认为「同意」" />
+        <Field label={t("审批意见")}>
+          <OpinionEditor value={comment} onChange={setComment} placeholder={t("选填，默认为「同意」")} />
         </Field>
       </div>
     </Modal>
@@ -977,6 +993,7 @@ const OP_META: Record<
  * allowedOps 缺省（后端 P2 未就绪）时回退 P1 行为：有待办即显示同意/驳回。
  */
 export function WfOpBar({ detail, onReload }: { detail: WfInstanceDetailP3; onReload: () => void }) {
+  const { t } = useTranslation()
   const [dlg, setDlg] = useState<DialogKey | null>(null)
   const [claiming, setClaiming] = useState(false)
   const userId = useAuthStore((s) => s.userId)
@@ -1009,10 +1026,10 @@ export function WfOpBar({ detail, onReload }: { detail: WfInstanceDetailP3; onRe
     setClaiming(true)
     try {
       await api(`/api/wf/tasks/${detail.myTaskId}/${kind}`, { method: "POST" })
-      toast.success(kind === "claim" ? "已认领" : "已退回任务池")
+      toast.success(kind === "claim" ? t("已认领") : t("已退回任务池"))
       onReload()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "操作失败")
+      toast.error(err instanceof Error ? err.message : t("操作失败"))
     } finally {
       setClaiming(false)
     }
@@ -1028,7 +1045,7 @@ export function WfOpBar({ detail, onReload }: { detail: WfInstanceDetailP3; onRe
         className={m.className ? `gap-1.5 ${m.className}` : "gap-1.5"}
         onClick={() => setDlg(key)}
       >
-        <m.icon className="size-3.5" /> {m.label}
+        <m.icon className="size-3.5" /> {t(m.label)}
       </Button>
     )
   }
@@ -1060,7 +1077,7 @@ export function WfOpBar({ detail, onReload }: { detail: WfInstanceDetailP3; onRe
         className={danger ? "text-destructive focus:text-destructive" : ""}
       >
         <m.icon className="size-4 opacity-70" />
-        {m.label}
+        {t(m.label)}
       </DropdownMenuItem>
     )
   }
@@ -1069,12 +1086,12 @@ export function WfOpBar({ detail, onReload }: { detail: WfInstanceDetailP3; onRe
     <div className="flex flex-wrap items-center gap-2">
       {canClaim && (
         <Button size="sm" className="gap-1.5" onClick={() => void doClaim("claim")} disabled={claiming}>
-          <Hand className="size-3.5" /> 认领
+          <Hand className="size-3.5" /> {t("认领")}
         </Button>
       )}
       {canUnclaim && (
         <Button size="sm" variant="outline" className="gap-1.5" onClick={() => void doClaim("unclaim")} disabled={claiming}>
-          <Hand className="size-3.5" /> 退回池
+          <Hand className="size-3.5" /> {t("退回池")}
         </Button>
       )}
 
@@ -1087,12 +1104,12 @@ export function WfOpBar({ detail, onReload }: { detail: WfInstanceDetailP3; onRe
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button size="sm" variant="outline" className="gap-1.5">
-              <MoreHorizontal className="size-3.5" /> 更多操作
+              <MoreHorizontal className="size-3.5" /> {t("更多操作")}
               <ChevronDown className="size-3.5 opacity-50" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-44">
-            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">协作操作</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{t("协作操作")}</DropdownMenuLabel>
             {moreOps.map(menuItem)}
           </DropdownMenuContent>
         </DropdownMenu>
@@ -1107,12 +1124,12 @@ export function WfOpBar({ detail, onReload }: { detail: WfInstanceDetailP3; onRe
               variant="outline"
               className="gap-1.5 border-amber-500/40 text-amber-600 hover:text-amber-600 dark:text-amber-500"
             >
-              <ShieldEllipsis className="size-3.5" /> 管理
+              <ShieldEllipsis className="size-3.5" /> {t("管理")}
               <ChevronDown className="size-3.5 opacity-50" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-44">
-            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">管理员操作</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{t("管理员操作")}</DropdownMenuLabel>
             {adminOps.map(menuItem)}
           </DropdownMenuContent>
         </DropdownMenu>

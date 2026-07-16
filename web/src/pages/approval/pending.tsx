@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { useTranslation } from "react-i18next"
 import type { ColumnDef } from "@tanstack/react-table"
 import { CircleCheck, CircleX, CloudOff, Eye, RotateCw, ShieldAlert } from "lucide-react"
 import { toast } from "sonner"
@@ -35,6 +36,7 @@ function formatTime(iso?: string) {
 }
 
 export default function ApprovalPendingPage() {
+  const { t } = useTranslation()
   const [rows, setRows] = useState<ApprovalRow[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -66,11 +68,11 @@ export default function ApprovalPendingPage() {
       refreshBadge(page.total)
     } catch (err) {
       if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
+      else setLoadError(err instanceof Error ? err.message : t("加载失败"))
     } finally {
       setLoading(false)
     }
-  }, [refreshBadge])
+  }, [refreshBadge, t])
 
   useEffect(() => {
     if (offline) {
@@ -89,7 +91,11 @@ export default function ApprovalPendingPage() {
           method: "POST",
           body: reason ? JSON.stringify({ reason }) : undefined,
         })
-        toast.success(`「${row.title}」已${action === "approve" ? "通过" : "驳回"}`)
+        toast.success(
+          action === "approve"
+            ? t("「{{title}}」已通过", { title: row.title })
+            : t("「{{title}}」已驳回", { title: row.title }),
+        )
         setRows((prev) => {
           const next = prev.filter((r) => r.id !== row.id)
           refreshBadge(next.length)
@@ -97,13 +103,13 @@ export default function ApprovalPendingPage() {
         })
       } catch (err) {
         if (err instanceof ApiError && err.code === 403) {
-          toast.error("没有审批权限（office:approval:approve）")
+          toast.error(t("没有审批权限（office:approval:approve）"))
         } else {
-          toast.error(err instanceof Error ? err.message : "操作失败")
+          toast.error(err instanceof Error ? err.message : t("操作失败"))
         }
       }
     },
-    [refreshBadge],
+    [refreshBadge, t],
   )
 
   const columns = useMemo<ColumnDef<ApprovalRow, unknown>[]>(
@@ -171,11 +177,11 @@ export default function ApprovalPendingPage() {
                     className="h-7 gap-1 px-2 text-xs text-emerald-600 hover:text-emerald-600"
                     onClick={() => void act(row.original, "approve")}
                   >
-                    <CircleCheck className="size-3.5" /> 同意
+                    <CircleCheck className="size-3.5" /> {t("同意")}
                   </Button>
                 </span>
               </TooltipTrigger>
-              {!canApprove && <TooltipContent>无审批权限（角色未授予 office:approval:approve）</TooltipContent>}
+              {!canApprove && <TooltipContent>{t("无审批权限（角色未授予 office:approval:approve）")}</TooltipContent>}
             </Tooltip>
             <Button
               variant="ghost"
@@ -187,26 +193,29 @@ export default function ApprovalPendingPage() {
                 setRejectReason("")
               }}
             >
-              <CircleX className="size-3.5" /> 驳回
+              <CircleX className="size-3.5" /> {t("驳回")}
             </Button>
             <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setDetail(row.original)}>
-              <Eye className="size-3.5" /> 详情
+              <Eye className="size-3.5" /> {t("详情")}
             </Button>
           </div>
         ),
       },
     ],
-    [canApprove, act],
+    [canApprove, act, t],
   )
 
   return (
     <div className="space-y-4">
       <PageHeader
-        title="待我审批"
+        title={t("待我审批")}
         description={
           offline || loadError === "network"
-            ? "后端未连接——启动 server/ 后此页为真实数据（随身份/数据权限变化）"
-            : `共 ${rows.length} 件待办 · 已按当前身份的数据权限过滤，切换身份（右上角头像菜单）可见范围随之变化`
+            ? t("后端未连接——启动 server/ 后此页为真实数据（随身份/数据权限变化）")
+            : t(
+                "共 {{count}} 件待办 · 已按当前身份的数据权限过滤，切换身份（右上角头像菜单）可见范围随之变化",
+                { count: rows.length },
+              )
         }
       />
 
@@ -216,13 +225,14 @@ export default function ApprovalPendingPage() {
             <div className="flex size-12 items-center justify-center rounded-full bg-muted">
               <CloudOff className="size-5 text-muted-foreground" />
             </div>
-            <div className="text-sm font-medium">后端服务未启动</div>
+            <div className="text-sm font-medium">{t("后端服务未启动")}</div>
             <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
-              此页面已接入真实接口。启动后端：cd server && docker compose up -d && mvn -pl oa-boot spring-boot:run，
-              然后用 admin / manager / zhangsan（密码 admin123）重新登录，即可体验按数据权限过滤的真实待办与兼任身份切换。
+              {t(
+                "此页面已接入真实接口。启动后端：cd server && docker compose up -d && mvn -pl oa-boot spring-boot:run， 然后用 admin / manager / zhangsan（密码 admin123）重新登录，即可体验按数据权限过滤的真实待办与兼任身份切换。",
+              )}
             </p>
             <Button size="sm" className="gap-1.5" onClick={() => void load()}>
-              <RotateCw className="size-3.5" /> 重试连接
+              <RotateCw className="size-3.5" /> {t("重试连接")}
             </Button>
           </CardContent>
         </Card>
@@ -232,7 +242,7 @@ export default function ApprovalPendingPage() {
             <ShieldAlert className="size-8 text-rose-500/60" />
             <div className="text-sm">{loadError}</div>
             <Button size="sm" variant="outline" onClick={() => void load()}>
-              重试
+              {t("重试")}
             </Button>
           </CardContent>
         </Card>
@@ -242,7 +252,7 @@ export default function ApprovalPendingPage() {
           data={rows}
           loading={loading}
           searchKeys={["title", "applicant", "type"]}
-          searchPlaceholder="搜索标题 / 申请人"
+          searchPlaceholder={t("搜索标题 / 申请人")}
           enableSelection={canApprove}
           batchSlot={(selected, clear) => (
             <Button
@@ -259,11 +269,11 @@ export default function ApprovalPendingPage() {
               }}
             >
               <CircleCheck className="size-3.5" />
-              批量同意
+              {t("批量同意")}
             </Button>
           )}
           onRefresh={() => void load()}
-          exportFileName="待我审批"
+          exportFileName={t("待我审批")}
         />
       )}
 
@@ -271,12 +281,12 @@ export default function ApprovalPendingPage() {
       <Modal
         open={!!detail}
         onOpenChange={(open) => !open && setDetail(null)}
-        title={detail?.title ?? "审批详情"}
+        title={detail?.title ?? t("审批详情")}
         description={detail ? `SP${String(detail.id).padStart(4, "0")} · ${detail.type}` : undefined}
         width={480}
         footer={
           <Button variant="outline" onClick={() => setDetail(null)}>
-            关闭
+            {t("关闭")}
           </Button>
         }
       >
@@ -290,7 +300,7 @@ export default function ApprovalPendingPage() {
               ["事由", detail.reason ?? "—"],
             ].map(([label, value]) => (
               <div key={label} className="flex gap-3">
-                <span className="w-16 shrink-0 text-muted-foreground">{label}</span>
+                <span className="w-16 shrink-0 text-muted-foreground">{t(label)}</span>
                 <span className="min-w-0 flex-1">{value}</span>
               </div>
             ))}
@@ -302,7 +312,7 @@ export default function ApprovalPendingPage() {
       <Modal
         open={!!rejecting}
         onOpenChange={(open) => !open && setRejecting(null)}
-        title="驳回申请"
+        title={t("驳回申请")}
         description={rejecting?.title}
         width={440}
         resizable={false}
@@ -310,7 +320,7 @@ export default function ApprovalPendingPage() {
         footer={
           <>
             <Button variant="outline" onClick={() => setRejecting(null)}>
-              取消
+              {t("取消")}
             </Button>
             <Button
               variant="destructive"
@@ -320,19 +330,19 @@ export default function ApprovalPendingPage() {
                 setRejecting(null)
               }}
             >
-              确认驳回
+              {t("确认驳回")}
             </Button>
           </>
         }
       >
         <div className="space-y-1.5">
           <Label className="text-xs">
-            <span className="text-destructive">*</span> 驳回意见
+            <span className="text-destructive">*</span> {t("驳回意见")}
           </Label>
           <Textarea
             value={rejectReason}
             onChange={(e) => setRejectReason(e.target.value)}
-            placeholder="请填写驳回原因"
+            placeholder={t("请填写驳回原因")}
             rows={3}
           />
         </div>

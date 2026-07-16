@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
+import { useTranslation } from "react-i18next"
 import {
   CalendarDays,
   Car,
@@ -73,6 +74,7 @@ function iconOf(icon?: string): LucideIcon {
 }
 
 export default function WorkflowStartPage() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const offline = useAuthStore((s) => s.offline)
   const [defs, setDefs] = useState<WfStartableDef[]>([])
@@ -111,11 +113,11 @@ export default function WorkflowStartPage() {
       setDefs(Array.isArray(data) ? data : [])
     } catch (err) {
       if (err instanceof NetworkError) setLoadError("network")
-      else setLoadError(err instanceof Error ? err.message : "加载失败")
+      else setLoadError(err instanceof Error ? err.message : t("加载失败"))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     if (offline) {
@@ -143,7 +145,7 @@ export default function WorkflowStartPage() {
         setFormLoading(false)
         return
       }
-      toast.error(`「${def.name}」为代码表单，但既未配置发起页，也未在前端登记表单组件`)
+      toast.error(t("「{{name}}」为代码表单，但既未配置发起页，也未在前端登记表单组件", { name: def.name }))
       return
     }
     setActive(def)
@@ -155,11 +157,11 @@ export default function WorkflowStartPage() {
       .then((formDef) => setFormSchema(parseFormSchema(formDef.schemaJson)))
       .catch((err) => {
         setFormError(
-          err instanceof NetworkError ? "无法连接后端服务" : err instanceof Error ? err.message : "表单加载失败",
+          err instanceof NetworkError ? t("无法连接后端服务") : err instanceof Error ? err.message : t("表单加载失败"),
         )
       })
       .finally(() => setFormLoading(false))
-  }, [navigate])
+  }, [navigate, t])
 
   const submit = useCallback(
     async (formData: WfFormData) => {
@@ -174,16 +176,16 @@ export default function WorkflowStartPage() {
             title: title.trim() || undefined,
           }),
         })
-        toast.success(`「${active.name}」已提交`)
+        toast.success(t("「{{name}}」已提交", { name: active.name }))
         setActive(null)
         navigate("/workflow/tasks?tab=mine")
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "提交失败")
+        toast.error(err instanceof Error ? err.message : t("提交失败"))
       } finally {
         setSubmitting(false)
       }
     },
-    [active, title, navigate],
+    [active, title, navigate, t],
   )
 
   // 暂存草稿：不校验，存入 DRAFT 不启动引擎
@@ -200,16 +202,16 @@ export default function WorkflowStartPage() {
             title: title.trim() || undefined,
           }),
         })
-        toast.success(`「${active.name}」已暂存至草稿箱`)
+        toast.success(t("「{{name}}」已暂存至草稿箱", { name: active.name }))
         setActive(null)
         navigate("/workflow/tasks?tab=draft")
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "暂存失败")
+        toast.error(err instanceof Error ? err.message : t("暂存失败"))
       } finally {
         setSavingDraft(false)
       }
     },
-    [active, title, navigate],
+    [active, title, navigate, t],
   )
 
   // CODE 表单内嵌提交：经受控句柄校验 + 取值，复用 submit（POST /api/wf/instances）
@@ -235,22 +237,22 @@ export default function WorkflowStartPage() {
       : defs
     const map = new Map<string, WfStartableDef[]>()
     for (const def of filtered) {
-      const category = def.category?.trim() || "其他"
+      const category = def.category?.trim() || t("其他")
       const list = map.get(category) ?? []
       list.push(def)
       map.set(category, list)
     }
     return [...map.entries()]
-  }, [defs, keyword])
+  }, [defs, keyword, t])
 
   return (
     <div className="space-y-4">
       <PageHeader
-        title="发起申请"
+        title={t("发起申请")}
         description={
           loadError === "network"
-            ? "后端未连接——启动 server/ 后此页展示可发起的流程卡片墙"
-            : "选择流程类型发起申请，提交后按流程定义自动流转审批"
+            ? t("后端未连接——启动 server/ 后此页展示可发起的流程卡片墙")
+            : t("选择流程类型发起申请，提交后按流程定义自动流转审批")
         }
         actions={
           <div className="relative">
@@ -258,7 +260,7 @@ export default function WorkflowStartPage() {
             <Input
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
-              placeholder="搜索流程名称 / 分类"
+              placeholder={t("搜索流程名称 / 分类")}
               className="h-9 w-56 pl-8"
             />
           </div>
@@ -273,7 +275,7 @@ export default function WorkflowStartPage() {
             <ShieldAlert className="size-8 text-rose-500/60" />
             <div className="text-sm">{loadError}</div>
             <Button size="sm" variant="outline" onClick={() => void load()}>
-              重试
+              {t("重试")}
             </Button>
           </CardContent>
         </Card>
@@ -287,9 +289,9 @@ export default function WorkflowStartPage() {
         <Card>
           <CardContent className="flex flex-col items-center gap-2 py-14 text-center text-muted-foreground">
             <FileText className="size-10 opacity-30" />
-            <span className="text-sm">{keyword ? "没有匹配的流程" : "暂无可发起的流程"}</span>
+            <span className="text-sm">{keyword ? t("没有匹配的流程") : t("暂无可发起的流程")}</span>
             <span className="text-xs text-muted-foreground/70">
-              {keyword ? "换个关键词试试" : "请先在「流程定义」中发布流程"}
+              {keyword ? t("换个关键词试试") : t("请先在「流程定义」中发布流程")}
             </span>
           </CardContent>
         </Card>
@@ -317,7 +319,7 @@ export default function WorkflowStartPage() {
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-sm font-medium">{def.name}</div>
                         <div className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
-                          {def.remark || `发起「${def.name}」流程`}
+                          {def.remark || t("发起「{{name}}」流程", { name: def.name })}
                         </div>
                       </div>
                     </button>
@@ -335,18 +337,18 @@ export default function WorkflowStartPage() {
         onOpenChange={(open) => {
           if (!open && !submitting && !savingDraft) setActive(null)
         }}
-        title={active ? `发起：${active.name}` : "发起申请"}
-        description={active?.remark || "填写表单后提交，将按流程定义自动流转"}
+        title={active ? t("发起：{{name}}", { name: active.name }) : t("发起申请")}
+        description={active?.remark || t("填写表单后提交，将按流程定义自动流转")}
         width={640}
       >
         {codeEmbed && active ? (
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label className="text-sm">标题</Label>
+              <Label className="text-sm">{t("标题")}</Label>
               <Input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder={`选填，默认为「${active.name}」加发起人`}
+                placeholder={t("选填，默认为「{{name}}」加发起人", { name: active.name })}
               />
             </div>
             <HostedForm
@@ -359,10 +361,10 @@ export default function WorkflowStartPage() {
             />
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setActive(null)} disabled={submitting}>
-                取消
+                {t("取消")}
               </Button>
               <Button onClick={() => void submitCode()} disabled={submitting}>
-                {submitting ? "提交中…" : "提交申请"}
+                {submitting ? t("提交中…") : t("提交申请")}
               </Button>
             </div>
           </div>
@@ -380,17 +382,17 @@ export default function WorkflowStartPage() {
             <ShieldAlert className="size-8 text-rose-500/60" />
             <div className="text-sm text-muted-foreground">{formError}</div>
             <Button size="sm" variant="outline" onClick={() => active && openStart(active)}>
-              重试
+              {t("重试")}
             </Button>
           </div>
         ) : formSchema ? (
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label className="text-sm">标题</Label>
+              <Label className="text-sm">{t("标题")}</Label>
               <Input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder={`选填，默认为「${active?.name ?? ""}」加发起人`}
+                placeholder={t("选填，默认为「{{name}}」加发起人", { name: active?.name ?? "" })}
               />
             </div>
             <FormRenderer
@@ -399,7 +401,7 @@ export default function WorkflowStartPage() {
               perms={intersectFormPerms(undefined, mineFieldPerms)}
               submitting={submitting}
               savingDraft={savingDraft}
-              submitLabel="提交申请"
+              submitLabel={t("提交申请")}
               onSubmit={submit}
               onSaveDraft={saveDraft}
               onCancel={() => setActive(null)}

@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useTranslation } from "react-i18next"
 import { format, isValid, parse } from "date-fns"
 import { CalendarIcon } from "lucide-react"
 
@@ -18,7 +19,7 @@ export function DatePicker({
   value,
   onChange,
   disabled,
-  placeholder = "选择日期",
+  placeholder,
   className,
 }: {
   value?: string
@@ -27,6 +28,7 @@ export function DatePicker({
   placeholder?: string
   className?: string
 }) {
+  const { t } = useTranslation()
   const [open, setOpen] = React.useState(false)
   const parsed = value ? parse(value, "yyyy-MM-dd", new Date()) : undefined
   const selected = parsed && isValid(parsed) ? parsed : undefined
@@ -45,7 +47,7 @@ export function DatePicker({
           )}
         >
           <CalendarIcon className="mr-2 size-4 shrink-0 opacity-70" />
-          {selected ? format(selected, "yyyy-MM-dd") : <span>{placeholder}</span>}
+          {selected ? format(selected, "yyyy-MM-dd") : <span>{placeholder ?? t("选择日期")}</span>}
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-auto p-0" align="start">
