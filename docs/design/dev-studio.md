@@ -74,7 +74,7 @@
 - 「重挂不复活」:`stores/ai-action-outcomes.ts` 模块级 zustand,按 `actionId/draftId/partId` 记终态(`done/cancelled/expired/stale/submitted`),关面板重开不回到可点态。
 - 后端 `ai_action_draft`(`AiActionService`):`PENDING_CONFIRM→CONFIRMED→EXECUTING→SUCCEEDED|FAILED`,旁支 `CANCELLED/EXPIRED`;10 分钟 TTL、`payloadHash`(SHA-256)、`targetVersion/expectedStatus`(TOCTOU)、`idempotencyKey`、乐观锁 `version`;`stage()` 落草稿、`confirm()` 九点重校验(归属/未过期/功能权限/数据权限/对象版本/业务状态/payload 未变/幂等键/原子 claim 防双击)后由 `registerExecutor(toolName, fn)` 在**确认者 UserContext** 下执行(过 `@PreAuthorize`/数据权限)。
 
-**工具注册(后端)**:`@AiToolDefinition(name/description/paramsSchema/required/authorities/risk/timeout/aliases)`;`AiToolRisk = READ_ONLY | EXPLICIT_UI_SUBMIT | CONFIRM_REQUIRED | PROHIBITED`;`ToolRegistry` 扫 `com.xingchen.oa.boot.ai` 包内 Bean;`AiToolGateway` 是执行咽喉(权限重校验/超时虚拟线程/8k 截断/审计 `ai_tool_call`);`ToolResult(llmContent, cards, citations)`——**卡由服务端组装,模型只出解释文本,不能编 actionId/path/权限码**。命名 `{domain}_{verb}_{object}` 蛇形;写类 `{domain}_prepare_{object}`。**已存在** `orchestration_prepare_flow`、`form_prepare_schema`、`bizdoc_prepare_template`(自然语言→草稿→去设计器,`cards/draft-cards.tsx`)——但它们是「去设计器继续编辑」的轻草稿,**不是 diff 改写**。
+**工具注册(后端)**:`@AiToolDefinition(name/description/paramsSchema/required/authorities/risk/timeout/aliases)`;`AiToolRisk = READ_ONLY | EXPLICIT_UI_SUBMIT | CONFIRM_REQUIRED | PROHIBITED`;`ToolRegistry` 扫 `com.hentor.oa.boot.ai` 包内 Bean;`AiToolGateway` 是执行咽喉(权限重校验/超时虚拟线程/8k 截断/审计 `ai_tool_call`);`ToolResult(llmContent, cards, citations)`——**卡由服务端组装,模型只出解释文本,不能编 actionId/path/权限码**。命名 `{domain}_{verb}_{object}` 蛇形;写类 `{domain}_prepare_{object}`。**已存在** `orchestration_prepare_flow`、`form_prepare_schema`、`bizdoc_prepare_template`(自然语言→草稿→去设计器,`cards/draft-cards.tsx`)——但它们是「去设计器继续编辑」的轻草稿,**不是 diff 改写**。
 
 **diff 卡:净新件。** 全仓 grep `diff/修改前/对比/before/after` 确认:`components/ai-chat/**` **零** diff 渲染;唯一 diff 实现是**与 AI 无关**的知识库版本历史 `pages/knowledge/diff-util.ts`(`buildLineDiff`,LCS 行级,`DiffOp{type:same|add|del,text}`)+ `version-history.tsx`。**结论:工作台要的「改写前后 diff 确认卡」需新建一个 `partType`(建议 `devDiff`)+ 组件,复用 `confirm-machine` + `ai-action-outcomes` + `buildLineDiff`。**
 
@@ -190,7 +190,7 @@
 
 ### 2.1 后端:工具 + 草稿 + 执行器
 
-三个新 `@AiToolDefinition`(包 `com.xingchen.oa.boot.ai`,自动被 `ToolRegistry` 扫到):
+三个新 `@AiToolDefinition`(包 `com.hentor.oa.boot.ai`,自动被 `ToolRegistry` 扫到):
 
 | 工具 | risk | authorities | 说明 |
 |---|---|---|---|

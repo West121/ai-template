@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.xingchen.oa</groupId>
+        <groupId>com.hentor.oa</groupId>
         <artifactId>oa-server</artifactId>
         <version>0.0.1-SNAPSHOT</version>
     </parent>
@@ -16,12 +16,12 @@
 
     <dependencies>
         <dependency>
-            <groupId>com.xingchen.oa</groupId>
+            <groupId>com.hentor.oa</groupId>
             <artifactId>oa-common</artifactId>
         </dependency>
         <!-- system 作为基础域（部门/用户/权限），业务模块允许单向依赖 system；禁止 system 反向依赖业务模块 -->
         <dependency>
-            <groupId>com.xingchen.oa</groupId>
+            <groupId>com.hentor.oa</groupId>
             <artifactId>oa-module-system</artifactId>
         </dependency>
         <!-- @PreAuthorize 注解 -->
@@ -42,13 +42,13 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
         <!--
-          中国式公文办文流程复用平台内置的 Flowable 引擎（单例 ProcessEngine 由 oa-boot 装配）。
-          这里引入的是「引擎库」而非 oa-module-workflow「业务模块」——不违反「业务模块互不依赖」约束，
-          等同 spring-data-jpa 之类的共享基础设施；运行时 RuntimeService/TaskService/HistoryService 由同一上下文注入。
+          引擎收口：office 不再直依赖 Flowable，起流程/办理/查活动一律经 oa-module-workflow 的
+          WfEngineFacade（引擎层作基础层，office→workflow 单向合规；workflow 不得反向依赖业务模块）。
+          守护：workflow 侧 BusinessModuleEngineImportGuardTest 断言 office/system 源码零 org.flowable import。
         -->
         <dependency>
-            <groupId>org.flowable</groupId>
-            <artifactId>flowable-spring-boot-starter-process</artifactId>
+            <groupId>com.hentor.oa</groupId>
+            <artifactId>oa-module-workflow</artifactId>
         </dependency>
         <!--
           Aviator：单据模板「计算配置」(bizdoc-design.md §12) 的 computed 公式安全求值。

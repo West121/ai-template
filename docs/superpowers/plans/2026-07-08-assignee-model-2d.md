@@ -610,7 +610,7 @@ Expected: 均退出 0。若报未用导入（FormulaEditor 被 FormulaField 取�
 ### Task 2: 后端「来源优先」解析 + 三个新来源
 
 **Files:**
-- Modify: `server/oa-module-workflow/src/main/java/com/xingchen/oa/workflow/engine/AssigneeResolver.java`
+- Modify: `server/oa-module-workflow/src/main/java/com/hentor/oa/workflow/engine/AssigneeResolver.java`
 
 **Interfaces:**
 - Consumes（Task 1 产出的规则 JSON）：`{kind, source, refs, postName, field, varName, formula, applicantValue, fromNodeId, takeLeader, level}`。

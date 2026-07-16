@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.xingchen.oa</groupId>
+        <groupId>com.hentor.oa</groupId>
         <artifactId>oa-server</artifactId>
         <version>0.0.1-SNAPSHOT</version>
     </parent>
@@ -16,12 +16,12 @@
 
     <dependencies>
         <dependency>
-            <groupId>com.xingchen.oa</groupId>
+            <groupId>com.hentor.oa</groupId>
             <artifactId>oa-common</artifactId>
         </dependency>
         <!-- system 基础域（组织架构：LEADER/ORG 审批人规则展开） -->
         <dependency>
-            <groupId>com.xingchen.oa</groupId>
+            <groupId>com.hentor.oa</groupId>
             <artifactId>oa-module-system</artifactId>
         </dependency>
         <!-- Flowable 8 process 引擎（Spring Boot starter，自动装配 ProcessEngine，复用平台 DataSource/事务） -->

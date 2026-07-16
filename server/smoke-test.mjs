@@ -179,7 +179,7 @@ if (toSign) {
 const newDoc = await call(manager.token, "POST", "/api/office/documents", {
   direction: "SEND", title: "冒烟测试发文", unit: "全体部门", secret: "INTERNAL", urgency: "NORMAL", content: "测试正文",
 })
-check("新建发文(自动文号)", newDoc.body?.code === 0 && /星发/.test(newDoc.body.data?.code ?? ""), newDoc.body?.data?.code)
+check("新建发文(自动文号)", newDoc.body?.code === 0 && /涵发/.test(newDoc.body.data?.code ?? ""), newDoc.body?.data?.code)
 const rv = await call(manager.token, "POST", `/api/office/documents/${newDoc.body.data.id}/review`)
 check("发文送核", rv.body?.code === 0)
 const is = await call(manager.token, "POST", `/api/office/documents/${newDoc.body.data.id}/issue`)
@@ -188,7 +188,7 @@ const delDenied = await call(zhangsan.token, "DELETE", `/api/office/documents/${
 check("zhangsan 删公文 → 403", delDenied.status === 403)
 
 /* ---------- 4b. 中国式公文高级化（V20：发文/收文办文 + 文号防跳 + 台账 + 权限码） ---------- */
-// 六角括号 + 年度序号（星辰发〔2026〕001号）
+// 六角括号 + 年度序号（涵韬发〔2026〕001号）
 const seqOf = (code) => {
   const m = /〔\d{4}〕(\d+)号/.exec(code ?? "")
   return m ? parseInt(m[1], 10) : NaN
@@ -196,7 +196,7 @@ const seqOf = (code) => {
 // —— 发文全链路：拟稿 → 核稿 → 签发(占号) → 用印 → 成文 → 归档 ——
 async function draftAndIssue(title) {
   const dr = await call(admin.token, "POST", "/api/office/doc/send/draft", {
-    title, docType: "通知", issuingOrg: "星辰科技有限公司文件", mainRecipients: "各部门",
+    title, docType: "通知", issuingOrg: "涵韬科技有限公司文件", mainRecipients: "各部门",
     ccRecipients: "档案室", secret: "INTERNAL", urgency: "NORMAL", content: "关于测试的通知正文。",
   })
   const id = dr.body?.data?.id
@@ -238,7 +238,7 @@ check("文号预览含六角括号〔〕", /〔\d{4}〕/.test(sendPrev.body?.dat
 
 // 发文A 显式分步：校验真实取人（核稿=部门主管、签发=部门经理≠发起人）+ 非发起人可见待办
 const drA = await call(admin.token, "POST", "/api/office/doc/send/draft", {
-  title: "冒烟测试发文A：情况通报", docType: "通知", issuingOrg: "星辰科技有限公司文件",
+  title: "冒烟测试发文A：情况通报", docType: "通知", issuingOrg: "涵韬科技有限公司文件",
   mainRecipients: "各部门", ccRecipients: "档案室", secret: "INTERNAL", urgency: "NORMAL", content: "关于测试的通知正文。",
 })
 const aId = drA.body?.data?.id
@@ -248,7 +248,7 @@ check("发文拟稿占位号=待编号", drA.body?.data?.code === "待编号", d
 check("发文拟稿 headerType 默认 RED", drA.body?.data?.headerType === "RED", drA.body?.data?.headerType)
 // 白头（PLAIN）发文：headerType 落库 + render 无红头三件套 + 带 .gw-typearea--plain 标记
 const drPlain = await call(admin.token, "POST", "/api/office/doc/send/draft", {
-  title: "白头普通文件测试", headerType: "PLAIN", issuingOrg: "星辰科技有限公司", content: "普通文件正文。",
+  title: "白头普通文件测试", headerType: "PLAIN", issuingOrg: "涵韬科技有限公司", content: "普通文件正文。",
 })
 check("白头拟稿 headerType=PLAIN 落库", drPlain.body?.data?.headerType === "PLAIN", drPlain.body?.data?.headerType)
 const rPlain = await call(admin.token, "POST", `/api/office/doc/${drPlain.body?.data?.id}/render`)
@@ -296,7 +296,7 @@ check("公文待办 viewPath 指向办文单(/document/send/{docId})", gwSignTas
 const isA = await call(admin.token, "POST", `/api/office/doc/${aId}/opinion`, { decision: "APPROVE", opinion: "同意签发" })
 const a = { id: aId, draft: drA.body, issued: isA.body }
 check("签发占正式号(ISSUED)", a.issued?.data?.status === "ISSUED" && a.issued?.data?.currentTask?.taskKey === "seal", JSON.stringify({ s: a.issued?.data?.status, t: a.issued?.data?.currentTask?.taskKey }))
-check("文号六角括号〔〕格式", /^星辰[发办]〔\d{4}〕\d{3}号$/.test(a.issued?.data?.code ?? ""), a.issued?.data?.code)
+check("文号六角括号〔〕格式", /^涵韬[发办]〔\d{4}〕\d{3}号$/.test(a.issued?.data?.code ?? ""), a.issued?.data?.code)
 // 用印
 const seal = await call(admin.token, "POST", `/api/office/doc/${a.id}/seal`, { opinion: "用印" })
 check("用印(SEALED)", seal.body?.data?.status === "SEALED" && seal.body?.data?.sealStatus === "SEALED" && seal.body?.data?.currentTask?.taskKey === "publish", JSON.stringify({ s: seal.body?.data?.status, ss: seal.body?.data?.sealStatus }))
@@ -493,7 +493,7 @@ check("dashboard 字段齐全", dd && "pendingCount" in dd && "todayMeetings" in
 
 /* ---------- 11. 系统管理 ---------- */
 const tree = await call(admin.token, "GET", "/api/system/depts/tree")
-check("部门树(根=星辰科技)", tree.body?.data?.[0]?.name === "星辰科技" && (tree.body.data[0].children ?? []).length >= 4)
+check("部门树(根=涵韬科技)", tree.body?.data?.[0]?.name === "涵韬科技" && (tree.body.data[0].children ?? []).length >= 4)
 check("部门树根节点 code=XC-ROOT", tree.body?.data?.[0]?.code === "XC-ROOT", tree.body?.data?.[0]?.code)
 check("子部门 leaderName 已组装", (tree.body?.data?.[0]?.children ?? []).some((d) => typeof d.leaderName === "string" && d.leaderName.length > 0))
 // 组织架构计数/查询语义（子树聚合去重 + deptId 含子部门）
@@ -3340,7 +3340,7 @@ async function hlCompleted(token, iid) {
             res.end(completion({ role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: tool }] }, "tool_calls"))
             return
           }
-          res.end(completion({ role: "assistant", content: "你好，我是星辰 OA 智能助手，可以帮你查待办、发起审批、出报表。" }))
+          res.end(completion({ role: "assistant", content: "你好，我是涵韬 OA 智能助手，可以帮你查待办、发起审批、出报表。" }))
         } else {
           res.end(completion({ role: "assistant", content: "已为你处理，见下方卡片。" }))
         }
@@ -5477,7 +5477,7 @@ async function hlCompleted(token, iid) {
     }
 
     // 1) 续写：owner zhangsan 带 docId=did（可编辑）→ 真流式（多个 text 增量帧，非阻塞兜底单帧）
-    const asCont = await assistSse(zhangsan.token, { action: "continue", selectedText: "星辰 OA 是一体化办公平台，", docId: did })
+    const asCont = await assistSse(zhangsan.token, { action: "continue", selectedText: "涵韬 OA 是一体化办公平台，", docId: did })
     const asContFrames = asCont.frames.filter((f) => typeof f.text === "string")
     const asContText = asContFrames.map((f) => f.text).join("")
     check("kb批3 assist SSE 续写真流式(多 text 增量帧,对账点①)",

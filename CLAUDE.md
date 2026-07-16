@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-星辰 OA — a full-stack enterprise OA platform. UI strings are hardcoded Chinese (no i18n). Two halves:
+涵韬 OA — a full-stack enterprise OA platform. UI strings are hardcoded Chinese (no i18n). Two halves:
 
 - **Frontend (`web/`)**: React 19 + TypeScript + Vite + Tailwind CSS v4 + shadcn/ui. Package manager is **pnpm**; lint is **oxlint** (not ESLint).
-- **Backend (`server/`)**: Java 21, Spring Boot 4 modular monolith (Maven multi-module), PostgreSQL 17 + Redis, Flowable 8 workflow engine. Package root `com.xingchen.oa`.
+- **Backend (`server/`)**: Java 21, Spring Boot 4 modular monolith (Maven multi-module), PostgreSQL 17 + Redis, Flowable 8 workflow engine. Package root `com.hentor.oa`.
 
 The `docs/` directory holds the authoritative contracts — `api-contract.md` (every endpoint, DTO, permission code), `workflow-design.md`, `flow-designer-v2.md`, `form-designer-v2.md`. Designer/serde code explicitly cites these; keep them in sync when touching workflow.
 
@@ -28,7 +28,7 @@ pnpm lint       # oxlint
 ```bash
 cd server
 docker compose up -d               # postgres(:15432) redis(:26379) xxl-job-admin(:8082) minio
-mvn -pl oa-boot spring-boot:run    # app on :8081; Swagger at /swagger-ui.html
+mvn -pl oa-boot -am spring-boot:run    # app on :8081(groupId=com.hentor 后单模块须 -am 或先 mvn install); Swagger at /swagger-ui.html
 ```
 
 First boot: Flyway migrates, `DataInitializer` BCrypts seed passwords, `WorkflowInitializer` deploys the seed process. Seed accounts: `admin/admin123`, `manager/admin123`, `zhangsan/admin123`. Frontend login also works with the backend down — auth store falls back to offline demo mode (mock token, allow-all permissions).

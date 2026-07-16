@@ -126,7 +126,7 @@ pgvector 语义。防白屏:list/related 均可能空数组,渲染须容 `[]`。
 ## 10. 批4b 实时协同(CRDT)后端契约(后端已落地,供前端)
 
 方案A 落地:Spring 原生 WebSocket 承载 Yjs `y-websocket` 二进制协议,**后端纯 relay 不解析 CRDT**
-(`com.xingchen.oa.boot.kb.collab`)。前端用 TipTap `Collaboration`/`CollaborationCursor` + `y-websocket`
+(`com.hentor.oa.boot.kb.collab`)。前端用 TipTap `Collaboration`/`CollaborationCursor` + `y-websocket`
 `WebsocketProvider` 连本端点;连不上退**单人编辑锁**(REST `PUT /content` 始终可用,协同不影响它)。
 
 ### 10.1 端点与握手鉴权

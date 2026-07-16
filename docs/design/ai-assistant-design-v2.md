@@ -1575,7 +1575,7 @@ AgentScope           不进入首期主链路
 ## 附2:技术栈符合度裁定(主控,批A前置约束)
 
 1. **AI 助手保留在 oa-boot 内**(依赖方向 oa-boot→oa-module-*,业务模块互不依赖,只有 boot 全见
-   各业务 Service)——按 §21 做 com.xingchen.oa.boot.ai 下子包划分,不建独立 Maven 模块群。
+   各业务 Service)——按 §21 做 com.hentor.oa.boot.ai 下子包划分,不建独立 Maven 模块群。
 2. **SSE=异步执行,UserContext/SecurityContext 必须显式传播**(V1"同步线程天然安全"前提失效):
    统一 AiExecutionContext 快照 + 执行器装饰器传播(含 MDC/requestId),工具入口断言上下文存在,
    缺失即拒执行。这是批A/B 的第一验收项。

@@ -135,7 +135,7 @@ focus-within 主色描边+微阴影,像一张 Claude/ChatGPT 输入卡。
 | **发送中**(sending/uploading) | 保持 focus 视觉 | `disabled`(`opacity-60`) | `Loader2 animate-spin`,`disabled` | 工具栏左侧按钮也 `disabled`;录音态另有红点 |
 
 - placeholder:`offline ? "离线模式暂不可用" : recording ? "正在聆听…（再次点击麦克风结束）" :
-  "问问星辰助手…（/ 唤起命令 · Enter 发送）"`(沿用现状 L680-682,不变)。
+  "问问涵韬助手…（/ 唤起命令 · Enter 发送）"`(沿用现状 L680-682,不变)。
 - **Enter 发送 / Shift+Enter 换行**提示:放工具栏左侧"命令"chip 旁不够;建议做成**卡右下角极简角标**
   或 textarea `focus` 时显一行 `text-[10px] text-muted-foreground`("Enter 发送 · Shift+Enter 换行"),
   hover/focus 才现、失焦淡出;或直接并进 placeholder(现状已在 placeholder,**保持即可**,不额外加)。

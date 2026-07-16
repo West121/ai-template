@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.xingchen.oa</groupId>
+        <groupId>com.hentor.oa</groupId>
         <artifactId>oa-server</artifactId>
         <version>0.0.1-SNAPSHOT</version>
     </parent>
@@ -16,19 +16,19 @@
 
     <dependencies>
         <dependency>
-            <groupId>com.xingchen.oa</groupId>
+            <groupId>com.hentor.oa</groupId>
             <artifactId>oa-module-infra</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.xingchen.oa</groupId>
+            <groupId>com.hentor.oa</groupId>
             <artifactId>oa-module-system</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.xingchen.oa</groupId>
+            <groupId>com.hentor.oa</groupId>
             <artifactId>oa-module-office</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.xingchen.oa</groupId>
+            <groupId>com.hentor.oa</groupId>
             <artifactId>oa-module-workflow</artifactId>
         </dependency>
         <dependency>

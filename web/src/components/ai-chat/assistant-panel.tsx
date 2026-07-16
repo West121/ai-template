@@ -108,7 +108,7 @@ export default function AssistantPanel(p: AssistantPanelProps) {
   return (
     <div
       role="dialog"
-      aria-label="星辰智能助手"
+      aria-label="涵韬智能助手"
       aria-modal={false}
       style={{ ["--ai-panel-w" as never]: `${width}px` }}
       className={cn(
@@ -159,7 +159,7 @@ export default function AssistantPanel(p: AssistantPanelProps) {
               <Sparkles className="size-4.5" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold leading-tight">{p.headerTitle ?? "星辰助手"}</p>
+              <p className="truncate text-sm font-semibold leading-tight">{p.headerTitle ?? "涵韬助手"}</p>
               <p className="truncate text-[11px] text-muted-foreground">
                 {p.demo ? "演示模式（后端 /api/ai 未接入）" : "AI 生成内容仅供参考"}
               </p>

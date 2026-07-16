@@ -241,12 +241,12 @@ describe("页眉/页脚 band 与页码颜色（对齐参考编辑器四项差距
       page: {
         ...TPL.page,
         pageNumber: { ...TPL.page.pageNumber, align: "center", color: "#1d4ed8" },
-        header: { text: "星辰科技", align: "left", fontSize: 8.5 },
+        header: { text: "涵韬科技", align: "left", fontSize: 8.5 },
         footer: { text: "编号 {{docNo}}", align: "right", fontSize: 8.5 },
       },
     }
     const css = buildPrintPageCss(withBands, { docNo: "CL〔2026〕003" })
-    expect(css).toContain('@top-left { content: "星辰科技"')
+    expect(css).toContain('@top-left { content: "涵韬科技"')
     expect(css).toContain('@bottom-right { content: "编号 CL〔2026〕003"')
     expect(css).toContain("@bottom-center")
     expect(css).toContain("color: #1d4ed8")

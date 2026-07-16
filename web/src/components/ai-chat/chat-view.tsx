@@ -220,7 +220,7 @@ function Welcome({ onPick }: { onPick: (text: string) => void }) {
       <div className="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
         <Sparkles className="size-6" />
       </div>
-      <p className="text-sm font-medium">我是星辰助手</p>
+      <p className="text-sm font-medium">我是涵韬助手</p>
       <p className="max-w-[15rem] text-xs text-muted-foreground">可以帮你查待办、发起审批、看报表。试试下面这些：</p>
       <div className="flex flex-wrap justify-center gap-2">
         {["查我的待办", "本月审批量统计", "我要请假", "你能做什么"].map((t) => (
@@ -699,7 +699,7 @@ export function ChatView({
               value={value}
               disabled={offline || sending}
               placeholder={
-                offline ? "离线模式暂不可用" : recording ? "正在聆听…（再次点击麦克风结束）" : "问问星辰助手…（/ 唤起命令 · Enter 发送 · Shift+Enter 换行）"
+                offline ? "离线模式暂不可用" : recording ? "正在聆听…（再次点击麦克风结束）" : "问问涵韬助手…（/ 唤起命令 · Enter 发送 · Shift+Enter 换行）"
               }
               onChange={(e) => {
                 setValue(e.target.value)

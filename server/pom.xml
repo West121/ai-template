@@ -11,7 +11,7 @@
         <relativePath/>
     </parent>
 
-    <groupId>com.xingchen.oa</groupId>
+    <groupId>com.hentor.oa</groupId>
     <artifactId>oa-server</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <packaging>pom</packaging>
@@ -48,27 +48,27 @@
         <dependencies>
             <!-- internal modules -->
             <dependency>
-                <groupId>com.xingchen.oa</groupId>
+                <groupId>com.hentor.oa</groupId>
                 <artifactId>oa-common</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.xingchen.oa</groupId>
+                <groupId>com.hentor.oa</groupId>
                 <artifactId>oa-module-infra</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.xingchen.oa</groupId>
+                <groupId>com.hentor.oa</groupId>
                 <artifactId>oa-module-system</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.xingchen.oa</groupId>
+                <groupId>com.hentor.oa</groupId>
                 <artifactId>oa-module-office</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.xingchen.oa</groupId>
+                <groupId>com.hentor.oa</groupId>
                 <artifactId>oa-module-workflow</artifactId>
                 <version>${project.version}</version>
             </dependency>

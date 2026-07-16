@@ -52,7 +52,7 @@ describe("ChatView 一体化输入卡", () => {
   it("空态：一体化卡 + 发送键 disabled + 核心操作(附件/发送)在", () => {
     renderChat()
     expect(screen.getByRole("group", { name: "消息输入" })).toBeTruthy()
-    expect(screen.getByPlaceholderText(/问问星辰助手/)).toBeTruthy()
+    expect(screen.getByPlaceholderText(/问问涵韬助手/)).toBeTruthy()
     // 唯一实心强调=发送键，空态 disabled
     const send = screen.getByRole("button", { name: "发送" }) as HTMLButtonElement
     expect(send.disabled).toBe(true)
@@ -62,7 +62,7 @@ describe("ChatView 一体化输入卡", () => {
 
   it("输入中：有文本 → 发送键亮（可点）", () => {
     renderChat()
-    fireEvent.change(screen.getByPlaceholderText(/问问星辰助手/), { target: { value: "你好" } })
+    fireEvent.change(screen.getByPlaceholderText(/问问涵韬助手/), { target: { value: "你好" } })
     expect((screen.getByRole("button", { name: "发送" }) as HTMLButtonElement).disabled).toBe(false)
   })
 
@@ -98,7 +98,7 @@ describe("ChatView 一体化输入卡", () => {
 
   it("粘贴图片 → 进附件（走 ingestFiles）；无图片不拦截", async () => {
     renderChat()
-    const ta = screen.getByPlaceholderText(/问问星辰助手/)
+    const ta = screen.getByPlaceholderText(/问问涵韬助手/)
     fireEvent.paste(ta, { clipboardData: { files: [pngFile()] } })
     await waitFor(() => expect(uploadAttachment).toHaveBeenCalledTimes(1))
     // 纯文本粘贴（无文件）不触发入库

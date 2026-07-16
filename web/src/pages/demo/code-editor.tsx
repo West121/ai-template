@@ -131,7 +131,7 @@ ORDER BY total DESC`,
     value: "json",
     label: "JSON",
     sample: `{
-  "name": "星辰 OA",
+  "name": "涵韬 OA",
   "enabled": true,
   "tags": ["workflow", "form"],
   "limits": { "maxRows": 1000, "timeoutMs": 30000 }

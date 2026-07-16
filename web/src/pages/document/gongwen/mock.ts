@@ -33,13 +33,13 @@ const SEND_DOCS: GwDoc[] = [
   {
     id: 8101,
     direction: "SEND",
-    code: "星辰办〔2026〕012号",
+    code: "涵韬办〔2026〕012号",
     title: "关于开展2026年度信息安全专项检查的通知",
     docType: "通知",
     secret: "INTERNAL",
     urgency: "URGENT",
     status: "PUBLISHED",
-    issuingOrg: "星辰科技有限公司文件",
+    issuingOrg: "涵韬科技有限公司文件",
     issuer: "王建国",
     mainRecipients: "各分公司、各部门",
     ccRecipients: "董事会办公室、审计部",
@@ -67,13 +67,13 @@ const SEND_DOCS: GwDoc[] = [
   {
     id: 8102,
     direction: "SEND",
-    code: "星辰办〔2026〕013号",
+    code: "涵韬办〔2026〕013号",
     title: "关于表彰2026年上半年优秀员工的通报",
     docType: "通报",
     secret: "PUBLIC",
     urgency: "NORMAL",
     status: "ISSUED",
-    issuingOrg: "星辰科技有限公司文件",
+    issuingOrg: "涵韬科技有限公司文件",
     issuer: "王建国",
     mainRecipients: "全体员工",
     content:
@@ -99,7 +99,7 @@ const SEND_DOCS: GwDoc[] = [
     secret: "INTERNAL",
     urgency: "NORMAL",
     status: "REVIEWING",
-    issuingOrg: "星辰科技有限公司文件",
+    issuingOrg: "涵韬科技有限公司文件",
     mainRecipients: "公司董事会",
     content: "<p>因2026年度重点研发项目投入增加，现有预算已难以支撑，特申请增拨研发专项经费人民币500万元。妥否，请批示。</p>",
     drafter: "陈立",
@@ -121,7 +121,7 @@ const SEND_DOCS: GwDoc[] = [
     secret: "PUBLIC",
     urgency: "NORMAL",
     status: "DRAFT",
-    issuingOrg: "星辰科技有限公司文件",
+    issuingOrg: "涵韬科技有限公司文件",
     mainRecipients: "各部门",
     content: "<p>为适应夏季工作特点，经研究决定调整公司作息时间……</p>",
     drafter: "李文",
@@ -135,14 +135,14 @@ const SEND_DOCS: GwDoc[] = [
   {
     id: 8105,
     direction: "SEND",
-    code: "星辰办便〔2026〕007号",
+    code: "涵韬办便〔2026〕007号",
     title: "关于召开第三季度部门负责人例会的通知",
     docType: "通知",
     headerType: "PLAIN",
     secret: "PUBLIC",
     urgency: "NORMAL",
     status: "ISSUED",
-    issuingOrg: "星辰科技有限公司办公室",
+    issuingOrg: "涵韬科技有限公司办公室",
     issuer: "李文",
     mainRecipients: "各部门负责人",
     content:
@@ -248,24 +248,24 @@ const RECV_DOCS: GwDoc[] = [
 ]
 
 const LEDGER: GwLedgerRow[] = [
-  { id: 1, docNumber: "星辰办〔2026〕010号", documentId: 8091, docTitle: "关于印发2026年度工作要点的通知", issuedAt: "2026-06-18", issuer: "王建国", status: "ACTIVE", ruleName: "综合办公室行文", year: "2026" },
-  { id: 2, docNumber: "星辰办〔2026〕011号", documentId: 8092, docTitle: "关于成立数字化转型工作领导小组的通知", issuedAt: "2026-06-28", issuer: "王建国", status: "ACTIVE", ruleName: "综合办公室行文", year: "2026" },
-  { id: 3, docNumber: "星辰办〔2026〕012号", documentId: 8101, docTitle: "关于开展2026年度信息安全专项检查的通知", issuedAt: "2026-07-05", issuer: "王建国", status: "ACTIVE", ruleName: "综合办公室行文", year: "2026" },
-  { id: 4, docNumber: "星辰办〔2026〕013号", documentId: 8102, docTitle: "关于表彰2026年上半年优秀员工的通报", issuedAt: "2026-07-08", issuer: "王建国", status: "ACTIVE", ruleName: "综合办公室行文", year: "2026" },
-  { id: 5, docNumber: "星辰办〔2026〕014号", docTitle: "关于××合作意向的函（已作废）", issuedAt: "2026-07-09", issuer: "王建国", status: "VOIDED", ruleName: "综合办公室行文", year: "2026" },
-  { id: 6, docNumber: "星辰办〔2025〕128号", documentId: 7801, docTitle: "关于2025年度先进集体表彰的决定", issuedAt: "2025-12-20", issuer: "王建国", status: "ACTIVE", ruleName: "综合办公室行文", year: "2025" },
+  { id: 1, docNumber: "涵韬办〔2026〕010号", documentId: 8091, docTitle: "关于印发2026年度工作要点的通知", issuedAt: "2026-06-18", issuer: "王建国", status: "ACTIVE", ruleName: "综合办公室行文", year: "2026" },
+  { id: 2, docNumber: "涵韬办〔2026〕011号", documentId: 8092, docTitle: "关于成立数字化转型工作领导小组的通知", issuedAt: "2026-06-28", issuer: "王建国", status: "ACTIVE", ruleName: "综合办公室行文", year: "2026" },
+  { id: 3, docNumber: "涵韬办〔2026〕012号", documentId: 8101, docTitle: "关于开展2026年度信息安全专项检查的通知", issuedAt: "2026-07-05", issuer: "王建国", status: "ACTIVE", ruleName: "综合办公室行文", year: "2026" },
+  { id: 4, docNumber: "涵韬办〔2026〕013号", documentId: 8102, docTitle: "关于表彰2026年上半年优秀员工的通报", issuedAt: "2026-07-08", issuer: "王建国", status: "ACTIVE", ruleName: "综合办公室行文", year: "2026" },
+  { id: 5, docNumber: "涵韬办〔2026〕014号", docTitle: "关于××合作意向的函（已作废）", issuedAt: "2026-07-09", issuer: "王建国", status: "VOIDED", ruleName: "综合办公室行文", year: "2026" },
+  { id: 6, docNumber: "涵韬办〔2025〕128号", documentId: 7801, docTitle: "关于2025年度先进集体表彰的决定", issuedAt: "2025-12-20", issuer: "王建国", status: "ACTIVE", ruleName: "综合办公室行文", year: "2025" },
 ]
 
 const ARCHIVES: GwDoc[] = [
-  { id: 8101, direction: "SEND", code: "星辰办〔2026〕012号", title: "关于开展2026年度信息安全专项检查的通知", docType: "通知", secret: "INTERNAL", urgency: "URGENT", status: "ARCHIVED", archived: true, archiveNo: "2026-发文-0032", archiveCategory: "发文", archivedAt: "2026-07-06", docDate: "2026-07-05" },
-  { id: 8091, direction: "SEND", code: "星辰办〔2026〕010号", title: "关于印发2026年度工作要点的通知", docType: "通知", secret: "PUBLIC", urgency: "NORMAL", status: "ARCHIVED", archived: true, archiveNo: "2026-发文-0030", archiveCategory: "发文", archivedAt: "2026-06-20", docDate: "2026-06-18" },
+  { id: 8101, direction: "SEND", code: "涵韬办〔2026〕012号", title: "关于开展2026年度信息安全专项检查的通知", docType: "通知", secret: "INTERNAL", urgency: "URGENT", status: "ARCHIVED", archived: true, archiveNo: "2026-发文-0032", archiveCategory: "发文", archivedAt: "2026-07-06", docDate: "2026-07-05" },
+  { id: 8091, direction: "SEND", code: "涵韬办〔2026〕010号", title: "关于印发2026年度工作要点的通知", docType: "通知", secret: "PUBLIC", urgency: "NORMAL", status: "ARCHIVED", archived: true, archiveNo: "2026-发文-0030", archiveCategory: "发文", archivedAt: "2026-06-20", docDate: "2026-06-18" },
   { id: 8188, direction: "RECEIVE", code: "收〔2026〕052号", title: "关于开展安全生产大检查的通知", docType: "通知", secret: "PUBLIC", urgency: "URGENT", status: "ARCHIVED", archived: true, archiveNo: "2026-收文-0051", archiveCategory: "收文", archivedAt: "2026-06-30", docDate: "2026-06-25" },
-  { id: 7801, direction: "SEND", code: "星辰办〔2025〕128号", title: "关于2025年度先进集体表彰的决定", docType: "决定", secret: "PUBLIC", urgency: "NORMAL", status: "ARCHIVED", archived: true, archiveNo: "2025-发文-0128", archiveCategory: "发文", archivedAt: "2025-12-22", docDate: "2025-12-20" },
+  { id: 7801, direction: "SEND", code: "涵韬办〔2025〕128号", title: "关于2025年度先进集体表彰的决定", docType: "决定", secret: "PUBLIC", urgency: "NORMAL", status: "ARCHIVED", archived: true, archiveNo: "2025-发文-0128", archiveCategory: "发文", archivedAt: "2025-12-22", docDate: "2025-12-20" },
 ]
 
 const TEMPLATES: GwTemplate[] = [
-  { id: 1, code: "TPL_STD_RED", name: "标准红头（星辰科技有限公司文件）", type: "FULL", issuingOrg: "星辰科技有限公司文件" },
-  { id: 2, code: "TPL_OFFICE", name: "办公室便函红头", type: "FULL", issuingOrg: "星辰科技有限公司办公室" },
+  { id: 1, code: "TPL_STD_RED", name: "标准红头（涵韬科技有限公司文件）", type: "FULL", issuingOrg: "涵韬科技有限公司文件" },
+  { id: 2, code: "TPL_OFFICE", name: "办公室便函红头", type: "FULL", issuingOrg: "涵韬科技有限公司办公室" },
 ]
 
 function docStore(direction: GwDirection): GwDoc[] {
@@ -925,7 +925,7 @@ export async function signIssue(doc: GwDoc, opinion: string): Promise<GwResult<G
       // 占号（六角括号，幂等：已有正式号则不重复占）
       if (!/〔/.test(target.code)) {
         const n = 15 + SEND_DOCS.filter((d) => /〔/.test(d.code)).length
-        target.code = `星辰办〔2026〕${String(n).padStart(3, "0")}号`
+        target.code = `涵韬办〔2026〕${String(n).padStart(3, "0")}号`
       }
       target.issuer = user
       target.status = "ISSUED"
@@ -1073,7 +1073,7 @@ export { isDemo }
 export function renderMockHtml(doc: GwDoc): string {
   const isReceive = doc.direction === "RECEIVE"
   // 收文用来文单位/来文字号作红头与发文字号（呈现来文原件观感）
-  const org = isReceive ? `${doc.sourceUnit ?? "来文单位"}文件` : doc.issuingOrg ?? "星辰科技有限公司文件"
+  const org = isReceive ? `${doc.sourceUnit ?? "来文单位"}文件` : doc.issuingOrg ?? "涵韬科技有限公司文件"
   const rawNumber = isReceive ? doc.sourceCode ?? "" : doc.code
   const number = /[（(]/.test(rawNumber) ? "" : rawNumber // 草稿/未占号不显示
   // 上行文（请示/报告）：发文字号居左，签发人居右

@@ -35,7 +35,7 @@ status: PENDING/APPROVED/REJECTED/WITHDRAWN；type: LEAVE/EXPENSE/TRIP/OVERTIME/
 Document = {id,direction:RECEIVE|SEND,code,title,unit(来文/主送单位),secret:PUBLIC|INTERNAL|SECRET,urgency:NORMAL|URGENT|EXTRA,status,drafter?,signer?,docDate,deptId,deptName,createdAt}
 RECEIVE status: TO_SIGN(待签收)/PROCESSING(办理中)/FINISHED(已办结)；SEND status: DRAFT(拟稿)/REVIEWING(核稿中)/ISSUED(已签发)/PUBLISHED(已发布)
 - GET `/api/office/documents?direction=&status=&keyword=&pageNum=`【DS】
-- POST `/api/office/documents` {direction:SEND,title,unit,secret,urgency,content?} → code 自动 `星发〔2026〕N号`，status=DRAFT
+- POST `/api/office/documents` {direction:SEND,title,unit,secret,urgency,content?} → code 自动 `涵发〔2026〕N号`，status=DRAFT
 - POST `/api/office/documents/{id}/sign` 待签收→办理中；POST `/{id}/finish` 办理中→已办结
 - POST `/api/office/documents/{id}/review` DRAFT→REVIEWING；POST `/{id}/issue` REVIEWING→ISSUED（signer=当前人）
 - DELETE `/api/office/documents/{id}`【P:office:document:edit】

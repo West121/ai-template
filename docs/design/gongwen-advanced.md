@@ -31,7 +31,7 @@ GB/T 9704 版式与流转字段：
 |---|---|---|
 | `copy_no` | varchar(16) | 份号（涉密公文用，如 `000123`） |
 | `issuer` | varchar(64) | 签发人（GB/T：上行文标此项） |
-| `issuing_org` | varchar(128) | 发文机关标志（红头文字，如"星辰科技有限公司文件"） |
+| `issuing_org` | varchar(128) | 发文机关标志（红头文字，如"涵韬科技有限公司文件"） |
 | `doc_type` | varchar(16) | 文种：决定/通知/通报/报告/请示/批复/意见/函/纪要… |
 | `main_recipients` | text | 主送机关（多个，`；`分隔或 JSON 数组） |
 | `cc_recipients` | text | 抄送机关 |
@@ -49,7 +49,7 @@ GB/T 9704 版式与流转字段：
 
 ### 2.2 新表
 
-- **`oa_doc_number_rule`（文号规则）**：`id, code(唯一), name, org_code(机关代字如"星辰办"), doc_type(可空=通配), pattern(如 '{org}〔{year}〕{seq}号'), seq_scope(YEAR/MONTH/NONE), seq_width(如 3→001), enabled`。
+- **`oa_doc_number_rule`（文号规则）**：`id, code(唯一), name, org_code(机关代字如"涵韬办"), doc_type(可空=通配), pattern(如 '{org}〔{year}〕{seq}号'), seq_scope(YEAR/MONTH/NONE), seq_width(如 3→001), enabled`。
 - **`oa_doc_number_seq`（序号池）**：`rule_id, period(如 '2026'), current_seq`，唯一键 `(rule_id, period)`；**乐观锁或 `SELECT … FOR UPDATE` 占号防并发跳号**（复用项目已有乐观锁 version 思路）。
 - **`oa_doc_number_ledger`（文号台账/登记簿）**：每次正式占号落一行：`doc_number(唯一), rule_id, document_id, doc_title, issued_at, issuer, status(占用/作废)`。作废公文文号置"作废"但**不回收**（合规：文号台账连续可查）。
 - **`oa_doc_template`（红头/正文套版）**：`id, code, name, type(HEADER 红头 / BODY 正文 / FULL 整版), issuing_org, content(HTML/富文本，含占位符 {title}{docNumber}{mainRecipients}{body}{docDate}{seal}), seal_image_id(电子印章图片 file id), enabled`。
@@ -62,7 +62,7 @@ GB/T 9704 版式与流转字段：
 
 ## 3. 文号自动生成（磐石）
 
-- 规则示例：机关代字 `星辰办`，pattern `{org}〔{year}〕{seq}号`，年度序号宽 3 → `星辰办〔2026〕001号`（注意用六角括号 `〔〕`，非方括号，符合党政公文规范）。
+- 规则示例：机关代字 `涵韬办`，pattern `{org}〔{year}〕{seq}号`，年度序号宽 3 → `涵韬办〔2026〕001号`（注意用六角括号 `〔〕`，非方括号，符合党政公文规范）。
 - 占号时机：**签发通过节点**调用 `DocNumberService.allocate(ruleId, ctx)` → 事务内对 `oa_doc_number_seq` 当前周期 `current_seq+1`（乐观锁/行锁）→ 组装文号 → 写 `oa_doc_number_ledger` → 回填 `oa_document.code`。
 - 防重防跳：同一实例重复签发不再占号（幂等：若 document 已有正式文号则跳过）。作废走 `void(docNumber)` 只改台账状态。
 - 提供预览：拟稿阶段可 `preview(ruleId)` 显示"下一个将是 …002号"（不占号）。

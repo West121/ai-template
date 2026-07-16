@@ -147,7 +147,7 @@ export function DashboardFocus() {
             </div>
             <div className="mt-1 text-sm text-muted-foreground">
               {vm.userDept ? `${vm.userDept} · ` : ""}
-              {vm.userPost ?? "星辰 OA"} ｜ 2026 年 7 月 13 日 星期一 · 多云转晴 26℃
+              {vm.userPost ?? "涵韬 OA"} ｜ 2026 年 7 月 13 日 星期一 · 多云转晴 26℃
             </div>
           </div>
         </div>

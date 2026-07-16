@@ -385,7 +385,7 @@ export function AiAssistant() {
       <button
         ref={fabRef}
         type="button"
-        aria-label={open ? "关闭星辰助手" : "打开星辰助手"}
+        aria-label={open ? "关闭涵韬助手" : "打开涵韬助手"}
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => (open ? closePanel() : openPanel())}

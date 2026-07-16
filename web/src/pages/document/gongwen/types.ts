@@ -63,7 +63,7 @@ export interface GwDoc {
   copyNo?: string
   /** 签发人（上行文右上标注） */
   issuer?: string
-  /** 发文机关标志（红头文字，如"星辰科技有限公司文件"） */
+  /** 发文机关标志（红头文字，如"涵韬科技有限公司文件"） */
   issuingOrg?: string
   /** 主送机关（；分隔或多单位） */
   mainRecipients?: string

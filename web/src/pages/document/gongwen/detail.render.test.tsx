@@ -55,7 +55,7 @@ describe("公文办文单套基座（阶段 D）", () => {
     expect(await screen.findByText(/冒烟测试发文B/)).toBeTruthy()
     // 头卡 badges：文种(通知) + 文号
     expect(screen.getAllByText(/通知/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/星辰发/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/涵发/).length).toBeGreaterThan(0)
     // ② 环节条：当前环节 用印
     expect(screen.getAllByText("用印").length).toBeGreaterThan(0)
     // 办文动作：用印按钮（OpinionActionBar 进环节条同框）

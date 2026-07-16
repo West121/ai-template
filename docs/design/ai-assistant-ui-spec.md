@@ -65,7 +65,7 @@
 ```tsx
 <button
   type="button"
-  aria-label="打开星辰助手"
+  aria-label="打开涵韬助手"
   aria-haspopup="dialog"
   aria-expanded={open}
   className="fixed bottom-6 right-6 z-40 flex size-14 items-center justify-center
@@ -114,7 +114,7 @@
     <Sparkles className="size-4.5" />
   </div>
   <div className="min-w-0 flex-1">
-    <p className="truncate text-sm font-semibold leading-tight">{sessionTitle ?? "星辰助手"}</p>
+    <p className="truncate text-sm font-semibold leading-tight">{sessionTitle ?? "涵韬助手"}</p>
     <p className="truncate text-[11px] text-muted-foreground">AI 生成内容仅供参考</p>
   </div>
   {/* 右侧动作:新会话 / 会话列表 / 关闭,统一 ghost icon-sm */}
@@ -138,7 +138,7 @@
                   focus-within:ring-[3px] focus-within:ring-ring/50 focus-within:border-ring">
     <textarea
       rows={1}
-      placeholder="问问星辰助手…(Enter 发送 / Shift+Enter 换行)"
+      placeholder="问问涵韬助手…(Enter 发送 / Shift+Enter 换行)"
       className="max-h-32 min-h-6 flex-1 resize-none bg-transparent text-sm outline-none
                  placeholder:text-muted-foreground"
       // 自适应高度:1~5 行,超出内部滚动;发送中 disabled
@@ -164,7 +164,7 @@
   <div className="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
     <Sparkles className="size-6" />
   </div>
-  <p className="text-sm font-medium">我是星辰助手</p>
+  <p className="text-sm font-medium">我是涵韬助手</p>
   <p className="max-w-[15rem] text-xs text-muted-foreground">
     可以帮你查待办、发起审批、看报表。试试下面这些:
   </p>
@@ -709,7 +709,7 @@ list→`ListChecks` / chart→`BarChart3` / link→`LayoutGrid`。
 ### 5.1 焦点管理
 - **打开面板**:动画结束后(~300ms)`inputRef.focus()`,把光标落到输入框。
 - **关闭面板**:焦点归还触发它的 FAB(`fabRef.focus()`),避免焦点丢到 body。
-- 面板根:`role="dialog"` `aria-label="星辰智能助手"` `aria-modal={isMobile}`(桌面非模态=false,
+- 面板根:`role="dialog"` `aria-label="涵韬智能助手"` `aria-modal={isMobile}`(桌面非模态=false,
   不抢占页面可达性;移动模态=true + focus trap)。
 - 会话列表↔对话视图切换:切到列表时焦点落到列表首项或返回键;切回时回到输入框。
 - 卡片操作完成(confirm 执行、form 提交)后,把焦点/朗读引到结果条,`aria-live="polite"` 播报结果。

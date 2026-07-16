@@ -130,7 +130,7 @@ const EXPENSE_TPL_V2: BdTemplateV2 = {
     margin: [18, 18, 18, 18],
     fontFamily: "宋体",
     pageNumber: { show: true, position: "footer", align: "center", format: "第 {page} 页 / 共 {total} 页", fontSize: 9, color: "#9ca3af" },
-    header: { text: "星辰科技 · 财务单据", align: "left", fontSize: 8.5 },
+    header: { text: "涵韬科技 · 财务单据", align: "left", fontSize: 8.5 },
     footer: { text: "编号 {{docNo}}", align: "right", fontSize: 8.5 },
   },
   // §12 计算配置演示：聚合（明细合计/大写）+ 计算字段（含税，引用聚合名）
@@ -201,7 +201,7 @@ const EXPENSE_TPL_V2: BdTemplateV2 = {
       ],
     },
     { id: "b10", type: "divider" },
-    { id: "b11", type: "text", content: "说明：本单据由星辰 OA 生成，编号 {{docNo}}，验真请扫描右上二维码。", style: { fontSize: 9 } },
+    { id: "b11", type: "text", content: "说明：本单据由涵韬 OA 生成，编号 {{docNo}}，验真请扫描右上二维码。", style: { fontSize: 9 } },
   ],
 }
 

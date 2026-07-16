@@ -41,7 +41,7 @@ export function DraftFormDialog({
   const [headerType, setHeaderType] = useState<"RED" | "PLAIN">("RED")
   const [secret, setSecret] = useState("PUBLIC")
   const [urgency, setUrgency] = useState("NORMAL")
-  const [issuingOrg, setIssuingOrg] = useState("星辰科技有限公司文件")
+  const [issuingOrg, setIssuingOrg] = useState("涵韬科技有限公司文件")
   const [mainRecipients, setMainRecipients] = useState("")
   const [ccRecipients, setCcRecipients] = useState("")
   const [content, setContent] = useState("")
@@ -59,7 +59,7 @@ export function DraftFormDialog({
     setHeaderType("RED")
     setSecret("PUBLIC")
     setUrgency("NORMAL")
-    setIssuingOrg("星辰科技有限公司文件")
+    setIssuingOrg("涵韬科技有限公司文件")
     setMainRecipients("")
     setCcRecipients("")
     setContent("")
@@ -247,7 +247,7 @@ export function DraftFormDialog({
                 <Label htmlFor="issuing-org">
                   {headerType === "RED" ? "发文机关标志（红头）" : "印发机关"}
                 </Label>
-                <Input id="issuing-org" value={issuingOrg} onChange={(e) => setIssuingOrg(e.target.value)} placeholder="如：星辰科技有限公司文件" />
+                <Input id="issuing-org" value={issuingOrg} onChange={(e) => setIssuingOrg(e.target.value)} placeholder="如：涵韬科技有限公司文件" />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="copy-no">份号（涉密公文）</Label>

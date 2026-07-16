@@ -66,7 +66,7 @@ describe("Dev Studio 右栏 AI 助手", () => {
   it("发送 → pageContext {featureCode:dev-studio, entityType, entityId}", async () => {
     renderPane({ type: "PROCESS", code: "leave_approval", name: "请假审批" })
     const user = userEvent.setup()
-    const input = screen.getByPlaceholderText(/问问星辰助手/)
+    const input = screen.getByPlaceholderText(/问问涵韬助手/)
     await user.type(input, "把天数阈值改成 5{Enter}")
     await waitFor(() => expect(sendChatStream).toHaveBeenCalledTimes(1))
     const req = sendChatStream.mock.calls[0][0] as { message: string; pageContext?: unknown }
