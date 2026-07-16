@@ -44,6 +44,7 @@ import com.hentor.oa.workflow.repository.WfProcessExtRepository;
 import com.hentor.oa.workflow.repository.WfTaskReadRepository;
 import com.hentor.oa.workflow.support.DesignerJsonEnricher;
 import com.hentor.oa.workflow.support.UserNameResolver;
+import com.hentor.oa.system.fieldperm.FieldPermService;
 import com.hentor.oa.workflow.support.WfSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -87,6 +88,9 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class InstanceService {
 
+    /** P3 字段权限功能键（opaque，拍板 A）：wf 实例 formData 出入口统一按待办办理功能控。 */
+    private static final String FIELD_PERM_FEATURE = "WORKFLOW_TASKS";
+
     private final WfProcessExtRepository processRepository;
     private final WfFormDefRepository formRepository;
     private final WfInstanceExtRepository instanceRepository;
@@ -102,6 +106,7 @@ public class InstanceService {
     private final DesignerJsonEnricher designerJsonEnricher;
     private final WfAudit audit;
     private final ObjectMapper objectMapper;
+    private final FieldPermService fieldPermService;
 
     public static final String PERM_INSTANCE_ADMIN = "wf:instance:admin";
 
@@ -158,6 +163,7 @@ public class InstanceService {
             throw new BusinessException(403, "您不在该流程的发起范围内");
         }
         Map<String, Object> formData = req.formData() == null ? Map.of() : req.formData();
+        formData = fieldPermService.dropNonEditable(FIELD_PERM_FEATURE, formData, Map.of()); // P3 editable 强制：不可编辑字段丢弃回传
         String initiatorName = WfSupport.displayName(ctx);
 
         Map<String, Object> vars = new LinkedHashMap<>();
@@ -473,7 +479,7 @@ public class InstanceService {
         return new InstanceDetailResponse(
                 inst.getId(), pid, inst.getDefCode(), inst.getDefName(), inst.getTitle(), inst.getBizStatus(),
                 inst.getInitiatorId(), inst.getInitiatorName(), inst.getCreatedAt(), inst.getEndedAt(),
-                inst.getFormSchemaSnapshot(), parseJson(inst.getFormDataJson()),
+                inst.getFormSchemaSnapshot(), filteredFormData(inst),
                 new ArrayList<>(nodeMap.values()), timeline,
                 new Highlight(new ArrayList<>(completed), new ArrayList<>(active)),
                 processBpmn(inst.getDefCode()), canCancel, myTaskId,
@@ -728,7 +734,9 @@ public class InstanceService {
     public InstanceDetailResponse submitDraft(Long id, Map<String, Object> formData) {
         UserContext ctx = WfSupport.currentUser();
         WfInstanceExt inst = requireOwnDraft(id, ctx);
-        Map<String, Object> data = formData != null ? formData : parseMap(inst.getFormDataJson());
+        Map<String, Object> data = formData != null
+                ? fieldPermService.dropNonEditable(FIELD_PERM_FEATURE, formData, parseMap(inst.getFormDataJson()))
+                : parseMap(inst.getFormDataJson());
 
         Map<String, Object> vars = new LinkedHashMap<>();
         vars.put("initiatorId", inst.getInitiatorId());
@@ -896,7 +904,8 @@ public class InstanceService {
         if (!WfInstanceExt.STATUS_REJECTED.equals(inst.getBizStatus())) {
             throw new BusinessException(400, "仅被退回的流程可重新提交");
         }
-        Map<String, Object> data = formData == null ? parseMap(inst.getFormDataJson()) : formData;
+        Map<String, Object> data = formData == null ? parseMap(inst.getFormDataJson())
+                : fieldPermService.dropNonEditable(FIELD_PERM_FEATURE, formData, parseMap(inst.getFormDataJson()));
 
         Map<String, Object> vars = new LinkedHashMap<>();
         vars.put("initiatorId", inst.getInitiatorId());
@@ -1784,6 +1793,16 @@ public class InstanceService {
         } catch (Exception e) {
             return "{}";
         }
+    }
+
+    /** P3 出口脱敏：formData Map 删 visible=false 的 key（多角色并集；未配置=原样）。 */
+    @SuppressWarnings("unchecked")
+    private Object filteredFormData(com.hentor.oa.workflow.entity.WfInstanceExt inst) {
+        Object parsed = parseJson(inst.getFormDataJson());
+        if (parsed instanceof Map<?, ?> m) {
+            return fieldPermService.filterInvisible(FIELD_PERM_FEATURE, (Map<String, Object>) m);
+        }
+        return parsed;
     }
 
     private Object parseJson(String json) {

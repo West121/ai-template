@@ -622,6 +622,7 @@ public class DataDimensionService {
         }
         try {
             redis.delete(CACHE_PREFIX + userId);
+            redis.delete("dp:fields:" + userId); // V52 dp 家族联动：字段权限缓存同钩失效
         } catch (Exception e) {
             log.warn("DP 维度缓存失效失败 user={}: {}", userId, e.getMessage());
         }

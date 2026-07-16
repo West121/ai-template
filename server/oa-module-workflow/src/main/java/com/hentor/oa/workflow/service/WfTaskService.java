@@ -20,6 +20,7 @@ import com.hentor.oa.workflow.entity.WfProcessExt;
 import com.hentor.oa.workflow.repository.WfInstanceExtRepository;
 import com.hentor.oa.workflow.repository.WfProcessExtRepository;
 import com.hentor.oa.workflow.support.WfAudit;
+import com.hentor.oa.system.fieldperm.FieldPermService;
 import com.hentor.oa.workflow.support.WfSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -66,6 +67,7 @@ public class WfTaskService {
     private final AddSignService addSignService;
     private final WfAudit audit;
     private final ObjectMapper objectMapper;
+    private final FieldPermService fieldPermService;
 
     /* ---------------- 待办 ---------------- */
 
@@ -234,8 +236,10 @@ public class WfTaskService {
 
         Map<String, Object> vars = new LinkedHashMap<>();
         if (req != null && req.formData() != null) {
-            putScalarVars(vars, req.formData());
-            updateInstanceForm(pid, req.formData());
+            // P3 editable 强制（办理入口）：不可编辑字段回传丢弃，以实例旧值为准
+            Map<String, Object> fd = fieldPermService.dropNonEditable("WORKFLOW_TASKS", req.formData(), currentFormData(pid));
+            putScalarVars(vars, fd);
+            updateInstanceForm(pid, fd);
         }
         if (StringUtils.hasText(comment)) {
             taskService.addComment(taskId, pid, comment);
@@ -606,6 +610,19 @@ public class WfTaskService {
             throw new BusinessException(400, "目标处理人无效");
         }
         return ids.get(0);
+    }
+
+    /** P3：实例当前表单数据（editable 强制还原旧值用；无实例/坏 JSON → 空）。 */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> currentFormData(String pid) {
+        return instanceRepository.findByProcInstId(pid).map(i -> {
+            try {
+                Object o = objectMapper.readValue(i.getFormDataJson() == null ? "{}" : i.getFormDataJson(), Map.class);
+                return o instanceof Map ? (Map<String, Object>) o : java.util.Collections.<String, Object>emptyMap();
+            } catch (Exception e) {
+                return java.util.Collections.<String, Object>emptyMap();
+            }
+        }).orElse(java.util.Collections.emptyMap());
     }
 
     private void updateInstanceForm(String pid, Map<String, Object> formData) {

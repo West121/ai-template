@@ -893,6 +893,103 @@ await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [lmainI
   } catch { /* 清理尽力而为（软删已保证不影响运行） */ }
 }
 
+/* ---------- 11d-3. 权限中心 P3 · 字段权限（V52：配置/并集放宽/出口脱敏/editable 强制/一致性守护） ---------- */
+{
+  const rolesAll = (await call(admin.token, "GET", "/api/system/roles?pageNum=1&pageSize=100")).body?.data?.list ?? []
+  const empRole = rolesAll.find((r) => r.code === "EMPLOYEE")?.id
+  const mgrRole = rolesAll.find((r) => r.code === "DEPT_MANAGER")?.id
+  const finRole = rolesAll.find((r) => r.code === "FINANCE")?.id
+  check("P3 角色齐备(EMPLOYEE/DEPT_MANAGER/FINANCE)", !!(empRole && mgrRole && finRole))
+  // 预清理（防残留）
+  for (const rid of [empRole, mgrRole, finRole]) {
+    await call(admin.token, "PUT", `/api/system/roles/${rid}/field-perms?feature=WORKFLOW_TASKS`, [])
+    await call(admin.token, "PUT", `/api/system/roles/${rid}/field-perms?feature=OFFICE_APPROVALS`, [])
+  }
+
+  // 0) 一致性守护：leave 表单清单键钉死（前端 registry 双钉，漂移即红）
+  const manifest = await call(admin.token, "GET", "/api/wf/forms/leave/fields")
+  const mKeys = (manifest.body?.data?.fields ?? []).map((f) => f.key)
+  check("P3 一致性守护：leave 清单键钉死", JSON.stringify(mKeys) === JSON.stringify(["leaveType", "startDate", "endDate", "days", "reason"]), JSON.stringify(mKeys))
+
+  // 1) catalog 归一端点（拍板 B：related_form_codes 合流 + 注解固定列）
+  const cat1 = await call(admin.token, "GET", "/api/system/field-perms/catalog?feature=WORKFLOW_TASKS")
+  check("P3 catalog(WORKFLOW_TASKS)=leave 表单字段合流", cat1.body?.code === 0 && (cat1.body.data?.formFields ?? []).length === 5
+    && cat1.body.data.formFields.some((f) => f.key === "reason"), JSON.stringify((cat1.body?.data?.formFields ?? []).map((f) => f.key)))
+  const cat2 = await call(admin.token, "GET", "/api/system/field-perms/catalog?feature=OFFICE_APPROVALS")
+  check("P3 catalog(OFFICE_APPROVALS)=@FieldPerm 注解固定列", cat2.body?.code === 0 && (cat2.body.data?.fixedColumns ?? []).length === 3
+    && cat2.body.data.fixedColumns.some((c) => c.field === "reason" && c.label === "事由"), JSON.stringify(cat2.body?.data?.fixedColumns))
+  const catPerm = await call(zhangsan.token, "GET", "/api/system/field-perms/catalog?feature=WORKFLOW_TASKS")
+  check("P3 catalog 无 system:role:edit 403", catPerm.status === 403 || catPerm.body?.code === 403, `status=${catPerm.status}`)
+
+  // 2) 非法组合校验
+  const badCombo = await call(admin.token, "PUT", `/api/system/roles/${empRole}/field-perms?feature=WORKFLOW_TASKS`,
+    [{ field: "reason", visible: false, editable: true }])
+  check("P3 不可见但可编辑 400", badCombo.body?.code === 400)
+
+  // 3) 脱敏前置：zhangsan 起一单带 reason（此刻无配置，正常入库）
+  const instA = await call(zhangsan.token, "POST", "/api/wf/instances", {
+    defCode: "leave_approval", formData: { leaveType: "ANNUAL", startDate: "2026-08-03", endDate: "2026-08-04", days: 1, reason: "P3机密事由A" },
+  })
+  const instAId = instA.body?.data?.id
+  check("P3 起测试实例A", instA.body?.code === 0 && !!instAId, JSON.stringify(instA.body?.message))
+  const preDetail = await call(zhangsan.token, "GET", `/api/wf/instances/${instAId}`)
+  check("P3 配置前 formData 含 reason", preDetail.body?.data?.formData?.reason === "P3机密事由A")
+
+  // 4) 配置 EMPLOYEE：reason 不可见不可编 + 读回
+  const put1 = await call(admin.token, "PUT", `/api/system/roles/${empRole}/field-perms?feature=WORKFLOW_TASKS`,
+    [{ field: "reason", visible: false, editable: false }])
+  check("P3 保存角色字段配置", put1.body?.code === 0)
+  const back1 = (await call(admin.token, "GET", `/api/system/roles/${empRole}/field-perms?feature=WORKFLOW_TASKS`)).body?.data ?? []
+  check("P3 配置读回(feature/field/visible)", back1.length === 1 && back1[0].feature === "WORKFLOW_TASKS"
+    && back1[0].field === "reason" && back1[0].visible === false, JSON.stringify(back1))
+
+  // 5) mine + 失效即时生效
+  const mineZ = await call(zhangsan.token, "GET", "/api/system/field-perms/mine?feature=WORKFLOW_TASKS")
+  check("P3 mine(zhangsan)=reason 不可见不可编", mineZ.body?.code === 0 && mineZ.body.data?.fields?.reason?.visible === false
+    && mineZ.body.data.fields.reason.editable === false, JSON.stringify(mineZ.body?.data))
+  const mineA = await call(admin.token, "GET", "/api/system/field-perms/mine?feature=WORKFLOW_TASKS")
+  check("P3 mine(admin 未配置)=空对象(全可见)", mineA.body?.code === 0 && Object.keys(mineA.body.data?.fields ?? { x: 1 }).length === 0, JSON.stringify(mineA.body?.data))
+
+  // 6) 出口脱敏：zhangsan 详情无 reason 键；admin(未配置角色)照见（向后兼容红线）
+  const zDetail = await call(zhangsan.token, "GET", `/api/wf/instances/${instAId}`)
+  check("P3 visible=false→wf 详情 formData 无 reason 键", zDetail.body?.code === 0
+    && !("reason" in (zDetail.body.data?.formData ?? {})) && zDetail.body.data?.formData?.days === 1,
+    JSON.stringify(Object.keys(zDetail.body?.data?.formData ?? {})))
+  const aDetail = await call(admin.token, "GET", `/api/wf/instances/${instAId}`)
+  check("P3 未配置角色(admin)仍见 reason", aDetail.body?.data?.formData?.reason === "P3机密事由A")
+
+  // 7) editable 强制（发起入口）：zhangsan 再起一单带 reason → 回传被丢弃（admin 视角亦无 reason=证明入口丢）
+  const instB = await call(zhangsan.token, "POST", "/api/wf/instances", {
+    defCode: "leave_approval", formData: { leaveType: "ANNUAL", startDate: "2026-08-05", endDate: "2026-08-06", days: 1, reason: "P3不应入库" },
+  })
+  const bDetail = await call(admin.token, "GET", `/api/wf/instances/${instB.body?.data?.id}`)
+  check("P3 editable=false→发起回传被丢弃", instB.body?.code === 0 && !("reason" in (bDetail.body?.data?.formData ?? {})),
+    JSON.stringify(Object.keys(bDetail.body?.data?.formData ?? {})))
+
+  // 8) 多角色并集放宽：DEPT_MANAGER 不可见 + FINANCE 可见 → manager 可见
+  await call(admin.token, "PUT", `/api/system/roles/${mgrRole}/field-perms?feature=WORKFLOW_TASKS`, [{ field: "reason", visible: false, editable: false }])
+  await call(admin.token, "PUT", `/api/system/roles/${finRole}/field-perms?feature=WORKFLOW_TASKS`, [{ field: "reason", visible: true, editable: true }])
+  const mineM = await call(manager.token, "GET", "/api/system/field-perms/mine?feature=WORKFLOW_TASKS")
+  check("P3 多角色并集放宽(manager 可见)", mineM.body?.data?.fields?.reason?.visible === true && mineM.body.data.fields.reason.editable === true, JSON.stringify(mineM.body?.data))
+
+  // 9) Approval DTO 固定列脱敏：manager 双角色配 OFFICE_APPROVALS reason 不可见 → 列表 reason 全 null → 清配置恢复
+  await call(admin.token, "PUT", `/api/system/roles/${mgrRole}/field-perms?feature=OFFICE_APPROVALS`, [{ field: "reason", visible: false, editable: false }])
+  await call(admin.token, "PUT", `/api/system/roles/${finRole}/field-perms?feature=OFFICE_APPROVALS`, [{ field: "reason", visible: false, editable: false }])
+  const mList = (await call(manager.token, "GET", "/api/office/approvals?pageNum=1&pageSize=50")).body?.data?.list ?? []
+  check("P3 Approval DTO 列脱敏(reason 全 null)", mList.length > 0 && mList.every((a) => a.reason == null), `n=${mList.length}`)
+  await call(admin.token, "PUT", `/api/system/roles/${mgrRole}/field-perms?feature=OFFICE_APPROVALS`, [])
+  await call(admin.token, "PUT", `/api/system/roles/${finRole}/field-perms?feature=OFFICE_APPROVALS`, [])
+  const mList2 = (await call(manager.token, "GET", "/api/office/approvals?pageNum=1&pageSize=50")).body?.data?.list ?? []
+  check("P3 清配置后 reason 恢复(缓存失效生效)", mList2.some((a) => a.reason != null), `n=${mList2.length}`)
+
+  // 自清：清空全部测试配置（向后兼容复原，不影响后续断言）
+  for (const rid of [empRole, mgrRole, finRole]) {
+    await call(admin.token, "PUT", `/api/system/roles/${rid}/field-perms?feature=WORKFLOW_TASKS`, [])
+  }
+  const mineClear = await call(zhangsan.token, "GET", "/api/system/field-perms/mine?feature=WORKFLOW_TASKS")
+  check("P3 清配置后 mine 空(向后兼容复原)", Object.keys(mineClear.body?.data?.fields ?? { x: 1 }).length === 0)
+}
+
 /* ---------- 11e. 个人中心自助端点（磐石：change-password / profile，仅本人，不动种子密码） ---------- */
 {
   const PTS = Date.now()

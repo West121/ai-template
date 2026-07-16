@@ -1,6 +1,7 @@
 package com.hentor.oa.office.service;
 
 import com.hentor.oa.common.core.PageResult;
+import com.hentor.oa.common.fieldperm.FieldPermMasker;
 import com.hentor.oa.common.exception.BusinessException;
 import com.hentor.oa.common.security.DataScope;
 import com.hentor.oa.common.security.UserContext;
@@ -16,6 +17,7 @@ import com.hentor.oa.office.repository.ApprovalCcRepository;
 import com.hentor.oa.office.repository.ApprovalLogRepository;
 import com.hentor.oa.office.repository.ApprovalRepository;
 import com.hentor.oa.office.support.DataScopeSupport;
+import com.hentor.oa.system.fieldperm.FieldPermService;
 import com.hentor.oa.office.support.DeptNameResolver;
 import com.hentor.oa.office.support.SecuritySupport;
 import jakarta.persistence.OptimisticLockException;
@@ -49,6 +51,10 @@ public class ApprovalService {
     private final ApprovalCcRepository ccRepository;
     private final DeptNameResolver deptNameResolver;
     private final DataScopeSupport dataScopeSupport;
+    private final FieldPermService fieldPermService;
+
+    /** P3 字段权限功能键（opaque，拍板 A；@FieldPermEntity(ApprovalResponse) 同键）。 */
+    private static final String FIELD_PERM_FEATURE = "OFFICE_APPROVALS";
 
     /**
      * 分页查询：status 条件 + 当前用户<b>多维</b>数据权限过滤（部门维 AND 成本中心/项目维）。
@@ -194,7 +200,7 @@ public class ApprovalService {
             ccRepository.saveAll(ccRows);
         }
         addLog(saved.getId(), ApprovalLog.ACTION_CREATE, null);
-        return toResponse(saved, deptNameResolver.nameMap());
+        return masked(toResponse(saved, deptNameResolver.nameMap()), fieldPermService.invisibleFields(FIELD_PERM_FEATURE));
     }
 
     @Transactional
@@ -205,7 +211,7 @@ public class ApprovalService {
         // 冲突转 409；胜出后再记日志，避免败者写入审计日志（且随事务回滚）。
         Approval saved = saveWithOptimisticLock(approval);
         addLog(id, ApprovalLog.ACTION_APPROVE, comment);
-        return toResponse(saved, deptNameResolver.nameMap());
+        return masked(toResponse(saved, deptNameResolver.nameMap()), fieldPermService.invisibleFields(FIELD_PERM_FEATURE));
     }
 
     @Transactional
@@ -217,7 +223,7 @@ public class ApprovalService {
         approval.setStatus(Approval.STATUS_REJECTED);
         Approval saved = saveWithOptimisticLock(approval);
         addLog(id, ApprovalLog.ACTION_REJECT, reason);
-        return toResponse(saved, deptNameResolver.nameMap());
+        return masked(toResponse(saved, deptNameResolver.nameMap()), fieldPermService.invisibleFields(FIELD_PERM_FEATURE));
     }
 
     /**
@@ -237,7 +243,7 @@ public class ApprovalService {
         approval.setStatus(Approval.STATUS_WITHDRAWN);
         Approval saved = saveWithOptimisticLock(approval);
         addLog(id, ApprovalLog.ACTION_WITHDRAW, null);
-        return toResponse(saved, deptNameResolver.nameMap());
+        return masked(toResponse(saved, deptNameResolver.nameMap()), fieldPermService.invisibleFields(FIELD_PERM_FEATURE));
     }
 
     /**
@@ -328,14 +334,20 @@ public class ApprovalService {
 
     private PageResult<ApprovalResponse> toPageResult(Page<Approval> page) {
         Map<Long, String> deptNames = deptNameResolver.nameMap();
+        java.util.Set<String> invisible = fieldPermService.invisibleFields(FIELD_PERM_FEATURE); // P3 每页解析一次
         List<ApprovalResponse> list = page.getContent().stream()
-                .map(a -> toResponse(a, deptNames))
+                .map(a -> masked(toResponse(a, deptNames), invisible))
                 .toList();
         return new PageResult<>(list, page.getTotalElements(), page.getNumber() + 1, page.getSize());
     }
 
     private String deptName(Approval approval, Map<Long, String> deptNames) {
         return approval.getDeptId() != null ? deptNames.get(approval.getDeptId()) : null;
+    }
+
+    /** P3 出口脱敏：@FieldPerm 标注且 visible=false 的列置 null（record 重建，失败安全）。 */
+    private ApprovalResponse masked(ApprovalResponse r, java.util.Set<String> invisible) {
+        return FieldPermMasker.mask(r, invisible);
     }
 
     private ApprovalResponse toResponse(Approval approval, Map<Long, String> deptNames) {
