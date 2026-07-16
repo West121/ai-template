@@ -1,7 +1,7 @@
-import { useEffect } from "react"
+import { useEffect, useMemo } from "react"
 import { useNavigate } from "react-router-dom"
 import { CornerDownLeft } from "lucide-react"
-import { flattenMenu, findMenuChain, openMenuItem } from "@/config/menu"
+import { filterMenu, flattenMenu, findMenuChain, menuTree, openMenuItem } from "@/config/menu"
 import {
   CommandDialog,
   CommandEmpty,
@@ -11,13 +11,18 @@ import {
   CommandList,
 } from "@/components/ui/command"
 import { useUiStore } from "@/stores/ui-store"
-
-const searchableItems = flattenMenu().filter((item) => !item.children?.length && !item.hidden)
+import { useAuthStore } from "@/stores/auth-store"
 
 export function GlobalSearch() {
   const navigate = useNavigate()
   const open = useUiStore((s) => s.searchOpen)
   const setOpen = useUiStore((s) => s.setSearchOpen)
+  // ⌘K 候选随权限动态过滤（hidden + perm；离线 permissions=null 放行）
+  const permissions = useAuthStore((s) => s.permissions)
+  const searchableItems = useMemo(
+    () => flattenMenu(filterMenu(menuTree, permissions)).filter((item) => !item.children?.length),
+    [permissions],
+  )
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {

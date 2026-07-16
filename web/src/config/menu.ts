@@ -63,6 +63,8 @@ export interface MenuItem {
   external?: boolean
   /** 隐藏项：不在主导航/⌘K 渲染，但仍供面包屑/标签解析（如个人中心从用户菜单进） */
   hidden?: boolean
+  /** 菜单级权限门控（拍板⑤）：无此功能权限则不渲染该菜单（离线 permissions=null 放行）；页内仍需 useHasPerm 二验 */
+  perm?: string
   children?: MenuItem[]
 }
 
@@ -82,6 +84,7 @@ export const menuTree: MenuItem[] = [
     ],
   },
   { title: "自动化编排", path: "/automation", icon: Zap },
+  { title: "开发者工作台", path: "/dev-studio", icon: SquareCode, perm: "dev:studio:view" },
   { title: "知识库", path: "/knowledge", icon: Library },
   {
     title: "单据管理",
@@ -184,6 +187,26 @@ function stripHidden(items: MenuItem[]): MenuItem[] {
     .map((i) => (i.children ? { ...i, children: stripHidden(i.children) } : i))
 }
 export const visibleMenuTree: MenuItem[] = stripHidden(menuTree)
+
+/**
+ * 按当前用户权限过滤菜单（hidden + perm 双过滤，含子级递归；photo 拍板⑤）。
+ * permissions=null（离线演示）→ perm 全放行；父组子项全被过滤时父组一并隐藏。
+ */
+export function filterMenu(items: MenuItem[], permissions: string[] | null): MenuItem[] {
+  const out: MenuItem[] = []
+  for (const item of items) {
+    if (item.hidden) continue
+    if (item.perm && permissions != null && !permissions.includes(item.perm)) continue
+    if (item.children) {
+      const children = filterMenu(item.children, permissions)
+      if (children.length === 0) continue // 子项全无权 → 组头一并隐藏
+      out.push({ ...item, children })
+    } else {
+      out.push(item)
+    }
+  }
+  return out
+}
 
 /** 统一的菜单打开逻辑：外链新窗口，内部路径走路由 */
 export function openMenuItem(item: MenuItem, navigate: (path: string) => void) {

@@ -1,8 +1,8 @@
-import { useEffect } from "react"
+import { useEffect, useMemo } from "react"
 import { Outlet, useLocation, useNavigate } from "react-router-dom"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react"
-import { findMenuByPath, findRootMenu, visibleMenuTree, type MenuItem } from "@/config/menu"
+import { filterMenu, findMenuByPath, findRootMenu, menuTree, type MenuItem } from "@/config/menu"
 import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -106,6 +106,10 @@ export function AppLayout() {
     }
   }, [token, offline, activeAssignmentId, setBadge])
 
+  // 菜单级权限过滤（perm 字段，拍板⑤）：随权限动态计算；离线 permissions=null 全放行
+  const permissions = useAuthStore((s) => s.permissions)
+  const navTree = useMemo(() => filterMenu(menuTree, permissions), [permissions])
+
   const activeRoot = findRootMenu(pathname)
   const mixedSideItems = layout === "mixed" ? (activeRoot?.children ?? []) : []
 
@@ -134,7 +138,7 @@ export function AppLayout() {
     <div className="flex h-screen overflow-hidden bg-background">
       {layout === "vertical" && (
         <>
-          <Sidebar items={visibleMenuTree} showLogo />
+          <Sidebar items={navTree} showLogo />
           <div className="flex min-w-0 flex-1 flex-col">
             <Header
               left={
@@ -156,7 +160,7 @@ export function AppLayout() {
               <>
                 <Logo className="h-auto px-0" />
                 <div className="ml-2 min-w-0 flex-1">
-                  <HorizontalMenu items={visibleMenuTree} />
+                  <HorizontalMenu items={navTree} />
                 </div>
               </>
             }
@@ -173,7 +177,7 @@ export function AppLayout() {
                 <Logo className="h-auto px-0" />
                 <div className="ml-2 min-w-0 flex-1">
                   <HorizontalMenu
-                    items={visibleMenuTree}
+                    items={navTree}
                     rootOnly
                     onRootChange={(item) => navigate(firstLeaf(item).path)}
                   />

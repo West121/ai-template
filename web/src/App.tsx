@@ -20,6 +20,7 @@ const WorkflowFormDefsPage = lazy(() => import("@/pages/workflow/form-defs"))
 const WorkflowInstanceDetailPage = lazy(() => import("@/pages/workflow/instance-detail"))
 const WorkflowSealsPage = lazy(() => import("@/pages/workflow/seals"))
 const AutomationPage = lazy(() => import("@/pages/automation"))
+const DevStudioPage = lazy(() => import("@/pages/dev-studio"))
 const BizdocCenterPage = lazy(() => import("@/pages/bizdoc/center"))
 const BizdocDefsPage = lazy(() => import("@/pages/bizdoc/defs"))
 const BizdocRunPage = lazy(() => import("@/pages/bizdoc/run"))
@@ -179,6 +180,7 @@ export default function App() {
               <Route path="leave" element={<AttendanceLeavePage />} />
               <Route path="trip" element={<AttendanceTripPage />} />
             </Route>
+            <Route path="dev-studio" element={<DevStudioPage />} />
             <Route path="contacts" element={<ContactsPage />} />
             <Route path="announcement" element={<AnnouncementPage />} />
             <Route path="schedule" element={<SchedulePage />} />
