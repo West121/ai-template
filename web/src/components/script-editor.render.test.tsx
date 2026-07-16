@@ -127,7 +127,7 @@ describe("ScriptEditor 精简布局", () => {
     expect(screen.getByText(/import java\.util\.\*/)).toBeTruthy()
   })
 
-  it("manifest 拉到 → 速查区 manifest 化（vars 带类型 + beans 折叠）", async () => {
+  it("manifest 拉到 → 三层速查：推荐 API 展开 / 全部服务折叠+搜索 / 工具类重名区分 / imports 行", async () => {
     vi.stubGlobal("fetch", async (url: string) => {
       if (String(url).includes("/api/wf/script/context-manifest")) {
         return {
@@ -137,7 +137,16 @@ describe("ScriptEditor 精简布局", () => {
             data: {
               vars: [{ name: "vars", type: "Map<String,Object>", desc: "流程变量读写" }],
               langs: [],
-              beans: [{ name: "scriptOrgApi", className: "x.ScriptOrgApi", desc: "组织查询", methods: [{ name: "deptName", params: [{ name: "deptId", type: "Long" }], returnType: "String", doc: "部门名" }] }],
+              beans: [
+                { name: "scriptOrgApi", className: "x.ScriptOrgApi", desc: "组织查询", tier: "api", methods: [{ name: "deptName", params: [{ name: "deptId", type: "Long" }], returnType: "String", doc: "部门名" }] },
+                { name: "sysUserService", className: "x.SysUserService", desc: "SysUserService", tier: "service", methods: [{ name: "assignments", params: [{ name: "userId", type: "Long" }], returnType: "List" }] },
+                { name: "otherService", className: "x.OtherService", desc: "OtherService", tier: "service", methods: [{ name: "doThing", params: [], returnType: "void" }] },
+              ],
+              statics: [
+                { simpleName: "StringUtils", className: "org.springframework.util.StringUtils", methods: [{ name: "hasText", params: [{ name: "str", type: "String" }], returnType: "boolean" }] },
+                { simpleName: "StringUtils", className: "org.apache.commons.lang3.StringUtils", methods: [{ name: "abbreviate", params: [], returnType: "String" }] },
+              ],
+              imports: ["java.util.*", "org.springframework.util.*"],
             },
           }),
         } as unknown as Response
@@ -147,12 +156,25 @@ describe("ScriptEditor 精简布局", () => {
     const user = userEvent.setup()
     renderEditor()
     await user.click(screen.getByRole("button", { name: /测试运行 \/ 调试/ }))
-    // vars 带类型
+    // vars 带类型 + imports 行
     expect(await screen.findByText("vars: Map<String,Object>")).toBeTruthy()
-    // beans 折叠列表：展开见方法签名 + doc
-    await user.click(screen.getByText(/受信 Spring Beans（1）/))
-    expect(await screen.findByText(/deptName\(deptId: Long\): String/)).toBeTruthy()
+    expect(screen.getByText(/Java 预置 import/)).toBeTruthy()
+    // 推荐 API 默认展开：方法 + doc 直接可见
+    expect(screen.getByText(/推荐 API（1）/)).toBeTruthy()
+    expect(screen.getByText(/deptName\(deptId: Long\): String/)).toBeTruthy()
     expect(screen.getByText("部门名")).toBeTruthy()
+    // 全部服务折叠：折叠态不渲染 bean（性能）；展开后搜索过滤 + 方法按需渲染
+    expect(screen.queryByText("sysUserService")).toBeNull()
+    await user.click(screen.getByText(/全部服务（2）/))
+    expect(await screen.findByText("sysUserService")).toBeTruthy()
+    expect(screen.queryByText(/assignments\(userId: Long\)/)).toBeNull() // 未展开条目不渲染方法
+    await user.type(screen.getByPlaceholderText("搜索服务名 / 方法名"), "assignments")
+    expect(await screen.findByText(/assignments\(userId: Long\): List/)).toBeTruthy() // 方法名命中 → 自动展开
+    expect(screen.queryByText("otherService")).toBeNull() // 未命中的被过滤
+    // 工具类折叠：展开后两个 StringUtils 以 className 区分
+    await user.click(screen.getByText(/工具类（2）/))
+    expect(await screen.findByText("org.springframework.util.StringUtils")).toBeTruthy()
+    expect(screen.getByText("org.apache.commons.lang3.StringUtils")).toBeTruthy()
   })
 
   it("manifest 404 → 静默降级：回退硬编码速查，不炸", async () => {

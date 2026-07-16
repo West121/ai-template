@@ -34,10 +34,12 @@ import {
 import { Modal } from "@/components/modal"
 import { useHasPerm } from "@/stores/auth-store"
 import { CodeEditor, type CodeLanguage } from "@/components/code-editor"
+import { Input } from "@/components/ui/input"
 import {
   fetchScriptContextManifest,
   scriptContextCompletionExt,
   type ScriptContextManifest,
+  type ScriptCtxMethod,
 } from "@/lib/script-context-completion"
 import type { ScriptConfig, ScriptLang } from "@/pages/workflow/designer/flow/model"
 
@@ -100,7 +102,7 @@ const LANGS: LangMeta[] = [
   },
 ]
 
-/** 脚本上下文速查（所有语言通用；后端注入） */
+/** 脚本上下文速查（所有语言通用；后端注入）——manifest 拉不到时的硬编码兜底 */
 const CONTEXT_HINTS: { name: string; desc: string }[] = [
   { name: "vars", desc: "读写流程变量" },
   { name: "form", desc: "表单数据（只读）" },
@@ -109,6 +111,52 @@ const CONTEXT_HINTS: { name: string; desc: string }[] = [
   { name: 'spring.has("名")', desc: "判断 Bean 是否存在" },
   { name: "log.info / warn / error", desc: "写日志" },
 ]
+
+/** 方法签名列表（速查区）：仅在条目展开时挂载（78 服务 × N 方法的渲染成本按需付） */
+function MethodList({ methods }: { methods: ScriptCtxMethod[] }) {
+  return (
+    <ul className="space-y-0.5 pl-4">
+      {methods.map((m, i) => (
+        <li key={`${m.name}-${i}`} className="text-[11px]">
+          <code className="font-mono text-foreground">
+            {m.name}({m.params.map((pp) => (pp.name ? `${pp.name}: ${pp.type}` : pp.type)).join(", ")}): {m.returnType}
+          </code>
+          {m.doc && <span className="ml-1.5 text-muted-foreground">{m.doc}</span>}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** 惰性条目：折叠时不渲染 children（性能）；搜索命中方法名时 forceOpen 直接展开 */
+function LazyEntry({
+  title,
+  sub,
+  forceOpen = false,
+  children,
+}: {
+  title: string
+  sub?: string
+  forceOpen?: boolean
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  const isOpen = forceOpen || open
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-baseline gap-1.5 rounded px-0.5 text-left text-[11px] hover:bg-muted/60"
+      >
+        <ChevronDown className={cn("size-3 shrink-0 self-center text-muted-foreground transition-transform", isOpen && "rotate-180")} />
+        <code className="shrink-0 font-mono font-medium text-foreground">{title}</code>
+        {sub && <span className="min-w-0 truncate text-muted-foreground">{sub}</span>}
+      </button>
+      {isOpen && children}
+    </div>
+  )
+}
 
 export interface ScriptEditorProps {
   value: ScriptConfig
@@ -146,6 +194,25 @@ export function ScriptEditor({ value, onChange, className, expandable = true, la
     }
   }, [readOnly])
   const contextExtensions = useMemo(() => (manifest ? [scriptContextCompletionExt(manifest)] : undefined), [manifest])
+
+  // 三层分层：api=精选推荐（无 tier 的旧 manifest 也归此层）/ service=全量业务 Service
+  const apiBeans = useMemo(() => (manifest?.beans ?? []).filter((b) => b.tier !== "service"), [manifest])
+  const serviceBeans = useMemo(() => (manifest?.beans ?? []).filter((b) => b.tier === "service"), [manifest])
+  const [svcQuery, setSvcQuery] = useState("")
+  const filteredService = useMemo(() => {
+    const q = svcQuery.trim().toLowerCase()
+    if (!q) return serviceBeans.map((bean) => ({ bean, byMethod: false }))
+    const out: { bean: (typeof serviceBeans)[number]; byMethod: boolean }[] = []
+    for (const bean of serviceBeans) {
+      const inName =
+        bean.name.toLowerCase().includes(q) ||
+        (bean.desc ?? "").toLowerCase().includes(q) ||
+        (bean.className ?? "").toLowerCase().includes(q)
+      const byMethod = bean.methods.some((m) => m.name.toLowerCase().includes(q))
+      if (inName || byMethod) out.push({ bean, byMethod })
+    }
+    return out
+  }, [serviceBeans, svcQuery])
 
   const langMeta = LANGS.find((l) => l.value === value.lang) ?? LANGS[0]
 
@@ -320,31 +387,79 @@ export function ScriptEditor({ value, onChange, className, expandable = true, la
             </ul>
           </div>
 
-          {/* 受信 Spring Beans（manifest 驱动，折叠）：bean 名 + 方法签名 + doc */}
-          {manifest && manifest.beans.length > 0 && (
-            <Collapsible className="rounded-md border bg-muted/30">
-              <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11px] font-medium text-muted-foreground [&[data-state=open]>svg]:rotate-180">
-                受信 Spring Beans（{manifest.beans.length}）— spring.bean("名称") 取用
+          {/* Java 预置 import（manifest.imports）：包下类可写简名，其余全限定名 */}
+          {manifest && manifest.imports.length > 0 && (
+            <p className="text-[11px] text-muted-foreground">
+              Java 预置 import：<code className="font-mono text-foreground">{manifest.imports.join("、")}</code>
+              ——这些包下类可直接写简名；commons/hutool 等用全限定名（见工具类列表 className）。
+            </p>
+          )}
+
+          {/* 三层清单（manifest 驱动）：推荐 API 置顶展开 / 全部服务折叠+搜索 / 工具类折叠。
+              折叠态不渲染方法（Radix 关闭即卸载 + LazyEntry 按需），78 服务不全渲染。 */}
+          {manifest && apiBeans.length > 0 && (
+            <Collapsible defaultOpen className="rounded-md border bg-muted/30">
+              <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11px] font-medium text-muted-foreground [&[data-state=open]>svg:last-child]:rotate-180">
+                推荐 API（{apiBeans.length}）— spring.bean("名称") 取用
                 <ChevronDown className="ml-auto size-3 shrink-0 transition-transform" />
               </CollapsibleTrigger>
               <CollapsibleContent className="space-y-1.5 border-t px-2 py-1.5">
-                {manifest.beans.map((b) => (
+                {apiBeans.map((b) => (
                   <div key={b.name} className="space-y-0.5">
                     <div className="flex items-baseline gap-1.5 text-[11px]">
                       <code className="font-mono font-medium text-foreground">{b.name}</code>
                       {b.desc && <span className="min-w-0 truncate text-muted-foreground">{b.desc}</span>}
                     </div>
-                    <ul className="space-y-0.5 pl-3">
-                      {b.methods.map((m, i) => (
-                        <li key={`${m.name}-${i}`} className="text-[11px]">
-                          <code className="font-mono text-foreground">
-                            {m.name}({m.params.map((pp) => (pp.name ? `${pp.name}: ${pp.type}` : pp.type)).join(", ")}): {m.returnType}
-                          </code>
-                          {m.doc && <span className="ml-1.5 text-muted-foreground">{m.doc}</span>}
-                        </li>
-                      ))}
-                    </ul>
+                    <MethodList methods={b.methods} />
                   </div>
+                ))}
+              </CollapsibleContent>
+            </Collapsible>
+          )}
+
+          {manifest && serviceBeans.length > 0 && (
+            <Collapsible className="rounded-md border bg-muted/30">
+              <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11px] font-medium text-muted-foreground [&[data-state=open]>svg:last-child]:rotate-180">
+                全部服务（{serviceBeans.length}）— 业务 Service 全量，spring.bean("名称") 取用
+                <ChevronDown className="ml-auto size-3 shrink-0 transition-transform" />
+              </CollapsibleTrigger>
+              <CollapsibleContent className="space-y-1 border-t px-2 py-1.5">
+                <Input
+                  value={svcQuery}
+                  onChange={(e) => setSvcQuery(e.target.value)}
+                  placeholder="搜索服务名 / 方法名"
+                  className="h-6 text-[11px]"
+                />
+                {filteredService.length === 0 ? (
+                  <p className="py-1 text-[11px] text-muted-foreground">无匹配服务</p>
+                ) : (
+                  filteredService.map(({ bean, byMethod }) => (
+                    <LazyEntry
+                      key={bean.name}
+                      title={bean.name}
+                      sub={bean.desc}
+                      forceOpen={svcQuery.trim() !== "" && byMethod}
+                    >
+                      <MethodList methods={bean.methods} />
+                      {bean.truncated && <p className="pl-4 text-[10px] text-muted-foreground">（方法列表已截断）</p>}
+                    </LazyEntry>
+                  ))
+                )}
+              </CollapsibleContent>
+            </Collapsible>
+          )}
+
+          {manifest && manifest.statics.length > 0 && (
+            <Collapsible className="rounded-md border bg-muted/30">
+              <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11px] font-medium text-muted-foreground [&[data-state=open]>svg:last-child]:rotate-180">
+                工具类（{manifest.statics.length}）— Java 简名直呼（预置 import 内）/ 其余全限定名
+                <ChevronDown className="ml-auto size-3 shrink-0 transition-transform" />
+              </CollapsibleTrigger>
+              <CollapsibleContent className="space-y-1 border-t px-2 py-1.5">
+                {manifest.statics.map((s, i) => (
+                  <LazyEntry key={`${s.className}-${i}`} title={s.simpleName} sub={s.className}>
+                    <MethodList methods={s.methods} />
+                  </LazyEntry>
                 ))}
               </CollapsibleContent>
             </Collapsible>

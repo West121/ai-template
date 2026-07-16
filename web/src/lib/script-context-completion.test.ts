@@ -18,18 +18,33 @@ const MANIFEST: ScriptContextManifest = {
   ],
   langs: [{ lang: "java", returnSemantics: "方法体+显式 return" }],
   beans: [
+    // service 层放数组最前，验证补全会把 api 层排到前面
+    {
+      name: "sysUserService",
+      className: "com.xingchen.oa.system.service.SysUserService",
+      desc: "SysUserService",
+      tier: "service",
+      methods: [{ name: "assignments", params: [{ name: "userId", type: "Long" }], returnType: "List" }],
+    },
     {
       name: "scriptOrgApi",
       className: "com.xingchen.oa.workflow.engine.script.ScriptOrgApi",
       desc: "组织查询",
+      tier: "api",
       methods: [
         { name: "deptLeaderId", params: [{ name: "deptId", type: "Long" }], returnType: "Long", doc: "部门→负责人" },
         { name: "deptName", params: [{ name: "deptId", type: "Long" }], returnType: "String" },
         { name: "userName", params: [{ name: "userId", type: "Long" }], returnType: "String" },
       ],
     },
-    { name: "regionService", className: "com.xingchen.oa.infra.service.RegionService", desc: "IP 归属地", methods: [{ name: "resolve", params: [{ name: "ip", type: "String" }], returnType: "String" }] },
+    { name: "regionService", className: "com.xingchen.oa.infra.service.RegionService", desc: "IP 归属地", tier: "api", methods: [{ name: "resolve", params: [{ name: "ip", type: "String" }], returnType: "String" }] },
   ],
+  statics: [
+    { simpleName: "StringUtils", className: "org.springframework.util.StringUtils", methods: [{ name: "hasText", params: [{ name: "str", type: "String" }], returnType: "boolean" }] },
+    { simpleName: "StringUtils", className: "org.apache.commons.lang3.StringUtils", methods: [{ name: "abbreviate", params: [{ name: "str", type: "String" }, { name: "maxWidth", type: "int" }], returnType: "String" }] },
+    { simpleName: "CollUtil", className: "cn.hutool.core.collection.CollUtil", methods: [{ name: "isEmpty", params: [{ type: "Collection" }], returnType: "boolean" }] },
+  ],
+  imports: ["java.util.*", "java.time.*", "java.math.*", "org.springframework.util.*"],
 }
 
 const source = makeScriptContextCompletion(MANIFEST)
@@ -95,5 +110,46 @@ describe("脚本上下文补全源", () => {
   it("Java 语句里同样工作（分号/类型声明前文不干扰）", () => {
     const r = complete('int d = 1; spring.bean("reg')
     expect(labels(r)).toContain("regionService")
+  })
+
+  /* ---------------- 三层清单（tier/statics/imports） ---------------- */
+
+  it('tier 排序：spring.bean(" 候选 api 层置前（detail 标「推荐」），service 层也全出', () => {
+    const r = complete('spring.bean("')
+    const ls = labels(r)
+    expect(ls).toContain("sysUserService") // service 全量出
+    // api 两个在数组最前（boost + 排序双保险）
+    expect(ls.slice(0, 2).sort()).toEqual(["regionService", "scriptOrgApi"])
+    const api = r!.options.find((o) => o.label === "scriptOrgApi")!
+    expect(api.detail).toContain("推荐")
+    const svc = r!.options.find((o) => o.label === "sysUserService")!
+    expect(svc.detail ?? "").not.toContain("推荐")
+  })
+
+  it('service 层 bean：spring.bean("sysUserService"). → 方法带参名', () => {
+    const r = complete('spring.bean("sysUserService").as')
+    expect(labels(r).some((l) => l.startsWith("assignments(userId: Long)"))).toBe(true)
+  })
+
+  it("StringUtils. → 预置 import 覆盖的 spring 版优先（hasText 在、commons 的 abbreviate 不在）", () => {
+    const ls = labels(complete("StringUtils.ha"))
+    expect(ls.some((l) => l.startsWith("hasText("))).toBe(true)
+    expect(ls.some((l) => l.startsWith("abbreviate("))).toBe(false)
+  })
+
+  it("CollUtil.（唯一简名、不在预置 import）→ 仍出静态方法", () => {
+    expect(labels(complete("CollUtil.")).some((l) => l.startsWith("isEmpty("))).toBe(true)
+  })
+
+  it("顶层大写简名：两个 StringUtils 都出且 info 以 className 区分；detail=工具类", () => {
+    const r = complete("Str")
+    const hits = r!.options.filter((o) => o.label === "StringUtils")
+    expect(hits).toHaveLength(2)
+    const infos = hits.map((h) => String(h.info)).sort()
+    expect(infos[0]).toContain("org.apache.commons.lang3")
+    expect(infos[1]).toContain("org.springframework.util")
+    expect(hits[0].detail).toBe("工具类")
+    // 上下文变量仍在同一候选池（CM 前缀过滤负责收敛）
+    expect(labels(r)).toContain("vars")
   })
 })
