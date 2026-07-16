@@ -40,6 +40,7 @@ import type {
   ValidationRule,
   WidgetEvents,
 } from "@/types/workflow"
+import type { Locale } from "@/stores/app-store"
 
 export type WidgetType =
   | "input"
@@ -75,6 +76,8 @@ export interface FormWidget {
   id: string
   type: WidgetType
   label: string
+  /** 多语言 label（i18n M1）：只存 en/zh-TW/th/ja，zh-CN 即 label；随 schemaJson 序列化 */
+  labelI18n?: Partial<Record<Locale, string>>
   placeholder: string
   required: boolean
   description: string

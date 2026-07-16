@@ -61,6 +61,7 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Modal } from "@/components/modal"
 import { FormRenderer } from "@/components/form-renderer"
+import { LabelI18nButton, type LabelI18nValue } from "@/components/i18n/label-i18n-dialog"
 import type {
   ConditionGroup,
   DataSource,
@@ -666,7 +667,16 @@ function PropertyPanel({
           )}
           <div className="space-y-1.5">
             <Label className="text-xs">{isContainer || isSubform ? "标题" : "字段标签"}</Label>
-            <Input value={widget.label} onChange={(e) => onUpdate({ label: e.target.value })} className="h-8 text-sm" />
+            {/* i18n M1：右侧多语言钮 → labelI18n（只存非中文四语，随 schemaJson 序列化） */}
+            <div className="flex items-center gap-1">
+              <Input value={widget.label} onChange={(e) => onUpdate({ label: e.target.value })} className="h-8 text-sm" />
+              <LabelI18nButton
+                source={widget.label}
+                value={widget.labelI18n}
+                onChange={(labelI18n) => onUpdate({ labelI18n })}
+                context="OA 表单字段名，简短名词"
+              />
+            </div>
           </div>
         </>
       )}
@@ -1444,6 +1454,9 @@ export interface FormDesignerCoreProps {
   onWidgetsChange: Dispatch<SetStateAction<FormWidget[]>>
   title: string
   onTitleChange: (title: string) => void
+  /** 表单标题多语言（i18n M1，可选受控；不传则表单设置中不出现多语言钮） */
+  titleI18n?: LabelI18nValue
+  onTitleI18nChange?: (value: LabelI18nValue) => void
   showKeyField?: boolean
   className?: string
   /** 表单级事件（受控，可选） */
@@ -1458,6 +1471,8 @@ export function FormDesignerCore({
   onWidgetsChange: setWidgets,
   title,
   onTitleChange,
+  titleI18n,
+  onTitleI18nChange,
   showKeyField = false,
   className,
   formEvents,
@@ -1725,7 +1740,17 @@ export function FormDesignerCore({
           <div className="max-h-[60vh] space-y-3 overflow-y-auto py-1">
             <div className="space-y-1.5">
               <Label className="text-xs">表单标题</Label>
-              <Input value={title} onChange={(e) => onTitleChange(e.target.value)} className="h-8" />
+              <div className="flex items-center gap-1">
+                <Input value={title} onChange={(e) => onTitleChange(e.target.value)} className="h-8" />
+                {onTitleI18nChange && (
+                  <LabelI18nButton
+                    source={title}
+                    value={titleI18n}
+                    onChange={onTitleI18nChange}
+                    context="OA 表单标题，简短名词"
+                  />
+                )}
+              </div>
             </div>
             <ScriptField label="onLoad（进入表单）" value={events.onLoad} onChange={(v) => setEvents({ ...events, onLoad: v })} />
             <ScriptField label="onChange（任意字段变化）" value={events.onChange} onChange={(v) => setEvents({ ...events, onChange: v })} />

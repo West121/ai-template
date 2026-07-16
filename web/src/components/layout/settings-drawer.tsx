@@ -14,6 +14,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
+  LOCALES,
   useAppStore,
   type AppSettings,
   type LayoutMode,
@@ -142,6 +143,8 @@ export function SettingsDrawer() {
   const layout = useAppStore((s) => s.layout)
   const tabStyle = useAppStore((s) => s.tabStyle)
   const themeMode = useAppStore((s) => s.themeMode)
+  const locale = useAppStore((s) => s.locale)
+  const setLocale = useAppStore((s) => s.setLocale)
   const primaryColor = useAppStore((s) => s.primaryColor)
   const radius = useAppStore((s) => s.radius)
   const updateSettings = useAppStore((s) => s.updateSettings)
@@ -189,6 +192,28 @@ export function SettingsDrawer() {
                 >
                   <mode.icon className="size-4" />
                   {mode.label}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section>
+            {/* 语言：与顶栏 LocaleSwitcher 共享 app-store.locale 单一真源（i18n M1，语言名母语自显） */}
+            <Label className="text-xs text-muted-foreground">语言 / Language</Label>
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              {LOCALES.map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  onClick={() => setLocale(item.value)}
+                  className={cn(
+                    "rounded-md border px-1 py-2 text-xs transition-colors",
+                    locale === item.value
+                      ? "border-primary bg-primary/5 text-primary"
+                      : "text-muted-foreground hover:bg-accent",
+                  )}
+                >
+                  {item.native}
                 </button>
               ))}
             </div>

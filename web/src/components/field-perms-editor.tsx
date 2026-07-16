@@ -16,6 +16,7 @@ import { AlertTriangle } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Skeleton } from "@/components/ui/skeleton"
 import { getFormManifest } from "@/lib/form-registry"
+import { pickLabel, useLocale } from "@/lib/i18n-label"
 import type { FieldDescriptor, FieldPolicyMap, FormFieldManifest } from "@/lib/form-manifest"
 import type { FormPerm, FormPerms } from "@/pages/workflow/designer/types"
 
@@ -98,6 +99,7 @@ export interface FieldPermsEditorProps {
 }
 
 export function FieldPermsEditor({ formKey, value, onChange }: FieldPermsEditorProps) {
+  const locale = useLocale()
   const [manifest, setManifest] = useState<FormFieldManifest | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -168,8 +170,9 @@ export function FieldPermsEditor({ formKey, value, onChange }: FieldPermsEditorP
                 key={f.key}
                 className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-x-3 rounded-md px-1 py-1 hover:bg-accent/40"
               >
-                <span className="truncate text-xs" title={f.label}>
-                  {f.label}
+                {/* i18n M1：FieldDescriptor.labelI18n → 按当前语言取显示名（缺翻回退中文） */}
+                <span className="truncate text-xs" title={pickLabel(f.labelI18n, locale, f.label)}>
+                  {pickLabel(f.labelI18n, locale, f.label)}
                 </span>
                 <span className="flex w-10 justify-center">
                   <Checkbox

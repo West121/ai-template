@@ -30,7 +30,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { FormDesignerCore } from "@/pages/workflow/designer/form/designer-core"
 import { ensureWidgetIdSeq, type FormWidget } from "@/pages/workflow/designer/form/model"
-import type { FormEvents } from "@/types/workflow"
+import type { FormEvents, FormSchema } from "@/types/workflow"
 import { WF_STATUS_META, type FormDefItem } from "@/pages/workflow/designer/types"
 
 interface EditorState {
@@ -39,6 +39,8 @@ interface EditorState {
   name: string
   remark: string
   title: string
+  /** 表单标题多语言（i18n M1，只存非中文四语；缺省回退 title） */
+  titleI18n?: FormSchema["titleI18n"]
   widgets: FormWidget[]
   events: FormEvents
   variables: Record<string, unknown>
@@ -58,6 +60,7 @@ const emptyEditor = (): EditorState => ({
 /** 从后端返回的 schemaJson（字符串或对象）解析出 widgets/title/events/variables */
 function parseSchema(raw: unknown): {
   title: string
+  titleI18n?: FormSchema["titleI18n"]
   widgets: FormWidget[]
   events: FormEvents
   variables: Record<string, unknown>
@@ -67,13 +70,19 @@ function parseSchema(raw: unknown): {
     const source = obj as {
       widgets?: unknown
       title?: unknown
+      titleI18n?: unknown
       events?: FormEvents
       variables?: Record<string, unknown>
     } | null
     const widgets = Array.isArray(source?.widgets) ? (source.widgets as FormWidget[]) : []
     ensureWidgetIdSeq(widgets)
+    const titleI18n =
+      source?.titleI18n && typeof source.titleI18n === "object" && !Array.isArray(source.titleI18n)
+        ? (source.titleI18n as FormSchema["titleI18n"])
+        : undefined
     return {
       title: typeof source?.title === "string" ? source.title : "",
+      titleI18n,
       widgets,
       events: source?.events ?? {},
       variables: source?.variables ?? {},
@@ -135,7 +144,7 @@ export default function WorkflowFormDefsPage() {
 
   const openEdit = async (row: FormDefItem) => {
     // 尝试拉最新版取 schema；失败则以列表已有信息打开空画布
-    let schema = { title: row.name, widgets: [] as FormWidget[], events: {} as FormEvents, variables: {} as Record<string, unknown> }
+    let schema: ReturnType<typeof parseSchema> = { title: row.name, widgets: [], events: {}, variables: {} }
     try {
       const detail = await api<FormDefItem & { schemaJson?: unknown }>(
         `/api/wf/form-defs/${row.code}/latest`,
@@ -150,6 +159,7 @@ export default function WorkflowFormDefsPage() {
       name: row.name,
       remark: row.remark ?? "",
       title: schema.title || row.name,
+      titleI18n: schema.titleI18n,
       widgets: schema.widgets,
       events: schema.events,
       variables: schema.variables,
@@ -171,6 +181,7 @@ export default function WorkflowFormDefsPage() {
       // 后端 schemaJson 字段为 JSON 字符串，需 stringify
       schemaJson: JSON.stringify({
         title: editor.title,
+        titleI18n: editor.titleI18n, // undefined 自动省略（拍板③：不存 zh-CN，全空不落键）
         widgets: editor.widgets,
         events: editor.events,
         variables: editor.variables,
@@ -421,6 +432,8 @@ export default function WorkflowFormDefsPage() {
           }
           title={editor.title}
           onTitleChange={(title) => setEditor((e) => ({ ...e, title }))}
+          titleI18n={editor.titleI18n}
+          onTitleI18nChange={(titleI18n) => setEditor((e) => ({ ...e, titleI18n }))}
           showKeyField
           formEvents={editor.events}
           onFormEventsChange={(events) => setEditor((e) => ({ ...e, events }))}

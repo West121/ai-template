@@ -1,6 +1,18 @@
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
+/** 界面语言（i18n M1）：简中为源语言（中文即 key），其余四语缺翻回退中文 */
+export type Locale = "zh-CN" | "en" | "zh-TW" | "th" | "ja"
+
+/** 五语清单：native 为母语自显名（语言名不翻译），dateFns 为 date-fns locale 名 */
+export const LOCALES: { value: Locale; native: string; dateFns: string }[] = [
+  { value: "zh-CN", native: "简体中文", dateFns: "zhCN" },
+  { value: "en", native: "English", dateFns: "enUS" },
+  { value: "zh-TW", native: "繁體中文", dateFns: "zhTW" },
+  { value: "th", native: "ไทย", dateFns: "th" },
+  { value: "ja", native: "日本語", dateFns: "ja" },
+]
+
 /** 布局模式：vertical 侧边布局 / horizontal 顶部布局 / mixed 混合布局 */
 export type LayoutMode = "vertical" | "horizontal" | "mixed"
 export type ThemeMode = "light" | "dark" | "system"
@@ -29,6 +41,8 @@ export interface AppSettings {
   colorWeak: boolean
   /** 工作台风格（经典 / 聚焦），持久化，默认经典保持现状 */
   dashboardStyle: DashboardStyle
+  /** 界面语言（持久化，默认简中）；切换联动 i18next/date-fns 由 lib/i18n.ts 订阅完成 */
+  locale: Locale
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -46,6 +60,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   grayscale: false,
   colorWeak: false,
   dashboardStyle: "classic",
+  locale: "zh-CN",
 }
 
 interface AppState extends AppSettings {
@@ -54,6 +69,8 @@ interface AppState extends AppSettings {
   toggleSidebar: () => void
   /** 工作台风格切换（经典 / 聚焦），持久化 */
   setDashboardStyle: (style: DashboardStyle) => void
+  /** 切换界面语言（i18next.changeLanguage / 语言包懒加载由 lib/i18n.ts 的订阅联动） */
+  setLocale: (locale: Locale) => void
   /** 系统·用户管理 左部门树宽度（可拖，持久化；不随主题 reset 清除） */
   sysDeptTreeWidth: number
   setSysDeptTreeWidth: (width: number) => void
@@ -68,6 +85,7 @@ export const useAppStore = create<AppState>()(
       resetSettings: () => set(DEFAULT_SETTINGS),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setDashboardStyle: (dashboardStyle) => set({ dashboardStyle }),
+      setLocale: (locale) => set({ locale }),
       setSysDeptTreeWidth: (width) => set({ sysDeptTreeWidth: width }),
     }),
     { name: "oa-app-settings" },

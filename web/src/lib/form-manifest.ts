@@ -32,6 +32,9 @@ export interface FieldOption {
  * @property dataSource  数据源（字典/关联表单/接口等），原样透传；无则缺省
  * @property required   字段固有必填。**前端 CODE 表单可声明**，供矩阵与运行时校验消费；
  *                      后端 ONLINE 清单不下发此键（缺省 → undefined），两端仍对齐。
+ * @property labelI18n  多语言 label（i18n M1）：只存 en/zh-TW/th/ja（zh-CN 即 label，拍板③）；
+ *                      NON_NULL——无翻译不下发，消费端经 pickLabel 回退 label。
+ *                      （类型内联写死四语字面量以保持本文件零依赖，与 stores/app-store 的 Locale 对齐）
  */
 export interface FieldDescriptor {
   key: string
@@ -41,6 +44,7 @@ export interface FieldDescriptor {
   options?: FieldOption[]
   dataSource?: unknown
   required?: boolean
+  labelI18n?: Partial<Record<"en" | "zh-TW" | "th" | "ja", string>>
 }
 
 /** 表单字段清单（与后端 `R<FormFieldManifest>.data` 对齐）。 */

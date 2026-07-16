@@ -119,10 +119,18 @@
   }
   body {
     @apply bg-background text-foreground;
+    /* i18n M1 泰/日字形底座（docs/design/i18n.md §3.7，拍板⑨）：
+       追加 Noto Sans JP / Noto Sans Thai / Thonburi / Hiragino Sans 等系统字体兜底，
+       不引 CDN 字体文件（CSP/体积）。全局适配红线（M2/M3 逐页处理，勿新增违例）：
+       - 文本膨胀：英文约 ×1.3–1.5，泰语可达 ×2 —— 可变文案容器禁固定宽，
+         用 min-w-* + truncate + Tooltip 兜底，慎用 whitespace-nowrap；
+       - 泰语上下叠加变音符号：单行控件行高 ≥1.5 或 min-h 代替死 h-*，防裁切。 */
     font-family:
       -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-      "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica,
-      Arial, sans-serif;
+      "Hiragino Sans GB", "Microsoft YaHei", "Hiragino Sans",
+      "Noto Sans JP", "Yu Gothic UI", "Meiryo",
+      "Noto Sans Thai", "Thonburi", "Leelawadee UI",
+      "Helvetica Neue", Helvetica, Arial, sans-serif;
   }
   ::-webkit-scrollbar {
     width: 6px;

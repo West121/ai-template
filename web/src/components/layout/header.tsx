@@ -32,6 +32,7 @@ import { useAppStore, type ThemeMode } from "@/stores/app-store"
 import { useAuthStore } from "@/stores/auth-store"
 import { useUiStore } from "@/stores/ui-store"
 import { WF_NOTIFY_TYPE_LABEL, wfFormatTime, wfInstancePath, type WfNotify } from "@/types/workflow"
+import { LocaleSwitcher } from "./locale-switcher"
 import { UserMenu } from "./user-menu"
 
 const themeOptions: Array<{ value: ThemeMode; label: string; icon: typeof Sun }> = [
@@ -287,6 +288,7 @@ export function Header({ left }: { left?: ReactNode }) {
           <Search className="size-4.5" />
         </Button>
         <FullscreenToggle />
+        <LocaleSwitcher />
         <ThemeToggle />
         <WfNotificationsBell />
         <UserMenu />

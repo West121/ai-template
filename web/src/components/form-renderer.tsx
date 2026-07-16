@@ -40,6 +40,7 @@ import {
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import { sanitizeHtml } from "@/lib/sanitize"
+import { localizeWidgets, useLocale } from "@/lib/i18n-label"
 import { AuthImg } from "@/components/auth-img"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -1589,7 +1590,7 @@ export interface FormRendererProps {
 }
 
 export function FormRenderer({
-  widgets,
+  widgets: widgetsProp,
   initialValues,
   perms,
   readOnly,
@@ -1608,6 +1609,11 @@ export function FormRenderer({
   const overridesRef = useRef<OverrideMap>({})
   const [overrides, setOverridesState] = useState<OverrideMap>({})
   const variablesRef = useRef<Record<string, unknown>>({ ...(variables ?? {}) })
+
+  // i18n M1：进入渲染前按当前语言物化 label（labelI18n → label，缺翻回退中文）。
+  // zh-CN / 无 labelI18n 时原引用返回——缺省行为与现状逐字节相同（含校验文案 `${verb}${label}`）。
+  const locale = useLocale()
+  const widgets = useMemo(() => localizeWidgets(widgetsProp, locale), [widgetsProp, locale])
 
   const schema = useMemo(
     () => buildSchema(widgets, perms, readOnly, overridesRef),

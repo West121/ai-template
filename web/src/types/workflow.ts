@@ -2,6 +2,7 @@
  * 工作流（/api/wf）P1 前端类型与展示元数据。
  * 契约以 docs/api-contract.md 工作流域章节为准（后端并行开发中，先按 docs/workflow-design.md §6 契约实现）。
  */
+import type { Locale } from "@/stores/app-store"
 
 /* ================= 表单 Widget 模型（与 src/pages/demo/form-designer/model.ts 字段兼容） ================= */
 
@@ -94,6 +95,8 @@ export interface FormWidget {
   /** 允许后端出现前端未知的控件类型：渲染器对未知类型降级为占位 */
   type: WidgetType | (string & {})
   label: string
+  /** 多语言 label（i18n M1）：只存 en/zh-TW/th/ja（zh-CN 即 label 本身，拍板③）；缺省回退 label */
+  labelI18n?: Partial<Record<Locale, string>>
   placeholder?: string
   required?: boolean
   description?: string
@@ -130,6 +133,8 @@ export interface FormWidget {
 
 export interface FormSchema {
   title?: string
+  /** 多语言标题（i18n M1）：同 labelI18n，只存非中文四语；缺省回退 title */
+  titleI18n?: Partial<Record<Locale, string>>
   widgets: FormWidget[]
   /** 表单级事件 onLoad/onChange/onSubmit */
   events?: FormEvents
@@ -539,7 +544,7 @@ export function parseFormSchema(raw: unknown): FormSchema {
   if (Array.isArray(value)) return { widgets: value as FormWidget[] }
   if (value && typeof value === "object" && Array.isArray((value as FormSchema).widgets)) {
     const schema = value as FormSchema
-    return { title: schema.title, widgets: schema.widgets, events: schema.events, variables: schema.variables }
+    return { title: schema.title, titleI18n: schema.titleI18n, widgets: schema.widgets, events: schema.events, variables: schema.variables }
   }
   return { widgets: [] }
 }
