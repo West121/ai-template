@@ -142,8 +142,9 @@ function WfNotificationsBell() {
 
   const loadList = useCallback(() => {
     if (offline || !token) return
-    api<WfNotify[]>("/api/wf/notifies")
-      .then((data) => setList(Array.isArray(data) ? data : []))
+    // 防白屏规则2:该端点实际返回分页对象 {list,total,...},归一裸数组/分页两种形状(垃圾→[])
+    api<WfNotify[] | { list?: WfNotify[] }>("/api/wf/notifies")
+      .then((data) => setList(Array.isArray(data) ? data : Array.isArray(data?.list) ? data.list : []))
       .catch(() => setList([]))
   }, [offline, token])
 
