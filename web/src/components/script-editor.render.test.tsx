@@ -62,6 +62,57 @@ describe("ScriptEditor 精简布局", () => {
     expect(screen.getByText(/样例流程变量/)).toBeTruthy()
   })
 
+  it("placeholder 为单行提示（多行假代码会被误当成真内容），空文档时可见", () => {
+    useAuthStore.setState({ permissions: null, offline: false, token: "t" })
+    useAppStore.setState({ themeMode: "light" })
+    const { container } = render(
+      <TooltipProvider>
+        <ScriptEditor value={{ lang: "groovy", code: "" }} onChange={() => {}} />
+      </TooltipProvider>,
+    )
+    const ph = container.querySelector(".cm-placeholder")
+    expect(ph).toBeTruthy()
+    expect(ph!.textContent ?? "").not.toContain("\n") // 单行
+    expect(ph!.textContent).toContain("插入示例") // 引导到真插入
+    expect(ph!.textContent).not.toContain("log.info") // 不再是假代码
+  })
+
+  it("插入示例：空文档点击 → 示例真正写入 value（可编辑真文本），不需确认", async () => {
+    useAuthStore.setState({ permissions: null, offline: false, token: "t" })
+    useAppStore.setState({ themeMode: "light" })
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <TooltipProvider>
+        <ScriptEditor value={{ lang: "groovy", code: "" }} onChange={onChange} />
+      </TooltipProvider>,
+    )
+    await user.click(screen.getByRole("button", { name: /插入示例/ }))
+    expect(onChange).toHaveBeenCalledTimes(1)
+    const next = onChange.mock.calls[0][0] as { lang: string; code: string }
+    expect(next.lang).toBe("groovy")
+    expect(next.code).toContain("log.info") // 示例成为真 value
+    expect(screen.queryByText(/替换当前脚本/)).toBeNull()
+  })
+
+  it("插入示例：已有内容 → 弹确认，确认后替换为示例", async () => {
+    useAuthStore.setState({ permissions: null, offline: false, token: "t" })
+    useAppStore.setState({ themeMode: "light" })
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <TooltipProvider>
+        <ScriptEditor value={{ lang: "java", code: "return null;" }} onChange={onChange} />
+      </TooltipProvider>,
+    )
+    await user.click(screen.getByRole("button", { name: /插入示例/ }))
+    expect(onChange).not.toHaveBeenCalled() // 先确认，不直接覆盖
+    expect(await screen.findByText(/用 Java 示例替换当前脚本/)).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "替换为示例" }))
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect((onChange.mock.calls[0][0] as { code: string }).code).toContain("hello from java")
+  })
+
   it("Java Tab 渲染 + lang=java 时显示方法体 returnHint", () => {
     useAuthStore.setState({ permissions: null, offline: false, token: "t" })
     useAppStore.setState({ themeMode: "light" })

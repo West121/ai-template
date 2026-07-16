@@ -1308,7 +1308,7 @@ function EventActionPayload<E extends EventActionConfig>({
               lineWrap
               minHeight="3rem"
               maxHeight="12rem"
-              placeholder={"Content-Type: application/json\nAuthorization: Bearer ..."}
+              placeholder="每行一个 Name: Value，如 Content-Type: application/json"
               ariaLabel="请求头"
             />
           </div>

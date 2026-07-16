@@ -14,13 +14,23 @@
  * 禁 any；类型导入一律 import type。
  */
 import { useEffect, useMemo, useState } from "react"
-import { AlertTriangle, ChevronDown, FlaskConical, Loader2, Maximize2, Play, ShieldAlert } from "lucide-react"
+import { AlertTriangle, ChevronDown, FileCode2, FlaskConical, Loader2, Maximize2, Play, ShieldAlert } from "lucide-react"
 import { api, ApiError, NetworkError } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Modal } from "@/components/modal"
 import { useHasPerm } from "@/stores/auth-store"
 import { CodeEditor, type CodeLanguage } from "@/components/code-editor"
@@ -51,7 +61,10 @@ interface LangMeta {
   label: string
   /** return 语义与运行时限制（诚实标注给用户） */
   returnHint: string
+  /** 占位提示：**一行**（多行假代码会被误当成真内容点击编辑，用户以为编辑器坏了） */
   placeholder: string
+  /** 示例代码：经「插入示例」按钮真正写入 value（可编辑真文本），不做占位 */
+  sample: string
 }
 
 const LANGS: LangMeta[] = [
@@ -59,26 +72,30 @@ const LANGS: LangMeta[] = [
     value: "groovy",
     label: "Groovy",
     returnHint: "支持 return；返回最后一条 return 或末表达式的值。语法最接近 Java。",
-    placeholder: 'log.info("hello from groovy")\nvars.approved = form.days <= 3\nreturn vars.approved',
+    placeholder: "在此输入 Groovy 脚本（支持 return）——可点「插入示例」",
+    sample: 'log.info("hello from groovy")\nvars.approved = form.days <= 3\nreturn vars.approved',
   },
   {
     value: "js",
     label: "JavaScript",
     returnHint: "GraalJS：以最后一条表达式/语句的值作为返回，不支持顶层 return。",
-    placeholder: 'log.info("hello from graaljs")\nvars.approved = form.days <= 3\nvars.approved',
+    placeholder: "在此输入 JavaScript 脚本（末表达式即返回值）——可点「插入示例」",
+    sample: 'log.info("hello from graaljs")\nvars.approved = form.days <= 3\nvars.approved',
   },
   {
     value: "python",
     label: "Python",
     returnHint: "Jython / Python 2：支持 return；无 C 扩展（numpy/pandas 不可用）。",
-    placeholder: 'log.info("hello from jython")\nvars["approved"] = form["days"] <= 3\nreturn vars["approved"]',
+    placeholder: "在此输入 Python 脚本（支持 return）——可点「插入示例」",
+    sample: 'log.info("hello from jython")\nvars["approved"] = form["days"] <= 3\nreturn vars["approved"]',
   },
   {
     value: "java",
     label: "Java",
     returnHint:
       "真 Java（javax.tools 编译）：方法体语义——语句 + 显式 return（无返回写 return null;）。上下文带类型注入，已预置 import java.util.*，其它类型用全限定名。",
-    placeholder:
+    placeholder: "在此输入 Java 方法体（语句 + 显式 return）——可点「插入示例」",
+    sample:
       'log.info("hello from java");\nint days = ((Number) form.getOrDefault("days", 0)).intValue();\nvars.put("approved", days <= 3);\nreturn vars.get("approved");',
   },
 ]
@@ -114,6 +131,7 @@ export function ScriptEditor({ value, onChange, className, expandable = true, la
   const [warnOpen, setWarnOpen] = useState(false) // 安全警告详情（一行常显 + 可展开）
   const [debugOpen, setDebugOpen] = useState(false) // 测试运行/调试折叠区（默认收起）
   const [expanded, setExpanded] = useState(false) // 整个脚本编辑体验放大到弹窗
+  const [sampleConfirm, setSampleConfirm] = useState(false) // 已有内容时插入示例的替换确认
 
   // 上下文补全 manifest（wf:script:write 才拉——readOnly 不拉；模块级缓存；失败静默 null 降级）
   const [manifest, setManifest] = useState<ScriptContextManifest | null>(null)
@@ -133,6 +151,15 @@ export function ScriptEditor({ value, onChange, className, expandable = true, la
 
   const setLang = (lang: string) => onChange({ ...value, lang: lang as ScriptLang })
   const setCode = (code: string) => onChange({ ...value, code })
+
+  /** 插入示例：空 → 直接写入；已有内容 → 确认后替换 */
+  const insertSample = () => {
+    if (value.code.trim() !== "") {
+      setSampleConfirm(true)
+      return
+    }
+    onChange({ ...value, code: langMeta.sample })
+  }
 
   const runTest = async () => {
     setError(null)
@@ -212,19 +239,33 @@ export function ScriptEditor({ value, onChange, className, expandable = true, la
             ))}
           </TabsList>
         </Tabs>
-        {expandable && (
+        <div className="flex items-center gap-1.5">
+          {/* 插入示例：示例代码写入 value 成真文本（placeholder 只留一行提示，多行假代码会被误当成真内容） */}
           <Button
             type="button"
             variant="outline"
             size="sm"
             className="h-7 gap-1 px-2 text-xs text-muted-foreground"
-            aria-label="放大编辑"
-            title="放大到弹窗编辑"
-            onClick={() => setExpanded(true)}
+            disabled={readOnly}
+            title={`插入 ${langMeta.label} 示例代码（已有内容时需确认替换）`}
+            onClick={insertSample}
           >
-            <Maximize2 className="size-3.5" /> 放大
+            <FileCode2 className="size-3.5" /> 插入示例
           </Button>
-        )}
+          {expandable && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 px-2 text-xs text-muted-foreground"
+              aria-label="放大编辑"
+              title="放大到弹窗编辑"
+              onClick={() => setExpanded(true)}
+            >
+              <Maximize2 className="size-3.5" /> 放大
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* return 语义提示（随语言变化） */}
@@ -390,6 +431,27 @@ export function ScriptEditor({ value, onChange, className, expandable = true, la
           <ScriptEditor value={value} onChange={onChange} expandable={false} large />
         </Modal>
       )}
+
+      {/* 插入示例 · 已有内容时的替换确认 */}
+      <AlertDialog open={sampleConfirm} onOpenChange={setSampleConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>用 {langMeta.label} 示例替换当前脚本？</AlertDialogTitle>
+            <AlertDialogDescription>当前编辑器已有内容，插入示例会覆盖它（可 Ctrl+Z 撤销）。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                onChange({ ...value, code: langMeta.sample })
+                setSampleConfirm(false)
+              }}
+            >
+              替换为示例
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
