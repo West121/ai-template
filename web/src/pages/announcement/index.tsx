@@ -72,6 +72,7 @@ export default function AnnouncementPage() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [unreadCount, setUnreadCount] = useState(0)
+  const [total, setTotal] = useState(0)
   const [tab, setTab] = useState("all")
   const [active, setActive] = useState<AnnouncementRow | null>(null)
   const [publishOpen, setPublishOpen] = useState(false)
@@ -93,6 +94,8 @@ export default function AnnouncementPage() {
         api<number>("/api/office/announcements/unread-count"),
       ])
       setList(page.list)
+      // 「共 X 条」用分页 total(list 被 pageSize=100 截断,length 会小于真实总数 → 曾出现"100 条公告 122 未读")
+      setTotal(page.total ?? page.list.length)
       setUnreadCount(unread)
     } catch (err) {
       if (err instanceof NetworkError) setLoadError("network")
@@ -158,7 +161,7 @@ export default function AnnouncementPage() {
         description={
           offline || loadError === "network"
             ? "后端未连接——启动 server/ 后此页为真实数据"
-            : `共 ${list.length} 条公告，${unreadCount} 条未读`
+            : `共 ${total} 条公告，${unreadCount} 条未读`
         }
         actions={
           canPublish ? (
