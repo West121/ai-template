@@ -98,9 +98,9 @@ describe("按功能覆盖列表（P2）", () => {
     // 维度=组织(部门)
     await user.click(screen.getAllByLabelText("选择维度")[1])
     await user.click(await screen.findByRole("option", { name: "组织(部门)" }))
-    // 范围=指定 → 出部门选择器
+    // 范围=自定义（dept 维 5 档中的 CUSTOM）→ 出部门选择器
     await user.click(screen.getAllByLabelText("选择范围")[1])
-    await user.click(await screen.findByRole("option", { name: "指定" }))
+    await user.click(await screen.findByRole("option", { name: "自定义" }))
     expect(screen.getByText(/选择部门（多选，值为部门 id 精确集）/)).toBeTruthy()
     // 打开 → OrgPicker 部门树弹窗
     await user.click(screen.getByText(/选择部门（多选，值为部门 id 精确集）/))
@@ -150,6 +150,45 @@ describe("按功能覆盖列表（P2）", () => {
     await waitFor(() => expect(puts).toHaveLength(1))
     expect(puts[0].url).toContain("?feature=ATTENDANCE_LEAVE")
     expect(puts[0].body).toEqual([])
+  })
+
+  it("dept 行范围下拉=完整 5 档；相对档不出值选择器，保存 PUT values=[]", async () => {
+    renderOverrides()
+    const user = userEvent.setup()
+    await screen.findByText(/已脱离全局配置/)
+    await user.click(screen.getByRole("button", { name: /添加资源/ }))
+    await user.click(screen.getAllByLabelText("选择功能")[1])
+    await user.click(await screen.findByRole("option", { name: /我的审批/ }))
+    await user.click(screen.getAllByLabelText("选择维度")[1])
+    await user.click(await screen.findByRole("option", { name: "组织(部门)" }))
+
+    // 五档齐全
+    await user.click(screen.getAllByLabelText("选择范围")[1])
+    for (const label of ["全部数据", "本部门及以下", "本部门", "仅本人", "自定义"]) {
+      expect(await screen.findByRole("option", { name: label })).toBeTruthy()
+    }
+    // 选相对档 → 无值选择器 + 动态语义提示
+    await user.click(screen.getByRole("option", { name: "本部门及以下" }))
+    expect(screen.queryByText(/选择部门（多选/)).toBeNull()
+    expect(screen.getByText(/按办理人当时的任职部门动态计算/)).toBeTruthy()
+
+    await user.click(screen.getByRole("button", { name: /保存按功能覆盖/ }))
+    await waitFor(() => expect(puts.some((p) => p.url.includes("feature=WORKFLOW_TASKS"))).toBe(true))
+    const put = puts.find((p) => p.url.includes("feature=WORKFLOW_TASKS"))!
+    expect(put.body).toEqual([{ dimension: "dept", scope: "DEPT_AND_CHILD", values: [] }])
+  })
+
+  it("业务维行范围下拉仍两档（全部数据/指定）", async () => {
+    renderOverrides()
+    const user = userEvent.setup()
+    await screen.findByText(/已脱离全局配置/)
+    // 回显行是 costCenter（业务维）→ 打开其范围下拉
+    await user.click(screen.getAllByLabelText("选择范围")[0])
+    expect(await screen.findByRole("option", { name: "全部数据" })).toBeTruthy()
+    expect(screen.getByRole("option", { name: "指定" })).toBeTruthy()
+    expect(screen.queryByRole("option", { name: "本部门及以下" })).toBeNull()
+    expect(screen.queryByRole("option", { name: "仅本人" })).toBeNull()
+    await user.keyboard("{Escape}")
   })
 
   it("目录/授权空态 → 空态引导渲染不崩（防白屏）", async () => {

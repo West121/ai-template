@@ -26,6 +26,7 @@ import { api } from "@/lib/api"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   DEPT_DIMENSION,
+  DIM_SCOPES,
   fetchAuthzAll,
   fetchDimensionOptions,
   fetchDimensions,
@@ -47,6 +48,21 @@ interface OverrideRow {
 }
 
 const optionColumns: RecordPickerColumn<DimOption>[] = [{ key: "label", title: "名称" }]
+
+/** dept 维完整 5 档；业务维仅 全部数据/指定（V54 增量，契约见 dp-authz-api 头注） */
+const DEPT_SCOPE_OPTIONS: { value: DimScope; label: string }[] = [
+  { value: "ALL", label: "全部数据" },
+  { value: "DEPT_AND_CHILD", label: "本部门及以下" },
+  { value: "DEPT", label: "本部门" },
+  { value: "SELF", label: "仅本人" },
+  { value: "CUSTOM", label: "自定义" },
+]
+const BIZ_SCOPE_OPTIONS: { value: DimScope; label: string }[] = [
+  { value: "ALL", label: "全部数据" },
+  { value: "CUSTOM", label: "指定" },
+]
+/** 相对档（按办理人当时任职部门动态计算）：不出值选择器，values 恒空 */
+const RELATIVE_SCOPES: DimScope[] = ["DEPT_AND_CHILD", "DEPT", "SELF"]
 
 /** 部门树节点（/api/system/depts/tree） */
 interface DeptNode {
@@ -88,7 +104,7 @@ function toRows(list: DimAuthz[]): OverrideRow[] {
       uid: uidSeq++,
       feature: a.feature ?? "",
       dimension: a.dimension,
-      scope: a.scope === "CUSTOM" ? "CUSTOM" : ("ALL" as DimScope),
+      scope: DIM_SCOPES.includes(a.scope) ? a.scope : ("ALL" as DimScope),
       values: Array.isArray(a.values) ? a.values : [],
     }))
 }
@@ -313,8 +329,10 @@ export function DataDimensionOverrides({
                   <Select
                     value={row.dimension}
                     onValueChange={(v) => {
-                      patchRow(row.uid, { dimension: v, values: [] })
-                      if (row.scope === "CUSTOM") ensureOptions(v)
+                      // 业务维不支持相对档：从 dept 切走时相对档归 ALL
+                      const nextScope = v !== DEPT_DIMENSION && RELATIVE_SCOPES.includes(row.scope) ? ("ALL" as DimScope) : row.scope
+                      patchRow(row.uid, { dimension: v, values: [], scope: nextScope })
+                      if (nextScope === "CUSTOM") ensureOptions(v)
                     }}
                     disabled={!canEdit}
                   >
@@ -330,7 +348,7 @@ export function DataDimensionOverrides({
                     </SelectContent>
                   </Select>
 
-                  {/* 范围：全部数据 / 指定 */}
+                  {/* 范围：dept 维完整 5 档；业务维 全部数据/指定 */}
                   <Select
                     value={row.scope}
                     onValueChange={(v) => {
@@ -339,12 +357,15 @@ export function DataDimensionOverrides({
                     }}
                     disabled={!canEdit}
                   >
-                    <SelectTrigger className="h-8 w-28 text-xs" aria-label="选择范围">
+                    <SelectTrigger className="h-8 w-32 text-xs" aria-label="选择范围">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="ALL" className="text-xs">全部数据</SelectItem>
-                      <SelectItem value="CUSTOM" className="text-xs">指定</SelectItem>
+                      {(row.dimension === DEPT_DIMENSION ? DEPT_SCOPE_OPTIONS : BIZ_SCOPE_OPTIONS).map((o) => (
+                        <SelectItem key={o.value} value={o.value} className="text-xs">
+                          {o.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
 
@@ -360,6 +381,13 @@ export function DataDimensionOverrides({
                     <Trash2 className="size-3.5" />
                   </Button>
                 </div>
+
+                {/* 相对档：不出值选择器（values 恒空），提示动态语义 */}
+                {RELATIVE_SCOPES.includes(row.scope) && row.dimension === DEPT_DIMENSION && (
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">
+                    {DEPT_SCOPE_OPTIONS.find((o) => o.value === row.scope)?.label}：按办理人当时的任职部门动态计算，人事异动自动跟随。
+                  </p>
+                )}
 
                 {/* 指定 → 值选择器按维度出：dept=部门树多选；业务维=选项多选 */}
                 {row.scope === "CUSTOM" && row.dimension && (

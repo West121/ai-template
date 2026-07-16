@@ -14,6 +14,7 @@
  *  GET/PUT /api/system/users/{id}/data-dimensions   同结构
  *  dimension 可为业务维度 code 或内建 'dept'（组织/部门维，values=deptIds，**精确部门集**语义已确认；
  *  全局层不接受 dept——UI 不提供该路径，后端 400 兜底）。
+ *  dept 维 scope 允许完整 5 档 ALL|DEPT_AND_CHILD|DEPT|SELF|CUSTOM（相对档 values 恒空）；业务维不变（ALL|CUSTOM）。
  *  解析顺序：功能覆盖 > 全局 > 不限；**覆盖=替换**（只看覆盖层，不与全局并集）。
  * ─────────────────────────────────────────────────────────────────────────────
  */
@@ -31,7 +32,12 @@ export interface DimOption extends Record<string, unknown> {
   id: number
   label: string
 }
-export type DimScope = "ALL" | "CUSTOM"
+/**
+ * 范围档位：业务维仅 ALL|CUSTOM；内建 dept 维允许完整 5 档（V54 增量）——
+ * 相对档（DEPT_AND_CHILD/DEPT/SELF）按办理人当时任职部门动态计算，values 恒空。
+ */
+export type DimScope = "ALL" | "DEPT_AND_CHILD" | "DEPT" | "SELF" | "CUSTOM"
+export const DIM_SCOPES: DimScope[] = ["ALL", "DEPT_AND_CHILD", "DEPT", "SELF", "CUSTOM"]
 export interface DimAuthz {
   dimension: string
   scope: DimScope
