@@ -43,9 +43,6 @@ public class ApprovalService {
 
     private static final List<String> DONE_ACTIONS = List.of(ApprovalLog.ACTION_APPROVE, ApprovalLog.ACTION_REJECT);
 
-    /** Approval 实体声明的业务数据维度 → 过滤列（DP1 多维；dept/self 仍由 SecuritySupport 内建处理）。 */
-    private static final Map<String, String> DATA_DIMENSIONS =
-            Map.of("costCenter", "costCenterId", "project", "projectId");
 
     private final ApprovalRepository approvalRepository;
     private final ApprovalLogRepository logRepository;
@@ -58,7 +55,7 @@ public class ApprovalService {
      */
     public PageResult<ApprovalResponse> page(String status, int pageNum, int pageSize) {
         Page<Approval> page = approvalRepository.findAll(
-                statusSpec(status).and(dataScopeSupport.multiDim("deptId", "applicantId", DATA_DIMENSIONS)),
+                statusSpec(status).and(dataScopeSupport.multiDim("Approval", "deptId", "applicantId")),
                 pageable(pageNum, pageSize));
         return toPageResult(page);
     }
@@ -68,7 +65,7 @@ public class ApprovalService {
      */
     public long pendingCount() {
         return approvalRepository.count(
-                statusSpec(Approval.STATUS_PENDING).and(dataScopeSupport.multiDim("deptId", "applicantId", DATA_DIMENSIONS)));
+                statusSpec(Approval.STATUS_PENDING).and(dataScopeSupport.multiDim("Approval", "deptId", "applicantId")));
     }
 
     /**

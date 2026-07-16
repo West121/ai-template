@@ -146,6 +146,7 @@ export const menuTree: MenuItem[] = [
       { title: "用户管理", path: "/system/user", icon: Users },
       { title: "在线用户", path: "/system/online", icon: MonitorSmartphone },
       { title: "角色管理", path: "/system/role", icon: ShieldCheck },
+      { title: "数据维度", path: "/system/dimension", icon: Boxes, perm: "system:dim:manage" },
       { title: "菜单管理", path: "/system/menu", icon: ListTree },
       { title: "定时任务", path: "/system/job", icon: AlarmClock },
       { title: "字典管理", path: "/system/dict", icon: BookMarked },

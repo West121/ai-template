@@ -781,6 +781,118 @@ await call(admin.token, "POST", "/api/system/users/batch-delete", { ids: [lmainI
   check("DP 清空后读回为空", ((await call(admin.token, "GET", "/api/system/users/1/data-dimensions")).body?.data ?? []).length === 0)
 }
 
+/* ---------- 11d-2. 权限中心 P1 · 维度自定义（V51：CRUD/三源 options/绑定白名单/绑定真消费端到端） ---------- */
+{
+  const DTS = Date.now()
+  const dimCode = `smokeDim${DTS % 100000}`
+  const listApprovalTitles = async (token) => {
+    const r = await call(token, "GET", "/api/office/approvals?pageNum=1&pageSize=500")
+    return (r.body?.data?.list ?? []).map((a) => a.title)
+  }
+  // 预清理 admin 授权（防残留）
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [])
+
+  // 1) 权限门：无 system:dim:manage → 403
+  const noPerm = await call(zhangsan.token, "POST", "/api/system/data-dimensions",
+    { code: "zx_dim", label: "无权维度", valueSource: "OPTION" })
+  check("P1 无 system:dim:manage 建维度 403", noPerm.status === 403 || noPerm.body?.code === 403, `status=${noPerm.status}`)
+
+  // 2) 维度 CRUD 往返（OPTION 源，绑 Approval.costCenterId——白名单内列）
+  const badSrc = await call(admin.token, "POST", "/api/system/data-dimensions", { code: dimCode, label: "坏源", valueSource: "MAGIC" })
+  check("P1 非法 valueSource 400", badSrc.body?.code === 400)
+  const badBind = await call(admin.token, "POST", "/api/system/data-dimensions",
+    { code: dimCode, label: "坏绑定", valueSource: "OPTION", bindings: [{ entity: "Approval", column: "applicant" }] })
+  check("P1 绑定白名单外 400", badBind.body?.code === 400, JSON.stringify(badBind.body?.message))
+  const created = await call(admin.token, "POST", "/api/system/data-dimensions",
+    { code: dimCode, label: "冒烟维度", valueSource: "OPTION", bindings: [{ entity: "Approval", column: "costCenterId" }] })
+  check("P1 建维度(OPTION+绑定)", created.body?.code === 0 && created.body.data?.valueSource === "OPTION"
+    && created.body.data?.bindings?.[0]?.column === "costCenterId", JSON.stringify(created.body))
+  const dupDim = await call(admin.token, "POST", "/api/system/data-dimensions", { code: dimCode, label: "重复", valueSource: "OPTION" })
+  check("P1 维度编码重复 400", dupDim.body?.code === 400)
+  const upd = await call(admin.token, "PUT", `/api/system/data-dimensions/${dimCode}`, { label: "冒烟维度改" })
+  check("P1 编辑维度 label", upd.body?.code === 0 && upd.body.data?.label === "冒烟维度改")
+  const chgSrc = await call(admin.token, "PUT", `/api/system/data-dimensions/${dimCode}`, { valueSource: "DICT" })
+  check("P1 valueSource 建后不可改 400", chgSrc.body?.code === 400)
+  const inList = ((await call(admin.token, "GET", "/api/system/data-dimensions")).body?.data ?? []).find((d) => d.code === dimCode)
+  check("P1 列表含新维度(含 bindings)", !!inList && inList.bindings?.length === 1)
+
+  // 3) 可绑列目录
+  const cat = await call(admin.token, "GET", "/api/system/data-dimensions/bindable-entities")
+  const appEnt = (cat.body?.data ?? []).find((e) => e.entity === "Approval")
+  check("P1 可绑列目录含 Approval.costCenterId/projectId",
+    !!appEnt && appEnt.columns?.some((c) => c.column === "costCenterId") && appEnt.columns?.some((c) => c.column === "projectId"),
+    JSON.stringify(cat.body?.data))
+
+  // 4) 选项 CRUD + 排序（值=行数据列值：1/2 对齐 DP 种子 cost_center_id）
+  const o2 = await call(admin.token, "POST", `/api/system/data-dimensions/${dimCode}/options`, { value: 2, label: "市场", sort: 1 })
+  const o1 = await call(admin.token, "POST", `/api/system/data-dimensions/${dimCode}/options`, { value: 1, label: "研发", sort: 2 })
+  check("P1 建选项×2", o1.body?.code === 0 && o2.body?.code === 0)
+  const dupOpt = await call(admin.token, "POST", `/api/system/data-dimensions/${dimCode}/options`, { value: 2, label: "重复值" })
+  check("P1 选项值重复 409", dupOpt.body?.code === 409)
+  const opts = (await call(admin.token, "GET", `/api/system/data-dimensions/${dimCode}/options`)).body?.data ?? []
+  check("P1 options 出值且按 sort 排序", opts.length === 2 && opts[0]?.id === 2 && opts[1]?.id === 1, JSON.stringify(opts))
+  const oRows = (await call(admin.token, "GET", `/api/system/data-dimensions/${dimCode}/option-items`)).body?.data ?? []
+  const rowId1 = oRows.find((r) => r.value === 1)?.id
+  const updOpt = await call(admin.token, "PUT", `/api/system/data-dimensions/${dimCode}/options/${rowId1}`, { label: "研发改", sort: 0 })
+  check("P1 编辑选项(label/sort)", updOpt.body?.code === 0 && updOpt.body.data?.label === "研发改")
+  const chgVal = await call(admin.token, "PUT", `/api/system/data-dimensions/${dimCode}/options/${rowId1}`, { value: 9 })
+  check("P1 选项值不可改 400", chgVal.body?.code === 400)
+
+  // 5) DICT / DEPT 源 options 出值
+  const dictDim = await call(admin.token, "POST", "/api/system/data-dimensions",
+    { code: `${dimCode}d`, label: "字典维度", valueSource: "DICT", dictType: "leave_type" })
+  check("P1 建 DICT 维度", dictDim.body?.code === 0)
+  const badDict = await call(admin.token, "POST", "/api/system/data-dimensions",
+    { code: `${dimCode}x`, label: "坏字典", valueSource: "DICT", dictType: "no_such_dict" })
+  check("P1 DICT 字典类型不存在 400", badDict.body?.code === 400)
+  const dictOpts = (await call(admin.token, "GET", `/api/system/data-dimensions/${dimCode}d/options`)).body?.data ?? []
+  check("P1 DICT 源 options 出值(leave_type 年假在列)", dictOpts.length >= 4 && dictOpts.some((o) => o.label === "年假"), JSON.stringify(dictOpts.slice(0, 2)))
+  const deptDim = await call(admin.token, "POST", "/api/system/data-dimensions",
+    { code: `${dimCode}p`, label: "部门维度", valueSource: "DEPT" })
+  const deptOpts = (await call(admin.token, "GET", `/api/system/data-dimensions/${dimCode}p/options`)).body?.data ?? []
+  check("P1 DEPT 源 options 出值(含涵韬科技/技术部)", deptDim.body?.code === 0
+    && deptOpts.some((o) => o.label === "涵韬科技") && deptOpts.some((o) => o.label === "技术部"), `n=${deptOpts.length}`)
+
+  // 6) 端到端：新维度(绑 costCenterId) 授权 CUSTOM=[2] → admin 列表只见市场C（cost_center_id=2 种子行）
+  const grant = await call(admin.token, "PUT", "/api/system/users/1/data-dimensions",
+    [{ dimension: dimCode, scope: "CUSTOM", values: [2] }])
+  check("P1 新维度授权 CUSTOM=[2]", grant.body?.code === 0, JSON.stringify(grant.body))
+  const badGrant = await call(admin.token, "PUT", "/api/system/users/1/data-dimensions",
+    [{ dimension: dimCode, scope: "CUSTOM", values: [999] }])
+  check("P1 新维度授权值域校验(通用 provider 生效) 400", badGrant.body?.code === 400)
+  const e2e = await listApprovalTitles(admin.token)
+  check("P1 端到端：新建维度绑定真实过滤（只见市场C）",
+    e2e.includes("DP维度-市场C用章") && !e2e.includes("DP维度-研发A采购") && !e2e.includes("DP维度-研发B报销"),
+    JSON.stringify(e2e.filter((t) => t.startsWith("DP维度"))))
+  // 恢复授权 → 全量可见（不影响后续断言）
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [])
+  const back = await listApprovalTitles(admin.token)
+  check("P1 清授权后恢复不限(旧行为零回归)", back.includes("DP维度-研发A采购") && back.includes("DP维度-市场C用章"))
+
+  // 7) 软删：有引用 409 → 解除后软删成功 → 列表(默认)不含、?all=1 含停用
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [{ dimension: dimCode, scope: "ALL", values: [] }])
+  const delRef = await call(admin.token, "DELETE", `/api/system/data-dimensions/${dimCode}`)
+  check("P1 有授权引用软删 409", delRef.body?.code === 409, JSON.stringify(delRef.body))
+  await call(admin.token, "PUT", "/api/system/users/1/data-dimensions", [])
+  const del = await call(admin.token, "DELETE", `/api/system/data-dimensions/${dimCode}`)
+  check("P1 解除引用后软删成功", del.body?.code === 0)
+  const defaultList = (await call(admin.token, "GET", "/api/system/data-dimensions")).body?.data ?? []
+  const allList = (await call(admin.token, "GET", "/api/system/data-dimensions?all=1")).body?.data ?? []
+  check("P1 软删后默认列表不含、all=1 含停用行",
+    !defaultList.some((d) => d.code === dimCode) && allList.some((d) => d.code === dimCode && d.enabled === false))
+  const disabledOpts = await call(admin.token, "GET", `/api/system/data-dimensions/${dimCode}/options`)
+  check("P1 停用维度 options 400(白名单红线)", disabledOpts.body?.code === 400)
+
+  // 自清：软删其余测试维度 + 物理清理测试行（选项/绑定/维度）
+  await call(admin.token, "DELETE", `/api/system/data-dimensions/${dimCode}d`)
+  await call(admin.token, "DELETE", `/api/system/data-dimensions/${dimCode}p`)
+  try {
+    execFileSync("docker", ["exec", process.env.OA_PG_CONTAINER ?? "oa-postgres", "psql", "-U", "oa", "-d", "oa_platform", "-c",
+      "DELETE FROM sys_dimension_option WHERE dimension LIKE 'smokeDim%'; DELETE FROM sys_dimension_binding WHERE dimension LIKE 'smokeDim%'; DELETE FROM sys_data_dimension WHERE code LIKE 'smokeDim%';"],
+      { stdio: ["ignore", "ignore", "pipe"] })
+  } catch { /* 清理尽力而为（软删已保证不影响运行） */ }
+}
+
 /* ---------- 11e. 个人中心自助端点（磐石：change-password / profile，仅本人，不动种子密码） ---------- */
 {
   const PTS = Date.now()

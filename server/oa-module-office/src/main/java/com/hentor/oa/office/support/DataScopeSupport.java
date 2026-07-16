@@ -25,6 +25,19 @@ public class DataScopeSupport {
     private final DataDimensionService dataDimensionService;
 
     /**
+     * V51 缺口①闭环：按实体读 {@code sys_dimension_binding}（进程内缓存+写路径主动清）拼多维谓词——
+     * 绑定升格为真元数据消费，调用方不再硬传列映射（原 ApprovalService.DATA_DIMENSIONS 常量已废除）。
+     * 实体无绑定 → 退化纯部门维（向后兼容红线）。
+     *
+     * @param entity    可绑列目录内的实体名（如 Approval）
+     * @param deptField 部门字段（如 deptId）
+     * @param userField 归属人字段（如 applicantId / creatorId）
+     */
+    public <T> Specification<T> multiDim(String entity, String deptField, String userField) {
+        return multiDim(deptField, userField, dataDimensionService.bindingsForEntity(entity));
+    }
+
+    /**
      * @param deptField  部门字段（如 deptId）
      * @param userField  归属人字段（如 applicantId / creatorId）
      * @param dimColumns 业务维度 code → 实体列名（如 {@code {costCenter:"costCenterId", project:"projectId"}}），可空

@@ -20,6 +20,12 @@ public class SysDataDimension {
     public static final String SCOPE_ALL = "ALL";
     public static final String SCOPE_CUSTOM = "CUSTOM";
 
+    /** 取值来源（P1）：PROVIDER=存量专用 bean（costCenter/project，零迁移）；其余免写 bean。 */
+    public static final String SOURCE_PROVIDER = "PROVIDER";
+    public static final String SOURCE_OPTION = "OPTION";
+    public static final String SOURCE_DICT = "DICT";
+    public static final String SOURCE_DEPT = "DEPT";
+
     /** 维度编码（如 costCenter / project），与 {@link com.hentor.oa.system.datadim.DataDimensionProvider#code()} 对应。 */
     @Id
     @Column(length = 64)
@@ -38,4 +44,12 @@ public class SysDataDimension {
 
     @Column(nullable = false)
     private Boolean enabled = true;
+
+    /** 取值来源（V51）：PROVIDER|OPTION|DICT|DEPT；建后不可改（换源=删旧建新）。 */
+    @Column(name = "value_source", nullable = false, length = 16)
+    private String valueSource = SOURCE_PROVIDER;
+
+    /** DICT 源的字典类型编码（sys_dict_type.code）；其余来源为空。 */
+    @Column(name = "dict_type", length = 64)
+    private String dictType;
 }

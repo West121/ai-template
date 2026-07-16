@@ -8,4 +8,6 @@ import java.util.List;
 public interface SysDataDimensionRepository extends JpaRepository<SysDataDimension, String> {
 
     List<SysDataDimension> findByEnabledTrueOrderByCodeAsc();
+
+    List<SysDataDimension> findAllByOrderByCodeAsc();
 }

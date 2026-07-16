@@ -47,6 +47,7 @@ const PostPage = lazy(() => import("@/pages/system/post"))
 const UserPage = lazy(() => import("@/pages/system/user"))
 const OnlinePage = lazy(() => import("@/pages/system/online"))
 const RolePage = lazy(() => import("@/pages/system/role"))
+const DimensionPage = lazy(() => import("@/pages/system/dimension"))
 const MenuPage = lazy(() => import("@/pages/system/menu"))
 const JobPage = lazy(() => import("@/pages/system/job"))
 const LogPage = lazy(() => import("@/pages/system/log"))
@@ -194,6 +195,7 @@ export default function App() {
               <Route path="user" element={<UserPage />} />
               <Route path="online" element={<OnlinePage />} />
               <Route path="role" element={<RolePage />} />
+              <Route path="dimension" element={<DimensionPage />} />
               <Route path="menu" element={<MenuPage />} />
               <Route path="job" element={<JobPage />} />
               <Route path="log" element={<LogPage />} />

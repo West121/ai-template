@@ -511,3 +511,7 @@ NotifyItem = {id,type,title,content,procInstId,readFlag,createdAt}
 - **AI 三工具（批W2，注册于 boot.ai.tool.DevStudioTools）**：`dev_list_assets`/`dev_read_asset`（READ_ONLY，dev:studio:view）+ `dev_propose_change`（CONFIRM_REQUIRED，dev:studio:edit）→ **devDiff 卡**（形状见「AI 智能助手-Card 类型」）；AI 绝不直写——propose 产 diff 卡（服务端定 oldContent/baseVersion + 干跑预检），confirm 经 POST /api/ai/actions/{id}/confirm 调统一 save(actor=AI)，快照 actor=AI 落 dev_asset_version；快照版本冲突（确认前资产被改）→ 409 明确提示重新发起。
 - **pageContext 资产上下文（批W2）**：/api/ai/chat(/messages) 的 pageContext.entityType ∈ 四类资产枚举且 entityId=code 时，服务端强校验（枚举白名单 + dev:studio:view + 资产存在）后向系统提示注入「当前正在查看资产 type/code」+ 改写引导（先 dev_read_asset 再 dev_propose_change）——Dev Studio AI 栏用户说「把这个资产…」时模型知道改哪个；无权/不存在静默不注入。
 - 专项冒烟：`node server/smoke-devstudio.mjs`（自建自清 devsmoke_* 资产（含 AI 会话/凭据/动作草稿），假 LLM sink 驱动真实工具链，不碰共享数据，可对在用环境跑）。
+
+## 权限中心 · 数据维度管理(P1,V51)
+
+维度 CRUD(`/api/system/data-dimensions*`,管理写权 `system:dim:manage`)、选项管理(`option-items`/`options/{id}`,value 不可改)、可绑列目录(`bindable-entities`,SPI BindableEntityProvider)、取值四源(PROVIDER 专用 bean/OPTION 选项表/DICT 字典/DEPT 部门树)。完整契约与语义见 docs/design/permission-center.md(含主控拍板)。错误走信封 code(400/404/409),权限门 HTTP 403。

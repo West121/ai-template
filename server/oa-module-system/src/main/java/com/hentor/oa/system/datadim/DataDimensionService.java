@@ -4,19 +4,28 @@ import com.hentor.oa.common.exception.BusinessException;
 import com.hentor.oa.common.security.CurrentUserHolder;
 import com.hentor.oa.common.security.UserContext;
 import com.hentor.oa.system.entity.SysDataDimension;
+import com.hentor.oa.system.entity.SysDept;
+import com.hentor.oa.system.entity.SysDimensionBinding;
+import com.hentor.oa.system.entity.SysDimensionOption;
 import com.hentor.oa.system.entity.SysRole;
 import com.hentor.oa.system.entity.SysRoleDataDimension;
 import com.hentor.oa.system.entity.SysUserAssignment;
 import com.hentor.oa.system.entity.SysUserDataDimension;
 import com.hentor.oa.system.repository.SysDataDimensionRepository;
+import com.hentor.oa.system.repository.SysDeptRepository;
+import com.hentor.oa.system.repository.SysDimensionBindingRepository;
+import com.hentor.oa.system.repository.SysDimensionOptionRepository;
 import com.hentor.oa.system.repository.SysRoleDataDimensionRepository;
 import com.hentor.oa.system.repository.SysUserAssignmentRepository;
 import com.hentor.oa.system.repository.SysUserDataDimensionRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ArrayNode;
@@ -26,10 +35,13 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 /**
  * 数据权限「多维」框架服务（DP1）：维度注册（配置化）+ 角色/用户维度授权读写 + <b>当前用户各维可见范围解析</b>。
@@ -50,34 +62,107 @@ public class DataDimensionService {
 
     private static final String CACHE_PREFIX = "dp:dims:";
     private static final Duration CACHE_TTL = Duration.ofMinutes(30);
+    /** 维度编码（V51 CRUD）：字母开头，字母数字下划线，≤64。 */
+    private static final Pattern DIM_CODE_PATTERN = Pattern.compile("[a-zA-Z][a-zA-Z0-9_]{1,63}");
+    /** 绑定进程内缓存兜底 TTL（写路径本 JVM 即时清；TTL 仅防陈旧兜底）。 */
+    private static final long BINDING_CACHE_TTL_MS = 60_000;
 
     private final SysDataDimensionRepository dimensionRepository;
     private final SysRoleDataDimensionRepository roleDimRepository;
     private final SysUserDataDimensionRepository userDimRepository;
     private final SysUserAssignmentRepository assignmentRepository;
+    private final SysDimensionOptionRepository optionRepository;
+    private final SysDimensionBindingRepository bindingRepository;
+    private final SysDeptRepository deptRepository;
     private final List<DataDimensionProvider> providers;
+    private final List<BindableEntityProvider> bindableProviders;
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
 
-    // ==================== 注册 / 元数据 / options ====================
+    /** DICT 源经原生 SQL 读字典（system 不依赖 oa-module-infra，同库表直查）。 */
+    @PersistenceContext
+    private EntityManager entityManager;
 
-    /** 已注册（启用）业务维度（不含内建 dept/self）。 */
-    @Transactional(readOnly = true)
-    public List<DimensionInfo> listDimensions() {
-        return dimensionRepository.findByEnabledTrueOrderByCodeAsc().stream()
-                .map(d -> new DimensionInfo(d.getCode(), d.getLabel(), d.getEntity(), Boolean.TRUE.equals(d.getEnabled())))
-                .toList();
+    /** entity → (dimension → JPA 属性名) 绑定缓存（multiDim 查询侧高频读）。 */
+    private final Map<String, BindingCacheEntry> bindingCache = new ConcurrentHashMap<>();
+
+    private record BindingCacheEntry(Map<String, String> columns, long cachedAt) {
     }
 
-    /** 某维度 CUSTOM 可选值（泛化端点，委托 provider）。维度须已注册启用，否则 400（白名单红线）。 */
+    // ==================== 注册 / 元数据 / options ====================
+
+    /** 已注册（启用）业务维度（不含内建 dept/self）。兼容旧签名（授权 UI 只见启用维度）。 */
+    @Transactional(readOnly = true)
+    public List<DimensionInfo> listDimensions() {
+        return listDimensions(false);
+    }
+
+    /** V51：includeDisabled=true 供管理页（含停用行）；含 valueSource/dictType/bindings。 */
+    @Transactional(readOnly = true)
+    public List<DimensionInfo> listDimensions(boolean includeDisabled) {
+        List<SysDataDimension> dims = includeDisabled
+                ? dimensionRepository.findAllByOrderByCodeAsc()
+                : dimensionRepository.findByEnabledTrueOrderByCodeAsc();
+        Map<String, List<DimensionBindingItem>> byDim = new HashMap<>();
+        for (SysDimensionBinding b : bindingRepository.findAll()) {
+            byDim.computeIfAbsent(b.getDimension(), k -> new ArrayList<>())
+                    .add(new DimensionBindingItem(b.getEntity(), b.getColumnName()));
+        }
+        return dims.stream().map(d -> toInfo(d, byDim.getOrDefault(d.getCode(), List.of()))).toList();
+    }
+
+    private DimensionInfo toInfo(SysDataDimension d, List<DimensionBindingItem> bindings) {
+        // entity 兼容旧字段语义：首个绑定实体，无绑定回退 V43 遗留列
+        String entity = !bindings.isEmpty() ? bindings.get(0).entity() : d.getEntity();
+        return new DimensionInfo(d.getCode(), d.getLabel(), entity, Boolean.TRUE.equals(d.getEnabled()),
+                d.getValueSource(), d.getDictType(), bindings, false);
+    }
+
+    /** 某维度 CUSTOM 可选值。维度须已注册启用，否则 400（白名单红线）。专用 provider 优先，其余按 valueSource 分发。 */
     @Transactional(readOnly = true)
     public List<DimensionOption> options(String code) {
-        requireRegistered(code);
-        DataDimensionProvider provider = providerOf(code);
-        if (provider == null) {
+        SysDataDimension dim = dimensionRepository.findById(code)
+                .filter(d -> Boolean.TRUE.equals(d.getEnabled()))
+                .orElseThrow(() -> new BusinessException(400, "未注册或未启用的数据维度: " + code));
+        return optionsFor(dim);
+    }
+
+    /** 三源分发（V51）：专用 bean（PROVIDER，costCenter/project 零迁移）> OPTION 选项表 > DICT 字典 > DEPT 部门。 */
+    private List<DimensionOption> optionsFor(SysDataDimension dim) {
+        DataDimensionProvider dedicated = providerOf(dim.getCode());
+        if (dedicated != null) {
+            return dedicated.options();
+        }
+        String source = dim.getValueSource() == null ? "" : dim.getValueSource();
+        return switch (source) {
+            case SysDataDimension.SOURCE_OPTION -> optionRepository
+                    .findByDimensionAndEnabledTrueOrderBySortAscIdAsc(dim.getCode()).stream()
+                    .map(o -> new DimensionOption(o.getValue(), o.getLabel()))
+                    .toList();
+            case SysDataDimension.SOURCE_DICT -> dictOptions(dim.getDictType());
+            case SysDataDimension.SOURCE_DEPT -> deptRepository.findAll().stream()
+                    .filter(d -> !Boolean.FALSE.equals(d.getEnabled()))
+                    .sorted(java.util.Comparator.comparing(SysDept::getId))
+                    .map(d -> new DimensionOption(d.getId(), d.getName()))
+                    .toList();
+            default -> List.of(); // PROVIDER 但 bean 缺失（异常情形）→ 空
+        };
+    }
+
+    /** DICT 源：value=字典项 id（拍板①值链路保持 Long），label=字典项文案；仅启用类型/项。 */
+    @SuppressWarnings("unchecked")
+    private List<DimensionOption> dictOptions(String dictType) {
+        if (!StringUtils.hasText(dictType)) {
             return List.of();
         }
-        return provider.options();
+        List<Object[]> rows = entityManager.createNativeQuery(
+                        "SELECT i.id, i.label FROM sys_dict_item i JOIN sys_dict_type t ON i.type_id = t.id "
+                                + "WHERE t.code = :code AND i.enabled = TRUE AND t.enabled = TRUE "
+                                + "ORDER BY i.sort, i.id")
+                .setParameter("code", dictType).getResultList();
+        return rows.stream()
+                .map(r -> new DimensionOption(((Number) r[0]).longValue(), String.valueOf(r[1])))
+                .toList();
     }
 
     private Set<String> registeredCodes() {
@@ -165,10 +250,12 @@ public class DataDimensionService {
             }
             if (SysDataDimension.SCOPE_CUSTOM.equals(scope)) {
                 List<Long> values = item.values() == null ? List.of() : item.values();
-                DataDimensionProvider provider = providerOf(item.dimension());
-                if (provider != null) {
+                // V51：值域校验统一走 optionsFor（专用 bean 与 OPTION/DICT/DEPT 通用源同样生效）
+                List<DimensionOption> options = dimensionRepository.findById(item.dimension())
+                        .map(this::optionsFor).orElse(List.of());
+                if (!options.isEmpty()) {
                     Set<Long> validIds = new HashSet<>();
-                    provider.options().forEach(o -> validIds.add(o.id()));
+                    options.forEach(o -> validIds.add(o.id()));
                     for (Long v : values) {
                         if (v == null || !validIds.contains(v)) {
                             throw new BusinessException(400, "维度[" + item.dimension() + "]存在非法取值: " + v);
@@ -267,6 +354,248 @@ public class DataDimensionService {
         } else if (values != null) {
             union.get(dim).addAll(values);
         }
+    }
+
+    // ==================== V51：维度 CRUD ====================
+
+    /** 新建维度（UI 自定义，valueSource ∈ OPTION|DICT|DEPT；PROVIDER 为存量代码维度专用不可建）。 */
+    @Transactional
+    public DimensionInfo createDimension(DimensionUpsertRequest req) {
+        if (req == null || !StringUtils.hasText(req.code()) || !DIM_CODE_PATTERN.matcher(req.code()).matches()) {
+            throw new BusinessException(400, "维度编码非法（字母开头，字母数字下划线，≤64）");
+        }
+        if (dimensionRepository.findById(req.code()).isPresent()) {
+            throw new BusinessException(400, "维度编码已存在（含已停用）: " + req.code());
+        }
+        if (!StringUtils.hasText(req.label())) {
+            throw new BusinessException(400, "维度名称必填");
+        }
+        String source = req.valueSource() == null ? "" : req.valueSource().trim().toUpperCase();
+        if (!Set.of(SysDataDimension.SOURCE_OPTION, SysDataDimension.SOURCE_DICT,
+                SysDataDimension.SOURCE_DEPT).contains(source)) {
+            throw new BusinessException(400, "valueSource 须为 OPTION/DICT/DEPT");
+        }
+        if (SysDataDimension.SOURCE_DICT.equals(source)) {
+            requireDictType(req.dictType());
+        }
+        SysDataDimension d = new SysDataDimension();
+        d.setCode(req.code());
+        d.setLabel(req.label());
+        d.setEnabled(req.enabled() == null || req.enabled());
+        d.setValueSource(source);
+        d.setDictType(SysDataDimension.SOURCE_DICT.equals(source) ? req.dictType().trim() : null);
+        dimensionRepository.save(d);
+        replaceBindings(req.code(), req.bindings());
+        clearBindingCache();
+        return toInfo(d, currentBindings(req.code()));
+    }
+
+    /** 编辑维度：code/valueSource 不可改（编码即外键红线）；bindings 非 null 全量替换。 */
+    @Transactional
+    public DimensionInfo updateDimension(String code, DimensionUpsertRequest req) {
+        SysDataDimension d = dimensionRepository.findById(code)
+                .orElseThrow(() -> new BusinessException(404, "维度不存在: " + code));
+        if (req == null) {
+            return toInfo(d, currentBindings(code));
+        }
+        if (StringUtils.hasText(req.valueSource())
+                && !req.valueSource().trim().toUpperCase().equals(d.getValueSource())) {
+            throw new BusinessException(400, "valueSource 建后不可改（换源=停用后新建）");
+        }
+        if (StringUtils.hasText(req.label())) {
+            d.setLabel(req.label());
+        }
+        if (req.enabled() != null) {
+            d.setEnabled(req.enabled());
+        }
+        if (SysDataDimension.SOURCE_DICT.equals(d.getValueSource()) && StringUtils.hasText(req.dictType())) {
+            requireDictType(req.dictType());
+            d.setDictType(req.dictType().trim());
+        }
+        dimensionRepository.save(d);
+        if (req.bindings() != null) {
+            replaceBindings(code, req.bindings());
+        }
+        clearBindingCache();
+        return toInfo(d, currentBindings(code));
+    }
+
+    /** 删除=软删（enabled=false）；被角色/用户授权引用 → 409（先解除授权）。 */
+    @Transactional
+    public void deleteDimension(String code) {
+        SysDataDimension d = dimensionRepository.findById(code)
+                .orElseThrow(() -> new BusinessException(404, "维度不存在: " + code));
+        if (roleDimRepository.existsByDimension(code) || userDimRepository.existsByDimension(code)) {
+            throw new BusinessException(409, "维度已被角色/用户授权引用，请先解除相关授权再停用: " + code);
+        }
+        d.setEnabled(false);
+        dimensionRepository.save(d);
+        clearBindingCache();
+    }
+
+    /** 绑定全量替换：白名单校验（可绑列目录）+ P1 单实体单列。 */
+    private void replaceBindings(String code, List<DimensionBindingItem> items) {
+        if (items == null) {
+            return;
+        }
+        if (items.size() > 1) {
+            throw new BusinessException(400, "P1 仅支持单实体单列绑定（多实体=P4）");
+        }
+        Map<String, Set<String>> catalog = catalogMap();
+        for (DimensionBindingItem item : items) {
+            if (item == null || !StringUtils.hasText(item.entity()) || !StringUtils.hasText(item.column())
+                    || !catalog.getOrDefault(item.entity(), Set.of()).contains(item.column())) {
+                throw new BusinessException(400, "绑定不在可绑列目录内: "
+                        + (item == null ? "null" : item.entity() + "." + item.column()));
+            }
+        }
+        bindingRepository.deleteAll(bindingRepository.findByDimensionOrderByIdAsc(code));
+        bindingRepository.flush();
+        for (DimensionBindingItem item : items) {
+            SysDimensionBinding b = new SysDimensionBinding();
+            b.setDimension(code);
+            b.setEntity(item.entity());
+            b.setColumnName(item.column());
+            bindingRepository.save(b);
+        }
+    }
+
+    private List<DimensionBindingItem> currentBindings(String code) {
+        return bindingRepository.findByDimensionOrderByIdAsc(code).stream()
+                .map(b -> new DimensionBindingItem(b.getEntity(), b.getColumnName()))
+                .toList();
+    }
+
+    /** DICT 源字典类型必须存在且启用。 */
+    private void requireDictType(String dictType) {
+        if (!StringUtils.hasText(dictType)) {
+            throw new BusinessException(400, "DICT 来源须指定字典类型 dictType");
+        }
+        Number n = (Number) entityManager.createNativeQuery(
+                        "SELECT count(*) FROM sys_dict_type WHERE code = :code AND enabled = TRUE")
+                .setParameter("code", dictType.trim()).getSingleResult();
+        if (n.longValue() == 0) {
+            throw new BusinessException(400, "字典类型不存在或未启用: " + dictType);
+        }
+    }
+
+    // ==================== V51：选项 CRUD（OPTION 源） ====================
+
+    /** 选项管理行（含禁用，管理视图；id=行主键）。 */
+    @Transactional(readOnly = true)
+    public List<DimensionOptionRow> optionRows(String code) {
+        dimensionRepository.findById(code)
+                .orElseThrow(() -> new BusinessException(404, "维度不存在: " + code));
+        return optionRepository.findByDimensionOrderBySortAscIdAsc(code).stream()
+                .map(o -> new DimensionOptionRow(o.getId(), o.getValue(), o.getLabel(), o.getSort(), o.getEnabled()))
+                .toList();
+    }
+
+    @Transactional
+    public DimensionOptionRow addOption(String code, DimensionOptionRequest req) {
+        SysDataDimension d = dimensionRepository.findById(code)
+                .orElseThrow(() -> new BusinessException(404, "维度不存在: " + code));
+        if (!SysDataDimension.SOURCE_OPTION.equals(d.getValueSource())) {
+            throw new BusinessException(400, "仅 OPTION 来源维度可维护自定义选项（当前来源: " + d.getValueSource() + "）");
+        }
+        if (req == null || !StringUtils.hasText(req.label())) {
+            throw new BusinessException(400, "选项名称必填");
+        }
+        Long value = req.value();
+        if (value == null) {
+            Long max = optionRepository.maxValue(code);
+            value = max == null ? 1L : max + 1;
+        }
+        if (optionRepository.findByDimensionAndValue(code, value).isPresent()) {
+            throw new BusinessException(409, "选项值已存在: " + value);
+        }
+        SysDimensionOption o = new SysDimensionOption();
+        o.setDimension(code);
+        o.setValue(value);
+        o.setLabel(req.label());
+        o.setSort(req.sort() == null ? 0 : req.sort());
+        o.setEnabled(req.enabled() == null || req.enabled());
+        optionRepository.save(o);
+        return new DimensionOptionRow(o.getId(), o.getValue(), o.getLabel(), o.getSort(), o.getEnabled());
+    }
+
+    @Transactional
+    public DimensionOptionRow updateOption(String code, Long id, DimensionOptionRequest req) {
+        SysDimensionOption o = optionRepository.findById(id)
+                .filter(x -> x.getDimension().equals(code))
+                .orElseThrow(() -> new BusinessException(404, "选项不存在: " + id));
+        if (req != null) {
+            if (req.value() != null && !req.value().equals(o.getValue())) {
+                throw new BusinessException(400, "选项值不可改（值即行数据列值；改值=删旧建新）");
+            }
+            if (StringUtils.hasText(req.label())) {
+                o.setLabel(req.label());
+            }
+            if (req.sort() != null) {
+                o.setSort(req.sort());
+            }
+            if (req.enabled() != null) {
+                o.setEnabled(req.enabled());
+            }
+            optionRepository.save(o);
+        }
+        return new DimensionOptionRow(o.getId(), o.getValue(), o.getLabel(), o.getSort(), o.getEnabled());
+    }
+
+    @Transactional
+    public void deleteOption(String code, Long id) {
+        SysDimensionOption o = optionRepository.findById(id)
+                .filter(x -> x.getDimension().equals(code))
+                .orElseThrow(() -> new BusinessException(404, "选项不存在: " + id));
+        optionRepository.delete(o);
+    }
+
+    // ==================== V51：可绑列目录 + 查询侧绑定消费 ====================
+
+    /** 可绑实体目录（SPI 聚合，绑定 UI 与校验白名单同源）。 */
+    public List<BindableEntityProvider.BindableEntity> bindableEntities() {
+        List<BindableEntityProvider.BindableEntity> out = new ArrayList<>();
+        for (BindableEntityProvider p : bindableProviders) {
+            out.addAll(p.bindableEntities());
+        }
+        return out;
+    }
+
+    private Map<String, Set<String>> catalogMap() {
+        Map<String, Set<String>> out = new HashMap<>();
+        for (BindableEntityProvider.BindableEntity e : bindableEntities()) {
+            out.computeIfAbsent(e.entity(), k -> new HashSet<>());
+            for (BindableEntityProvider.BindableColumn c : e.columns()) {
+                out.get(e.entity()).add(c.column());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 查询侧绑定消费（缺口①）：entity → {dimension: JPA 属性名}（仅启用维度）。
+     * DataScopeSupport.multiDim 按实体调用；进程内缓存 + 维度写路径主动清 + TTL 兜底。
+     */
+    public Map<String, String> bindingsForEntity(String entity) {
+        BindingCacheEntry cached = bindingCache.get(entity);
+        long now = System.currentTimeMillis();
+        if (cached != null && now - cached.cachedAt() < BINDING_CACHE_TTL_MS) {
+            return cached.columns();
+        }
+        Set<String> enabledDims = registeredCodes();
+        Map<String, String> out = new LinkedHashMap<>();
+        for (SysDimensionBinding b : bindingRepository.findByEntityOrderByIdAsc(entity)) {
+            if (enabledDims.contains(b.getDimension())) {
+                out.put(b.getDimension(), b.getColumnName());
+            }
+        }
+        Map<String, String> frozen = Map.copyOf(out);
+        bindingCache.put(entity, new BindingCacheEntry(frozen, now));
+        return frozen;
+    }
+
+    private void clearBindingCache() {
+        bindingCache.clear();
     }
 
     // ==================== 失效钩子 ====================

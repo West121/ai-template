@@ -9,5 +9,7 @@ public interface SysUserDataDimensionRepository extends JpaRepository<SysUserDat
 
     List<SysUserDataDimension> findByUserId(Long userId);
 
+    boolean existsByDimension(String dimension);
+
     void deleteByUserId(Long userId);
 }
