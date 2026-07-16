@@ -101,6 +101,13 @@ export function AppLayout() {
         setBadge("/workflow/tasks", page.total)
       })
       .catch(() => {})
+    // 公告未读角标:真实未读数(0/失败→不显示);进入公告页后由页内同步下调
+    api<number>("/api/office/announcements/unread-count")
+      .then((n) => {
+        if (cancelled) return
+        setBadge("/announcement", typeof n === "number" && n > 0 ? n : undefined)
+      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }

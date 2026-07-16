@@ -126,7 +126,8 @@ export const menuTree: MenuItem[] = [
     ],
   },
   { title: "通讯录", path: "/contacts", icon: BookUser },
-  { title: "公告通知", path: "/announcement", icon: Megaphone, badge: 2 },
+  // badge 由 app-layout 轮询真实未读数写入 badge-store(勿再写静态值——曾因写死 badge:2 造成"永远 2 条未读"假象)
+  { title: "公告通知", path: "/announcement", icon: Megaphone },
   { title: "日程管理", path: "/schedule", icon: CalendarDays },
   {
     title: "系统管理",

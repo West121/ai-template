@@ -28,6 +28,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { PageHeader } from "@/components/page-header"
 import { useAuthStore, useHasPerm } from "@/stores/auth-store"
+import { useBadgeStore } from "@/stores/badge-store"
 
 /** 后端公告响应 */
 interface AnnouncementRow {
@@ -73,6 +74,11 @@ export default function AnnouncementPage() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [unreadCount, setUnreadCount] = useState(0)
   const [total, setTotal] = useState(0)
+  // 菜单角标与页内未读同步(读一条降一条;0 → 角标消失)
+  const setBadge = useBadgeStore((s) => s.setBadge)
+  useEffect(() => {
+    setBadge("/announcement", unreadCount > 0 ? unreadCount : undefined)
+  }, [unreadCount, setBadge])
   const [tab, setTab] = useState("all")
   const [active, setActive] = useState<AnnouncementRow | null>(null)
   const [publishOpen, setPublishOpen] = useState(false)
