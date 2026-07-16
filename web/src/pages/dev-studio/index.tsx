@@ -5,7 +5,7 @@
  * （列表·人/AI 归属·查看·对比当前 buildLineDiff·回滚确认）。W2 才有 AI 栏。
  * 防白屏：三岛各包 ErrorBoundary；列表/内容归一；非法 JSON 资产只读降级不进编辑。
  */
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   Braces,
@@ -19,6 +19,7 @@ import {
   Save,
   Search,
   ShieldAlert,
+  Sparkles,
   SquareCode,
   TriangleAlert,
 } from "lucide-react"
@@ -61,6 +62,9 @@ import {
 } from "./dev-studio-api"
 
 const TYPE_ORDER: DevAssetType[] = ["ORCH", "PROCESS", "FORM", "BIZDOC_TPL"]
+
+/** 右栏 AI 助手（批W2）：懒加载（chat-view 重依赖不拖累首屏） */
+const DevStudioAssistantPane = lazy(() => import("./assistant-pane").then((m) => ({ default: m.DevStudioAssistantPane })))
 
 /** JSON pretty（失败回 null → 调用方降级只读原文） */
 function tryPretty(raw: string): string | null {
@@ -419,6 +423,8 @@ export default function DevStudioPage() {
   const [pendingSelect, setPendingSelect] = useState<DevAsset | null>(null)
 
   const [versionsOpen, setVersionsOpen] = useState(false)
+  /** 右栏 AI 助手折叠态（批W2） */
+  const [aiOpen, setAiOpen] = useState(true)
 
   const loadAssets = useCallback(() => {
     setListLoading(true)
@@ -436,6 +442,7 @@ export default function DevStudioPage() {
     loadAssets()
   }, [loadAssets, permissions, canView])
 
+
   const loadDetail = useCallback((a: DevAsset) => {
     setDetailLoading(true)
     setEditing(false)
@@ -452,6 +459,19 @@ export default function DevStudioPage() {
       .catch((e) => toast.error(e instanceof Error ? e.message : "资产内容加载失败"))
       .finally(() => setDetailLoading(false))
   }, [])
+  // devDiff 卡确认成功 → 广播 dev-studio:asset-changed → 刷新资产树 + 当前资产内容/版本（批W2）
+  useEffect(() => {
+    const onChanged = (e: Event) => {
+      const d = (e as CustomEvent<{ assetType?: string; code?: string }>).detail
+      loadAssets()
+      setSelected((cur) => {
+        if (cur && (!d || (d.assetType === cur.type && d.code === cur.code))) loadDetail(cur)
+        return cur
+      })
+    }
+    window.addEventListener("dev-studio:asset-changed", onChanged)
+    return () => window.removeEventListener("dev-studio:asset-changed", onChanged)
+  }, [loadAssets, loadDetail])
 
   const selectAsset = (a: DevAsset) => {
     if (dirty) {
@@ -557,6 +577,15 @@ export default function DevStudioPage() {
           </>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <Button
+            variant={aiOpen ? "secondary" : "outline"}
+            size="sm"
+            className="h-7 gap-1 text-xs"
+            aria-label="AI 改写栏"
+            onClick={() => setAiOpen((o) => !o)}
+          >
+            <Sparkles className="size-3.5" /> AI
+          </Button>
           {selected && detail && (
             <>
               {editing && (
@@ -667,6 +696,22 @@ export default function DevStudioPage() {
             )}
           </ErrorBoundary>
         </main>
+        {/* 右·AI 助手栏（批W2）：作用域绑定当前资产；可折叠；懒加载 + ErrorBoundary 岛 */}
+        {aiOpen && (
+          <aside className="w-[360px] shrink-0 border-l">
+            <ErrorBoundary label="dev-studio-ai">
+              <Suspense
+                fallback={
+                  <div className="flex h-full items-center justify-center">
+                    <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                  </div>
+                }
+              >
+                <DevStudioAssistantPane asset={selected ? { type: selected.type, code: selected.code, name: selected.name } : null} />
+              </Suspense>
+            </ErrorBoundary>
+          </aside>
+        )}
       </div>
 
       {/* 发布确认（「立即生效」挂发布动作，文案随资产） */}

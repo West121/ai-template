@@ -17,6 +17,9 @@ import { filterMenu, menuTree } from "@/config/menu"
 import { resetDevStudioMock } from "./dev-studio-api"
 import DevStudioPage from "./index"
 
+// W1 冒烟聚焦树/编辑/版本：右栏 AI（chat-view 重依赖懒加载）在 assistant-pane.render.test 单测，这里桩掉防全量跑超时
+vi.mock("./assistant-pane", () => ({ DevStudioAssistantPane: () => null }))
+
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {}
   Element.prototype.hasPointerCapture = () => false
